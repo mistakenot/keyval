@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document version | 1.0 |
+| Document version | 1.1 |
 | Status | **Draft** — awaiting owner approval (see §15 for the decisions that need an explicit answer) |
 | Last revised | 2026-09-30 |
 | Owner | Project owner (the human running the swarm) |
@@ -111,7 +111,7 @@ keyval is a hobby-scale, **5-node, strongly consistent (CP) key-value store**, w
 - **Correctness under node and network failure.**
 - Evidence comes from a FoundationDB-style **deterministic simulator**. It runs the real node logic, the real Raft library and the real persistence code against a simulated network, disk and clock, injects faults from a seed, and judges every run with independent automated checkers.
 - Every failure is replayable from its seed, and automatically packaged for diagnosis.
-- A small set of **real-file crash probes** grounds the durability claims in actual filesystem behaviour.
+- A small set of **real-file process-crash probes** checks that the production storage adapter recovers real files correctly; power-loss durability rests on stated assumptions (§10.15, §10.17).
 
 **Three decisions shape everything else:**
 
@@ -221,7 +221,7 @@ This section gives just enough theory to follow the rest of the plan.
 
 ### 3.6 fsync and durability
 
-- A write to a file sits in the OS cache until `fsync` forces it to disk. A crash can lose anything not yet synced. It can also keep **part** of an unsynced append: none of it, some prefix of it, or all of it.
+- A write to a file sits in the OS cache until `fsync` forces it to disk. A crash can lose anything not yet synced. It can also keep **part** of an unsynced append: none of it, some prefix of it, or all of it. (Treating what survives as a *prefix* of the append is itself an assumption about the filesystem, stated in §10.2 and §10.15; recovery fails closed on damage outside that model.)
 - Creating a file is only durable once its **directory** is synced as well.
 - A sync can complete on disk and the process can crash before learning that it did.
 - Raft is only safe if log entries and votes are synced **before** the node acts on them, e.g. before acknowledging an append or granting a vote.
@@ -336,11 +336,11 @@ These are user-facing requirements. Each has an ID; beads and tests cite these I
 |---|---|---|
 | DM-1 | MUST | A **key** is a UTF-8 string of 1–256 bytes, measured after decoding (not characters, not JSON-escaped length). Keys are stored exactly: no case or Unicode normalisation, so composed and decomposed forms are different keys. |
 | DM-2 | MUST | A **value** is a UTF-8 string of 0–65,536 bytes (64 KiB), measured after decoding. |
-| DM-3 | MUST | **Versions.** A successful PUT or COMPARE_SWAP executed at log index *i* gives the key version *i*. Consequences:<br>• a key's version strictly increases over time, including across delete and re-create;<br>• a same-value PUT still gets a new version;<br>• DELETE and failed CAS assign no version;<br>• a replayed request returns its **original** version, never the index of a duplicate entry;<br>• versions have gaps (no-ops, deletes, failures); clients must not assume continuity;<br>• versions are scoped to one cluster identity (D-8). |
+| DM-3 | MUST | **Versions.** A successful PUT or COMPARE_SWAP executed at log index *i* gives the key version *i*. Consequences:<br>• a key's version strictly increases over time, including across delete and re-create;<br>• a same-value PUT still gets a new version;<br>• DELETE and failed CAS assign no version;<br>• a replayed request returns its **original** version, never the index of a duplicate entry;<br>• versions have gaps (no-ops, deletes, failures); clients must not assume continuity;<br>• versions are scoped to one cluster identity (DUR-8). |
 | DM-4 | MUST | Keys are ordered by byte-wise lexicographic order of their UTF-8 encoding (used by SCAN). |
 | DM-5 | MUST | **Request history.** The replicated state includes, for every executed request ID: the log index of its first execution, a digest of its canonical command, and its terminal result. It is **never expired or evicted** for the life of the cluster; only derived caches are bounded. |
-| DM-6 | MUST | **Live-state capacity.** The live key-value state is bounded (default 10,000 keys and 64 MiB of key+value bytes, identical on all nodes). A write that would exceed it gets the deterministic terminal result `capacity_exceeded`. DELETE and shrinking overwrites always remain possible. *(Proposed default; owner disposition required, §15 Q2.)* |
-| DM-7 | MUST | **History capacity.** The log is bounded (default 1,000,000 entries or 4 GiB of journal, whichever comes first). When the leader reaches it, new mutations are refused before proposal with `capacity_exceeded`; reads, status lookups and retries of already-executed requests keep working. Lifting this limit is the job of v2 compaction. *(Proposed default; §15 Q3.)* |
+| DM-6 | MUST | **Live-state capacity.** The live key-value state is bounded (default 10,000 keys and 64 MiB of key+value bytes, identical on all nodes). A write that would exceed it gets the deterministic terminal result `capacity_exceeded`; PUT and a matching CAS are checked identically (§7.5). DELETE and shrinking overwrites always remain possible within the history capacity (they still append log entries, so DM-7 bounds them too). *(Proposed default; owner disposition required, §15 Q2.)* |
+| DM-7 | MUST | **History capacity.** The admission limit is a deterministic, replicated quantity: the leader refuses new mutations before proposal with `capacity_exceeded` once the last log index reaches `max_log_entries` (default 1,000,000). Reads, status lookups and retries of already-executed requests keep working. Protocol entries (election no-ops) are never refused, so the log can exceed the admission index by protocol activity; the admission rule is a soft ceiling, not an exact one. Separately, each node has a **local journal-byte hard stop** (default 4 GiB): a node whose journal file reaches it stops appending and moves to `failed` (visible in health) — journal sizes legitimately differ per node (replaced suffixes, framing, vote/term-only frames), so this is a per-node safety stop, never a replicated decision. Lifting these limits is the job of v2 compaction. *(Proposed default; §15 Q3.)* |
 
 ### 6.3 Operations
 
@@ -349,10 +349,10 @@ These are user-facing requirements. Each has an ID; beads and tests cite these I
 | F-1 | MUST | **PUT** `(key, value)` sets the key and returns the new version and the execution index. |
 | F-2 | MUST | **GET** `(key)` returns `(value, version)`, or `not_found`. The response includes `served_by` = `(node_id, applied_index)`. |
 | F-3 | MUST | **DELETE** `(key)` removes the key and returns whether it existed. Deleting an absent key succeeds (`existed = false`). |
-| F-4 | MUST | **SCAN** `(start?, end?, after?, limit?)`<br>• Returns keys in `[start, end)` in key order, with values and versions.<br>• `after` is an exclusive continuation key; the client passes back the previous page's `next_after`.<br>• A page holds at most `limit` items (1–128, default 32) and at most 1 MiB of encoded response; one maximum-size item always fits.<br>• Returns `has_more` and `next_after`, and includes `served_by`.<br>• There is no server-side cursor state. |
-| F-5 | MUST | **COMPARE_SWAP** `(key, expected, value)` where `expected` is either **absent** or **version *v***. It sets the key only if the current state matches, and returns the new version.<br>• On mismatch it changes nothing and returns `version_mismatch` with the current version (or absence).<br>• A mismatch is a **committed, terminal** result: it consumes the request ID. Retrying the same request returns the same mismatch; comparing again against newer state needs a new request ID. |
+| F-4 | MUST | **SCAN** `(start?, end?, after?, limit?)`<br>• Returns keys in `[start, end)` in key order, with values and versions.<br>• `after` is an exclusive continuation key; the client passes back the previous page's `next_after`.<br>• A page holds at most `limit` items (1–128, default 32) and at most 1 MiB of **decoded** key+value bytes (a bound chosen so the worst-case encoded response stays bounded; one formula shared by the core, the reference model and K-5 — §7.11); one maximum-size item always fits.<br>• Returns `has_more` and `next_after`, and includes `served_by`.<br>• There is no server-side cursor state. |
+| F-5 | MUST | **COMPARE_SWAP** `(key, expected, value)` where `expected` is either **absent** or **version *v***. It sets the key only if the current state matches, and returns the new version.<br>• On mismatch it changes nothing and returns `version_mismatch` with the current version (or absence).<br>• A mismatch is a **committed, terminal** result: it consumes the request ID. Retrying the same request returns the same mismatch; comparing again against newer state needs a new request ID.<br>• A matching CAS is then subject to the DM-6 live-state check exactly like PUT: mismatch is evaluated first, and a matching CAS over quota gets the committed terminal result `capacity_exceeded` (§7.5). |
 | F-6 | MUST | **Request IDs.** Every write (PUT, DELETE, COMPARE_SWAP) MUST carry an `Idempotency-Key` of 32 lowercase hex characters (128 bits). A repeated ID with the same canonical command returns the original terminal result without re-executing (`replayed: true`). A repeated ID with a different command returns `request_id_conflict` and changes nothing. There is no retention window (DM-5). |
-| F-7 | MUST | **Routing.** Any node accepts any request.<br>• Reads are served locally.<br>• A write sent to a non-leader is answered with HTTP 307 to the believed leader (same path and query) and a typed `not_leader` body.<br>• With no leader known, the node answers `unavailable` with the configured node addresses. |
+| F-7 | MUST | **Routing.** Any node accepts any request.<br>• Reads are served locally.<br>• The decision order for a write is fixed on every node: parse and validate (F-8) → **short-circuit from the local applied history** (F-6: any Ready node answers a known request ID locally, without redirecting) → attach to a pending same-ID proposal (§7.8) → leader check: propose on the leader, else redirect.<br>• A write sent to a non-leader (that passes no earlier step) is answered with HTTP 307 to the believed leader (same path and query) and a typed `not_leader` body.<br>• With no leader known, the node answers `unavailable` with the configured node addresses. |
 | F-8 | MUST | Invalid input (bad key, oversized value, malformed JSON, unknown or duplicate JSON fields, bad request ID, bad range) is rejected with `invalid_request` / `too_large` before proposal, with no side effect. |
 | F-9 | MUST | **Request status.** `GET /v1/requests/{id}` returns the original terminal result if the serving node has applied it, or `unknown` otherwise. It never proposes anything, and `unknown` never means "did not happen". |
 | F-10 | MUST | The client can distinguish every outcome in §8.4, including **unknown outcome**, and can tell a terminal decision (success, mismatch, capacity) from a non-terminal refusal (not leader, busy, unavailable, recovering). |
@@ -379,22 +379,22 @@ These requirements are stated relative to the **healthy envelope** defined in §
 | A-1 | MUST | Within the healthy envelope, valid writes within capacity eventually succeed. An individual attempt may still return `not_leader`, `busy`, `unavailable` or `unknown_outcome`; the CLI resolves these by bounded retries with the same request ID. |
 | A-2 | MUST | Reads succeed on any **ready** node, regardless of partitions. A node that is starting, recovering from its journal, paused or failed answers `recovering` (or not at all); it never serves an invented or partial state. |
 | A-3 | MUST | After the leader fails, the remaining majority elects a new leader without operator action. |
-| A-4 | MUST | Within the healthy envelope, after all faults heal, every **recoverable** node (at most two may be permanently lost) reaches the same applied state, and writes succeed again, within the scenario's heal budget (default 30 virtual seconds; measured, §10.12). |
+| A-4 | MUST | Within the healthy envelope, after all faults heal, every **recoverable** node (at most two may be permanently lost) reaches the same applied state, and writes succeed again, within the scenario's heal budget (default 30 virtual seconds — an acceptance criterion for test profiles that respect §9.4's workload and scheduling bounds, not a universal real-time bound; measured, §10.12). "Succeed" means a terminal decision per §8.4. |
 | A-5 | MUST | Once a write attempt has been submitted to consensus, any failure to confirm its commit (deadline, leadership loss, disconnect) returns `unknown_outcome`, never a guessed success or failure. Only an attempt that was never submitted may be reported as `not_submitted`, and that says nothing about earlier attempts with the same ID. |
 
 ### 6.6 Durability
 
 | ID | Level | Requirement |
 |---|---|---|
-| D-1 | MUST | A node acknowledges a write only after its entry is committed and applied. |
-| D-2 | MUST | A node persists and syncs log entries and Raft hard state (term, vote, commit) **before** sending any message that depends on them, including vote grants and append acknowledgements (§7.4). |
-| D-3 | MUST | A restarted node recovers its log and Raft state from disk, rebuilds its state machine by replay, and rejoins without operator action. |
-| D-4 | MUST | There is no log compaction in v1. The journal grows until the history capacity (DM-7). |
-| D-5 | MUST | The on-disk format carries a format version and is pinned by **golden vectors** (§7.6): committed byte files that tests decode and re-encode byte-for-byte. |
-| D-6 | MUST | An incomplete **final** frame is discarded on recovery. Damage anywhere inside the complete durable prefix is treated as corruption (out of scope, §9.2): the node refuses to start and reports it. It never silently repairs or erases data. |
-| D-7 | MUST | File and directory creation is made durable (directory sync) before any action that depends on it. |
-| D-8 | MUST | **Genesis binding.** Each data directory is bound, at creation, to a cluster ID, a node ID, the voter set and a fingerprint of the semantic configuration (limits that affect results). Starting with a conflicting identity or configuration fails without modifying the directory. Two processes can never use one data directory (exclusive lock). |
-| D-9 | MUST | Recovery is correct whatever part of an unsynced append survived a crash (none, a prefix, or all of it), and whether or not a completed sync was reported to the process before it crashed. |
+| DUR-1 | MUST | A node acknowledges a write only after its entry is committed and applied. |
+| DUR-2 | MUST | A node persists and syncs log entries, **term and vote** — but not the commit index — **before** sending any message that depends on them, including vote grants and append acknowledgements (§7.4). The commit index is volatile in Raft: it may be persisted opportunistically as part of a hard-state frame, no message ordering depends on its durability, and recovery may restart from an older persisted commit index (which is why C-4 is per incarnation). |
+| DUR-3 | MUST | A restarted node recovers its log and Raft state from disk, rebuilds its state machine by replay, and rejoins without operator action. |
+| DUR-4 | MUST | There is no log compaction in v1. The journal grows until the history capacity (DM-7). |
+| DUR-5 | MUST | The on-disk format carries a format version and is pinned by **golden vectors** (§7.6): committed byte files that tests decode and re-encode byte-for-byte. |
+| DUR-6 | MUST | A damaged **final** frame — incomplete, or failing its checksum with no valid frame after it — is a **torn tail**: discarded on recovery. Damage inside the durable prefix that a later valid frame follows is treated as corruption (out of scope, §9.2): the node refuses to start and reports it. It never silently repairs or erases synced data. |
+| DUR-7 | MUST | File and directory creation is made durable (directory sync) before any action that depends on it. |
+| DUR-8 | MUST | **Genesis binding.** Each data directory is bound, at creation, to a cluster ID, a node ID, the voter set and a fingerprint of the semantic configuration (limits that affect results). Starting with a conflicting identity or configuration fails without modifying the directory. Two processes can never use one data directory (exclusive lock). |
+| DUR-9 | MUST | Recovery is correct whatever part of an unsynced append survived a crash (none, a prefix, or all of it), and whether or not a completed sync was reported to the process before it crashed. The prefix survival model is a stated filesystem assumption (§10.15); recovery fails closed (DUR-6) on damage outside it. |
 
 ### 6.7 Operability
 
@@ -415,7 +415,7 @@ These requirements are stated relative to the **healthy envelope** defined in §
 | ID | Level | Requirement |
 |---|---|---|
 | T-1 | MUST | All deterministic-crate logic reaches time, randomness, network and disk only through ports (§7.2). |
-| T-2 | MUST | The simulator runs the **same** state machine, node controller, Raft adapter, journal engine and command codec as production. No `cfg`-gated or environment-specific branch may change admission, deduplication, CAS, application, recovery, acknowledgement or read publication. |
+| T-2 | MUST | The simulator runs the **same** state machine, node controller, Raft adapter, journal engine and command codec as production. No `cfg`-gated or environment-specific branch may change admission, deduplication, CAS, application, recovery, acknowledgement or read publication. The one sanctioned exception is the registered bug-variant mechanism of §10.6: a single test-only feature whose switch sites are registered, allowlisted by the parity check (§10.18) and proven absent from production builds (T-6). |
 | T-3 | MUST | Same seed + same build ⇒ byte-identical canonical event trace. "Same build" covers toolchain, target, lockfile, vendored-library patch, configuration, scenario version and PRNG implementation. |
 | T-4 | MUST | Every simulation failure prints its seed and scenario and is replayable with one command. |
 | T-5 | MUST | The simulator exposes a global ("god") view of all nodes' Raft state, journal state and applied state after every step, for invariant checks. |
@@ -425,9 +425,9 @@ These requirements are stated relative to the **healthy envelope** defined in §
 | T-9 | SHOULD | Failing runs are automatically **shrunk** to a minimal reproducing scenario (§10.9). |
 | T-10 | MUST | The simulator can run from an explicit **scenario file** (fault schedule + client operation plan) as well as from a seed. A seed deterministically generates a scenario. |
 | T-11 | MUST | Replay identity is checked in **fresh OS processes** (not only within one process), comparing complete canonical traces. A mismatch reports the first differing event and keeps both traces. |
-| T-12 | MUST | **Oracle independence.** The reference model and checkers depend on no production crate; they consume a documented observation schema. The conformance suite depends on no production crate and talks only HTTP. |
+| T-12 | MUST | **Oracle independence.** The reference model and checkers depend on no production crate; they consume a documented observation schema. The conformance suite depends on no production crate and talks only HTTP to the system under test (its topology tests may additionally drive `./dev cluster` lifecycle commands to create their preconditions, §10.8). |
 | T-13 | MUST | **Non-vacuity.** A simulation run passes only if it did meaningful work (§10.16). |
-| T-14 | MUST | **Real-file probes.** Fixed tests kill real node processes at defined write/sync boundaries and restart them from their real data directories, and a lifecycle smoke test kills and restarts real cluster members, proving acknowledged data survives (§10.17). |
+| T-14 | MUST | **Real-file process-crash probes.** Fixed tests kill real node processes at defined write/sync boundaries and restart them from their real data directories, and a lifecycle smoke test kills and restarts real cluster members, showing acknowledged data survives process crashes; a sync-order check verifies the sync obligations were actually issued, and power-loss durability is a stated assumption (§10.17, §10.15). |
 
 ---
 
@@ -509,7 +509,7 @@ Ports come in three kinds:
 | Client API | inbound + effect | `ClientRequest(attempt_id, parsed op)` → `Respond(attempt_id, outcome)` | HTTP API server | Simulated clients (§10.3) |
 | Peer transport | inbound + effect | `PeerMessage(from, bytes)` / `Send(peer, bytes)` | HTTP peer transport (bounded queues) | Simulated network |
 | Clock | inbound | `Tick` (one logical step) | Monotonic clock → ticks (§7.10) | Virtual clock |
-| Byte storage | effect + in-process reads | `Append(frame)`, `Sync(seq)` → `SyncDone(seq, incarnation)`; `read_at(offset, len)` (bounded); create file + sync directory; exclusive lock | Real files | Simulated disk (volatile and durable byte images) |
+| Byte storage | effect + in-process reads | `Append(frame)`, `Truncate(len)`, `Sync(seq)` → `SyncDone(seq, incarnation)` (a truncation is only relied on after its own sync completes); `read_at(offset, len)` (bounded); create file + sync directory; exclusive lock | Real files | Simulated disk (volatile and durable byte images) |
 | Entropy | in-process | `next_u64(stream)` | Seeded once at boot; the seed is logged | Streams derived from scenario seed, node ID and incarnation |
 | Telemetry | effect | `Log(event)`, `Observe(event)` (structured) | Structured log file | Trace recorder (canonical trace, god view, observations) |
 | Consensus | in-process (engine-internal) | propose, step, tick, ready, advance (§7.3) | `raft-rs` adapter | `raft-rs` adapter (the same one) |
@@ -533,7 +533,7 @@ Rules:
 - **Library:** `raft` and `raft-proto` 0.7.0 (TiKV `raft-rs`), driven through `RawNode`. The source is **vendored and pinned** (`vendor/raft/`) with recorded checksums, enabled features and toolchain.
 - **Determinism patch.** A minimal patch (`third_party/raft.patch`) routes every source of randomness the library uses, notably randomised election timeouts at construction and on every reset, through the injected entropy port. The patch MUST NOT touch vote, log-matching, quorum or commit rules. Setting a timeout from outside after construction is not sufficient.
 - **Audit.** W02 enumerates every path reachable from construction, campaign, tick, step and timeout reset that could introduce nondeterminism: entropy, ambient clocks, threads, unordered collection iteration, randomly seeded hashers, pointer formatting, logging side effects. Findings are recorded; unproven "probably fine" items get a test.
-- **Configuration:** pre-vote on, check-quorum on, explicit logger (no background logging thread), batch and in-flight limits from §7.11.
+- **Configuration:** pre-vote on, check-quorum on, explicit logger (no background logging thread), batch and in-flight limits from §7.11, including a bound on committed entries materialised per Ready (`max_committed_size_per_ready`, which raft-rs leaves unlimited by default).
 - **Replacement boundary.** Nothing outside the adapter depends on the library's types (CD-1). Replacing the library must not change the state machine, API, CLI or checkers; it may need a journal/peer-codec migration. This is source-level isolation, not live mixed-library compatibility.
 - **Fallback.** If W02 fails, its evidence is kept and dependent work stays blocked. The fallback to evaluate is OpenRaft 0.9.x behind the same port, with a fully controlled runtime and entropy. Switching is a recorded plan revision, not a quiet change inside a task. We never write our own Raft.
 
@@ -543,7 +543,7 @@ Each node has **one serial controller**. It handles one input at a time and keep
 
 1. **Input.** Feed one input to the library: a tick, a peer message, or a proposal. (Reads and status lookups never touch the library.)
 2. **Take Ready.** If the library has work ready, take one Ready. A Ready containing a snapshot is an invariant violation (v1 never compacts, so a snapshot can never be needed).
-3. **Persist.** Encode any new entries and hard-state change into **one** journal frame, append it, and sync it. Until `SyncDone` arrives for this frame, the node feeds no further input to the library. It keeps serving reads from its current published view, and queues other inputs within their bounds.
+3. **Persist.** Encode any new entries and hard-state change into **one** journal frame, append it, and sync it. Until `SyncDone` arrives for this frame, the node feeds no further input to the library. It keeps serving reads from its current published view, and queues other inputs within their bounds; ticks accumulate in a pending-tick counter and are fed afterwards, and controller deadline bookkeeping still advances (§7.12), so write deadlines fire even while Raft inputs are deferred. A `SyncDone` is an I/O completion, never dropped by admission bounds (§7.11).
 4. **Release messages.** After `SyncDone`: make the new entries visible to the library's storage view (offset index and cache), then release **all** of the Ready's outgoing messages, in their recorded order. v1 is deliberately conservative: it holds even messages the library would allow before persistence.
 5. **Apply.** Apply the Ready's committed entries in index order (§7.5). The published view advances one complete entry at a time. Waiting client attempts complete when their entry is applied.
 6. **Advance.** Tell the library the Ready is done. Handle the returned LightReady: send its messages (their persistence obligations are already met) and apply its committed entries the same way.
@@ -579,7 +579,7 @@ Rules:
   4. **First execution:** evaluate against the current state.
      - PUT: if it would create a key or grow bytes beyond DM-6 → `capacity_exceeded`; otherwise set the key with `version = index`.
      - DELETE: remove if present; result `existed`.
-     - CAS: if the expectation matches → set with `version = index`; otherwise `version_mismatch(current)`.
+     - CAS: if the expectation does not match → `version_mismatch(current)`. If it matches but the write would create a key or grow bytes beyond DM-6 → `capacity_exceeded`. Otherwise set with `version = index`. (Mismatch is checked strictly before capacity; both are committed terminal results. The reference model implements the same order.)
      - Record `(index, digest, result)` in the history, **including** mismatch and capacity results: they are terminal.
   5. Set `applied_index = index`.
 - **Digest.** `command_digest` is SHA-256 over the canonical command bytes. Conflict detection therefore relies on SHA-256 collision resistance; this is a stated assumption, not a proof (§10.15). Comparing full commands would need disk reads inside apply, breaking purity (R-17).
@@ -588,13 +588,13 @@ Rules:
 
 ### 7.6 Journal
 
-- **One append-only file per node** (`journal.log`), plus a `LOCK` file giving exclusive ownership of the data directory (D-8).
+- **One append-only file per node** (`journal.log`), plus a `LOCK` file giving exclusive ownership of the data directory (DUR-8).
 - **Frame layout** (all integers little-endian):
 
 | Field | Size | Notes |
 |---|---|---|
 | magic | 4 B | `KVJ1` |
-| format version | 2 B | D-5 |
+| format version | 2 B | DUR-5 |
 | kind | 1 B | `Genesis` or `RaftBatch` |
 | reserved | 1 B | zero |
 | payload length | 4 B | ≤ 1 MiB (§7.11) |
@@ -610,21 +610,22 @@ Rules:
 - **Offset index.** In memory: `LogIndex → (file offset, term)` for the current logical log, about 16 bytes per entry, bounded by DM-7.
 - **Entry cache.** A bounded cache of recent entries (§7.11). Cache misses read the journal through the byte-storage port in bounded chunks. Eviction changes cost, never results.
 - **Checksum.** CRC-32C is implemented in-crate and tested against standard vectors (no dependency, CD-12). It detects accidental damage; it is not an authentication mechanism.
-- **Directory durability.** Creating the data directory and journal syncs the parent directory before anything depends on it (D-7).
-- **Fail closed.** An incomplete final frame is discarded (and physically truncated before the next append, then synced). A complete frame with a bad checksum, a sequence gap, an impossible index relationship or a genesis mismatch stops the node with a specific error (D-6, D-8).
+- **Directory durability.** Creating the data directory and journal syncs the parent directory before anything depends on it (DUR-7).
+- **Fail closed.** A torn tail — an incomplete final frame, or a final frame failing its checksum with no valid frame after it — is discarded (and physically truncated through the byte-storage port's `Truncate`, then synced, before the next append). A checksum-failing frame followed by a valid frame, a sequence gap, an impossible index relationship or a genesis mismatch stops the node with a specific error (DUR-6, DUR-8).
 - **Golden vectors** in `crates/journal/golden/`, each with a short README line stating what it represents:
   - encoded genesis and `RaftBatch` frames (decode → expected value; encode expected value → identical bytes);
-  - recovery cases: empty journal, clean journal, incomplete final frame cut mid-header, mid-payload and mid-trailer, bad checksum on the final complete frame, bad checksum mid-journal (must refuse), sequence gap (must refuse), a logical truncation followed by replacement entries, a truncation attempt below commit (must refuse).
+  - recovery cases: empty journal, clean journal, incomplete final frame cut mid-header, mid-payload and mid-trailer (must discard the torn tail), bad checksum on the final complete frame (must discard as a torn tail), bad checksum mid-journal (must refuse), sequence gap (must refuse), a logical truncation followed by replacement entries, a truncation attempt below commit (must refuse), a crash during physical tail truncation (partially truncated tail; recovery must converge), and an incomplete genesis-only journal (treated as uninitialised and re-created, §7.7 step 0).
 - Golden files are oracles (P9). A format change is deliberate: bump the format version, add new golden files, record it in §16. Never regenerate goldens to make a test pass.
 
 ### 7.7 Recovery
 
+0. **Initialisation.** A data directory that does not exist, or whose journal contains no complete genesis frame (a crash interrupted creation), is (re-)initialised: create the directory, sync its parent (DUR-7), write the genesis frame from the validated config, sync it. Only a journal whose first complete frame is a valid genesis counts as initialised; this step is what makes genesis creation crash-safe. Re-initialising is only legal while nothing follows the genesis frame — a journal with entries but a damaged genesis is corruption (DUR-6).
 1. Acquire the data-directory lock; refuse if held.
 2. Read the genesis frame. Verify cluster ID, node ID, voter set and semantic-config fingerprint against the current configuration. Any mismatch → refuse, modifying nothing.
-3. Scan frames in order, verifying each. Discard an incomplete final frame. Any other damage → refuse (D-6).
+3. Scan frames in order, verifying each. Discard a torn tail (DUR-6). Any other damage → refuse.
 4. Rebuild the logical log (applying logical truncations), the offset index and the latest hard state.
 5. Replay entries `1..hard_state.commit` through the ordinary apply function (§7.5) to rebuild the key-value map and the request history.
-6. Construct the Raft node with its applied index set to the replayed position.
+6. Construct the Raft node with its applied index set to the replayed position. The Consensus adapter's `initial_state` (the raft-rs `Storage` contract) reports the recovered hard state plus a `ConfState` holding the configured static voter set — membership never comes from the log in v1.
 7. Move the lifecycle to `Ready`. Only now are reads served and `/v1/health/ready` true. Remaining committed entries arrive through the normal Ready loop.
 
 Recovery time grows with history. It is measured (§10.12), and it is visible to the operator through `/v1/health/live` (`recovering`).
@@ -658,11 +659,12 @@ Each **attempt** (one HTTP request) moves through explicit states (CD-2):
 |---|---|---|
 | `NotSubmitted` | parsed and admitted | `307 not_leader`, `503 unavailable`, `503 recovering`, `429 busy`, `507 capacity_exceeded` (history full) — all non-terminal, and they say nothing about earlier attempts |
 | (short-circuit) | request ID already in the local history | same digest → original terminal result (`replayed: true`); different digest → `409 request_id_conflict` |
-| (attach) | an attempt with the same ID is already pending on this node | waits on the existing proposal (bounded, §7.11); no second proposal |
-| `Submitted` | marked **before** the command is handed to the library | on application of an entry carrying R: the terminal result. On deadline, leadership loss, proposal drop or shutdown: `504 unknown_outcome` |
+| (attach) | an attempt with the same ID **and the same command digest** is already pending on this node | waits on the existing proposal (bounded, §7.11); no second proposal. A same-ID attempt with a **different** digest never attaches: it waits for the pending proposal to resolve, then is evaluated against the committed history (replay on a matching digest, `request_id_conflict` otherwise, per §7.5 step 3); it is never proposed while a same-ID proposal is outstanding and never receives the other command's result |
+| `Submitted` | marked **before** the command is handed to the library | on application of an entry carrying R **with this attempt's digest**: the terminal result (an entry carrying R with a different digest resolves this attempt per §7.5 step 3, never with the other command's result). On deadline, leadership loss, proposal drop or shutdown: `504 unknown_outcome` |
 | `Terminal` | the entry carrying R was applied (first execution or replay) | `200` success, `409 version_mismatch`, `507 capacity_exceeded` (live quota), `409 request_id_conflict` |
 
 - The write deadline is counted in ticks from admission, so it behaves identically in simulation.
+- The rows are evaluated in the fixed order of F-7: validate → short-circuit → attach → leader check. A Ready non-leader that holds R in its applied history answers locally; it never redirects a known retry.
 - A later retry with R, to any node, is always safe: it either short-circuits on the history, or proposes again; a second committed copy is a replay, never a second execution.
 
 ### 7.9 Read path and status lookup
@@ -689,8 +691,10 @@ Each **attempt** (one HTTP request) moves through explicit states (CD-2):
 
 **Config validation (O-5, CD-3).** One configuration type is shared by production and simulation. It can only be constructed through a parser that rejects, with a specific error:
 
-- anything other than exactly 5 voters, or duplicate node IDs, client addresses, peer addresses or data directories;
+- a voter count other than 1, 3 or 5 — one odd count per config; the release and local profiles pin 5 voters, while 1- and 3-voter configurations exist for development, tests, probes and demos, each with its own genesis identity (DUR-8);
+- duplicate or zero node IDs, or duplicate client addresses, peer addresses or data directories;
 - a missing cluster ID or protocol version;
+- any cross-limit inconsistency: `max_key_bytes` + `max_value_bytes` + command-envelope overhead must fit the canonical-command limit, which must fit the journal-frame and HTTP-body limits (§7.11);
 - heartbeat interval < 1 tick;
 - election timeout minimum < 5 × heartbeat interval;
 - election timeout maximum ≤ minimum;
@@ -698,7 +702,9 @@ Each **attempt** (one HTTP request) moves through explicit states (CD-2):
 - CLI deadline < write deadline;
 - any limit outside its allowed range (§7.11).
 
-The **semantic-config fingerprint** (D-8) covers every parameter that can change a result: key/value limits, live-state limits, history capacity and the command-format version.
+Every numeric parameter's allowed range and integer domain is declared alongside its entry in the limits registry (§7.11) and enforced by this parser; the OpenAPI spec and codec limits are checked against the same table, so no bound exists in two places.
+
+The **semantic-config fingerprint** (DUR-8) covers every parameter that can change a result: key/value limits, live-state limits, history capacity and the command-format version.
 
 ```toml
 cluster_id = "keyval-local-v1"
@@ -733,9 +739,11 @@ Every allocation-bearing collection has an entry in the limits registry before i
 | Key / value | 256 B / 64 KiB decoded UTF-8 | `400 invalid_request` / `413 too_large` before proposal |
 | HTTP request body | 512 KiB | `413 too_large` (enough for worst-case JSON escaping of a valid value) |
 | Canonical command | 66 KiB | Rejected at the boundary; a test proves every valid command fits |
-| SCAN page | 1–128 items (default 32); ≤ 1 MiB encoded | Page stops before the next item would exceed either bound; one maximum-size item always fits |
-| Live state (DM-6) | 10,000 keys / 64 MiB | Committed terminal `capacity_exceeded`; DELETE and shrinking writes still succeed |
-| History (DM-7) | 1,000,000 entries / 4 GiB journal | Leader refuses new proposals: `507 capacity_exceeded` (not submitted), keeping a reserve of 1,000 entries for no-ops |
+| SCAN page | 1–128 items (default 32); ≤ 1 MiB of **decoded** key+value bytes | Page stops before the next item would exceed either bound; one maximum-size item always fits; the decoded-byte formula is the one definition shared by core, model and K-5 (the encoded response stays bounded by construction) |
+| Live state (DM-6) | 10,000 keys / 64 MiB | Committed terminal `capacity_exceeded` (PUT and matching CAS alike); DELETE and shrinking writes still succeed within DM-7 |
+| History admission (DM-7) | last log index < 1,000,000 | Leader refuses new mutations before proposal: `507 capacity_exceeded` (not submitted). Deterministic and replicated; protocol entries (election no-ops) are never refused |
+| Journal bytes, per node (DM-7) | 4 GiB | Local hard stop: the node stops appending and moves to `failed` (visible in health); never a replicated decision |
+| Committed entries per Ready | 1 MiB | Library configuration (`max_committed_size_per_ready`); remaining committed entries arrive in later Readys |
 | Pending client attempts per node | 256 attempts / 16 MiB | `429 busy` (not submitted) |
 | Waiters per request ID | 16 | `429 busy` |
 | Raft uncommitted proposal bytes | 4 MiB | `429 busy` |
@@ -744,7 +752,7 @@ Every allocation-bearing collection has an entry in the limits registry before i
 | Replication batch / in-flight batches | 256 KiB / 16 per peer | Library configuration; the adapter asserts output bounds |
 | Journal frame / read chunk | 1 MiB / 256 KiB | Chunk at entry boundaries; an oversized frame is a defect |
 | Concurrent application | 1 entry per node | Later entries wait; reads use the preceding published view |
-| Inbound controller queue | 1,024 inputs | Peer messages dropped (counted); client attempts get `429 busy` |
+| Inbound controller queue | 1,024 inputs | Peer messages dropped (counted); client attempts get `429 busy`. I/O completions (`SyncDone`) are **never** dropped (at most one sync is outstanding per node) and ticks merge into a pending-tick counter, so persistence and deadlines always make progress |
 | CLI automatic retries | 10 attempts, 5 distinct nodes, 15 s overall | Returns an unresolved status with the same request ID; never a new ID |
 | Structured log queue | 4,096 records | Diagnostic records dropped and counted; required simulator observations fail closed on overflow |
 | Simulation events per run | 1,000,000 (per scenario manifest) | Run is **incomplete**, which fails (P10) |
@@ -757,7 +765,8 @@ Every allocation-bearing collection has an entry in the limits registry before i
 
 - **One OS process per node**, with an async runtime confined to this crate and its adapters.
 - Wires the production adapters from §7.2: HTTP API server, HTTP peer transport (separate peer address), file byte storage, monotonic clock, boot-seeded entropy, structured log file.
-- **One serial controller task** owns the node's core. Client attempts, peer messages, ticks and I/O completions reach it through one bounded input queue (§7.11). File writes and syncs run off the controller and return as `SyncDone`.
+- **One serial controller task** owns the node's core. Client attempts, peer messages, ticks and I/O completions reach it through one bounded input queue (§7.11); completions bypass the admission bound (§7.11) so a waiting Ready always resolves. File writes and syncs run off the controller and return as `SyncDone`.
+- Deadline bookkeeping advances on every input, including while a Ready's sync is outstanding and Raft inputs are deferred (§7.4 step 3), so write deadlines always fire.
 - **Mapping:** the HTTP adapter parses each request into domain types (CD-3) and submits a `ClientRequest`; each `Respond` effect completes the corresponding HTTP response. A lost connection after submission is simply an unresolved attempt; nothing is rolled back.
 - **Thin by design:** adapters only translate. No consensus, state-machine or request-handling logic lives outside the core.
 
@@ -787,11 +796,13 @@ Described in §10.2. It wires 5 cores to the simulation adapters from §7.2, in 
 - **Base path:** `/v1`. JSON request and response bodies, UTF-8. Body-bearing requests require `Content-Type: application/json`.
 - **Strict JSON.** Unknown fields, duplicate member names, malformed UTF-8 and malformed numbers are rejected with `400 invalid_request`.
 - **Keys are query parameters, not path segments.** This avoids path-encoding ambiguity (keys may contain `/`, `?`, `&`).
+- **Query decoding.** `key`, `start`, `end` and `after` are RFC 3986 percent-decoded; `+` is a literal plus, never a space. An invalid percent escape, invalid UTF-8 after decoding, or a repeated parameter is `400 invalid_request`. A 307 `Location` re-encodes exactly the same decoded bytes.
+- **No caching.** Every response — reads, status and health included — carries `Cache-Control: no-store`, so no intermediary can serve a stale `served_by`, lifecycle or result; the conformance suite checks the header.
 - **Byte limits** (DM-1, DM-2) apply after decoding. JSON Schema length keywords count characters, so the spec records byte limits with an `x-maxUtf8Bytes` extension, and conformance tests check them.
 - **Writes require an `Idempotency-Key` header**: 32 lowercase hex characters (F-6). The CLI generates it.
 - **Integers** (versions, indices, terms) are JSON numbers. DM-7 guarantees they stay below 2^53, so every JSON client handles them exactly.
 - **Terminal results are immutable.** `request_id`, `index` and the decision never change across retries or status lookups; `served_by` and `replayed` may.
-- **Every error has the same envelope:** `{"error": {"code": "<code>", "message": "<text>", "details": {…}}}`. A write error's `details` include `request_id` and `attempt_state` (`not_submitted` or `submitted`) where applicable. `attempt_state` describes **this attempt only**.
+- **Every error has the same envelope:** `{"error": {"code": "<code>", "message": "<text>", "details": {…}}}`. A **terminal** write error's `details` always carry `request_id`, `index` (the first execution's log index), `replayed` and the decision, exactly as immutable as a success. A non-terminal write error's `details` carry `request_id` and `attempt_state` (`not_submitted` or `submitted`). `attempt_state` describes **this attempt only**; terminality is a property of the decision, never of whether this particular attempt submitted a proposal.
 
 ### 8.2 Endpoints
 
@@ -807,13 +818,14 @@ Described in §10.2. It wires 5 cores to the simulation adapters from §7.2, in 
 | `GET /v1/health/ready` | — | `200` when ready; `503 recovering` otherwise | O-1 |
 | `GET /v1/cluster` | — | `200 {"node_id", "cluster_id", "role", "term", "leader_id", "durable_last_index", "commit_index", "applied_index", "peers": [{"id", "client_address", "match_index"?}]}` | O-1 |
 
-The peer channel (`POST /raft` on each node's **peer** address) is internal: bounded envelopes of encoded Raft messages. It is not part of the public contract and is excluded from the conformance suite.
+The peer channel (`POST /raft` on each node's **peer** address) is internal: bounded envelopes of encoded Raft messages. Each envelope carries the cluster ID, protocol version, semantic-config fingerprint, and sender and destination node IDs; a node validates all five before handing the message to Raft and drops mismatches with a counted error, so two accidentally connected clusters can never exchange Raft traffic (tested in W21). It is not part of the public contract and is excluded from the conformance suite.
 
 ### 8.3 Mutation results
 
 - `index` is the log index of the request's **first execution**. For a successful PUT or CAS, `version == index`. DELETE has no version.
 - `replayed: true` means this response returns a result recorded earlier (a retry or a duplicate entry). The decision is the original one.
 - A status lookup (`GET /v1/requests/{id}`) returns the stored result, whatever it was: success, `version_mismatch` or `capacity_exceeded`. The lookup itself is HTTP 200 either way; the embedded decision says what happened.
+- A terminal error (`version_mismatch`, live-quota `capacity_exceeded`) is evidence that its request executed and committed, exactly like a success (§9.3).
 
 ### 8.4 Outcomes and error model
 
@@ -823,14 +835,14 @@ The peer channel (`POST /raft` on each node's **peer** address) is internal: bou
 | 307 | `not_leader` | no (`not_submitted`) | Write sent to a non-leader that believes it knows the leader. `Location` = the leader's URL for the same path and query. | `leader_hint`, `request_id` |
 | 400 | `invalid_request` | no | Malformed input, bad key (DM-1), bad request ID, bad range or pagination parameters | — |
 | 404 | `not_found` | — | GET of an absent key | `served_by` |
-| 409 | `version_mismatch` | **yes** | CAS expectation did not match at application. Consumes the request ID. | `current_version` (null if absent), `request_id`, `index` |
-| 409 | `request_id_conflict` | **yes** for this ID | The ID was already used for a different command. Nothing changed. | `request_id` |
+| 409 | `version_mismatch` | **yes** | CAS expectation did not match at application. Consumes the request ID. | `current_version` (null if absent), `request_id`, `index`, `replayed` |
+| 409 | `request_id_conflict` | **yes** for this ID | The ID was already used for a different command. Nothing changed. | `request_id`, `original_index` (the original execution's index, when the serving node has it; null otherwise) |
 | 413 | `too_large` | no | Value > 64 KiB (DM-2) or body > 512 KiB | — |
 | 429 | `busy` | no (`not_submitted`) | A local admission bound was hit (§7.11) | `request_id` |
 | 503 | `unavailable` | no (`not_submitted`) | No leader known, or the node is shutting down | `nodes` (all configured client addresses) |
 | 503 | `recovering` | no | The node is not `Ready` (starting, recovering, failed) | `lifecycle` |
 | 504 | `unknown_outcome` | **unresolved** | Submitted, but commit was not observed before the deadline, leadership was lost, or the proposal was dropped | `request_id`, `attempt_state: "submitted"`, `guidance: "retry_same_request_or_query_status"`, `nodes` |
-| 507 | `capacity_exceeded` | **yes** when from the live quota (a committed decision); no when from history capacity (`not_submitted`) | DM-6 / DM-7 | `request_id`, `limit`, `attempt_state` |
+| 507 | `capacity_exceeded` | **yes** when from the live quota (a committed decision); no when from history capacity (`not_submitted`) | DM-6 / DM-7 | `request_id`, `limit`; live quota (terminal): `index`, `replayed`; history capacity (non-terminal): `attempt_state: "not_submitted"` |
 
 Unsupported methods and media types may use 405/415, still with the error envelope where the server controls the response.
 
@@ -868,7 +880,7 @@ Idempotency-Key: 7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5
 {"expected": {"kind": "version", "version": 41}, "value": "12"}
 
 → 409 {"error":{"code":"version_mismatch","message":"expected 41, current 57",
-       "details":{"current_version":57,"request_id":"7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5","index":58}}}
+       "details":{"current_version":57,"request_id":"7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5","index":58,"replayed":false}}}
 ```
 
 ```
@@ -896,7 +908,7 @@ Each fault is injected by the simulator (§10.4). Crash-related faults are also 
 
 | Fault | Simulated as | Focused scenarios required |
 |---|---|---|
-| **Crash-restart** | The node's memory, caches, pending completions and a seed-chosen part of its unsynced disk data (none, a prefix, or all) are discarded; it restarts after a random delay from its surviving bytes only, as a new incarnation. | Crash before a write; mid-append; after write before sync; after sync before the completion is delivered; after commit before the reply. |
+| **Crash-restart** | The node's memory, caches, pending completions and a seed-chosen part of its unsynced disk data (none, a prefix, or all) are discarded; it restarts after a random delay from its surviving bytes only, as a new incarnation. The scheduler sometimes still **delivers** a stale completion from the old incarnation to the new one, which must ignore it (§7.2; exercised by B-17). | Crash before a write; mid-append; after write before sync; after sync before the completion is delivered; after commit before the reply; a stale completion delivered after restart. |
 | **All-node crash** | All five crash, with disks intact, possibly repeatedly. | Simultaneous crash of all five with acknowledged writes in history. |
 | **Permanent loss** | Up to two nodes are removed for good. | Each of the ten possible pairs; the surviving three keep acknowledged history and resume writes. |
 | **Symmetric partition** | A split of nodes into groups; no messages cross it. | 3/2, 4/1 and 2/2/1 splits, including an old leader on the minority side. |
@@ -924,7 +936,7 @@ Rules:
 
 - **Clocks are not trusted for correctness.** Ticks only drive timeouts; safety never depends on them.
 - **The network is not assumed FIFO or reliable.**
-- **A response is not proof of commit** unless it is a success (P8). A missing status record is not proof of absence.
+- **A response is not proof of commit** unless it reports a terminal execution decision: a success, a `version_mismatch` or a live-quota `capacity_exceeded` each prove their request's committed execution (P8, §8.3). Admission refusals and `unknown_outcome` prove nothing. A missing status record is not proof of absence.
 - **Seed counts are not coverage.** Coverage is measured separately (§10.4).
 - **Passing finite campaigns is evidence, not proof** (§10.15).
 
@@ -937,8 +949,9 @@ Liveness requirements (A-1, A-4) and the liveness checker (K-9) are stated relat
 - Disk syncs complete within 20 ms.
 - Every node gets fair turns (no indefinite pauses).
 - The outstanding workload is finite: at most 64 unresolved logical writes.
-- The live-state and history limits are not being deliberately exhausted (except in capacity tests).
-- **Heal budget:** 600 ticks (30 virtual seconds) from the start of the envelope.
+- Recovery and replication work outstanding at heal is bounded by the scenario (chaos duration and workload caps).
+- The live-state and history limits are not being deliberately exhausted (except in capacity tests, which use the adapted heal protocol of §10.2).
+- **Heal budget:** 600 ticks (30 virtual seconds) from the start of the envelope. The budget is an acceptance criterion for scenario profiles that respect all of the bounds above, not a universal real-time promise.
 
 Outside the envelope the system must stay safe, but no progress is promised: an asynchronous network can delay elections indefinitely.
 
@@ -991,13 +1004,13 @@ If B had not yet applied R, it proposes again; the duplicate entry becomes a rep
 |---|---|---|
 | Unit, property and compile-fail tests | Components behave in isolation; invalid states can't be built (CD-2) | T0 |
 | Reference-model differential tests | The state machine matches the reference model on random command sequences (§10.14) | T0 |
-| Golden vectors | The on-disk format and recovery behaviour are exactly as pinned (D-5, D-6) | T0 |
-| Deterministic simulation + checkers | Cluster correctness under faults (C-, A-, D- requirements) | T0 (smoke), T1, T2, T3 |
+| Golden vectors | The on-disk format and recovery behaviour are exactly as pinned (DUR-5, DUR-6) | T0 |
+| Deterministic simulation + checkers | Cluster correctness under faults (C-, A-, DUR- requirements) | T0 (smoke), T1, T2, T3 |
 | Non-vacuity and coverage | Runs did meaningful work; required fault/outcome combinations were exercised (§10.16, §10.4) | Every simulation run; T2/T3 reports |
 | Checker self-test (bug injection) | Checkers actually catch bugs (§10.6) | T1, T3 |
 | Determinism self-check | Seeds reproduce byte-identically in fresh processes (T-3, T-11) | T0, T1, T2, T3 |
 | API conformance suite | The real HTTP server (and the model server) match the contract (§8) | T1, T3 |
-| Real-file crash probes + lifecycle smoke | Production storage and process lifecycle behave as the simulation assumes (§10.17) | T1, T3 |
+| Real-file crash probes + lifecycle smoke | Production storage and process lifecycle recover from process crashes as the simulation assumes (§10.17; power-loss durability is an Assumption) | T1, T3 |
 | Parity check | Production and simulation share the same semantic code (§10.18) | T0 (static part), T1 |
 | Verification registry gate | Plan ↔ registry ↔ code ↔ spec ↔ tests ↔ work graph are consistent; every active MUST requirement is covered (§10.13) | T0 |
 | Output schema tests | Every `--json` output validates against its schema (O-6) | T0 |
@@ -1021,8 +1034,10 @@ If B had not yet applied R, it proposes again; the duplicate entry becomes a rep
 **Simulated disk**
 
 - Byte-addressed **volatile** and **durable** images per node. Appends land in the volatile image; `sync` makes them durable.
-- On crash, a seed-chosen portion of unsynced appended bytes survives as a prefix: none, some or all (D-9). Never only "all unsynced bytes vanish".
-- A sync can become durable while its completion notification is lost to a crash.
+- On crash, a seed-chosen portion of unsynced appended bytes survives as a prefix: none, some or all (DUR-9). Never only "all unsynced bytes vanish". (Prefix survival is the stated filesystem assumption; §10.15.)
+- **Directory entries are modelled**: a created file and its existence stay volatile until the parent directory is synced, so a crash between create and directory sync loses the file (DUR-7 has a simulated crash point, not only a real-file probe).
+- `Truncate` uses the same volatile/durable split, including a crash between a truncation and its sync (§7.6).
+- A sync can become durable while its completion notification is lost to a crash; the scheduler sometimes delivers the stale completion to the next incarnation, which must ignore it (§9.1, B-17).
 - Synced bytes are never damaged (corruption is deferred, §9.2).
 - Read calls through the byte-storage port are instantaneous and deterministic; mutating operations and sync boundaries are separately scheduled fault points.
 
@@ -1054,7 +1069,7 @@ If B had not yet applied R, it proposes again; the duplicate entry becomes a rep
 1. **Setup:** generate the scenario (swarm configuration, fault schedule, client plans) from the seed (§10.9).
 2. **Baseline:** the cluster elects a leader and completes a few successful writes before any fault.
 3. **Chaos:** workload plus nemesis for a fixed virtual duration. Default: 1,200 ticks (60 virtual seconds).
-4. **Heal:** stop injecting faults; restart every recoverable node; restore all links among survivors. Clients resolve every outstanding logical write by retrying it with its own request ID. Then one final, uniquely identified PUT is written as a **catch-up marker**. The run waits until every recoverable node has applied the marker. Client writes stop before final states are compared. The heal never edits logs, forces elections, teleports state or drops outstanding requests. Budget: 600 ticks (30 virtual seconds; the healthy envelope, §9.4).
+4. **Heal:** stop injecting faults; restart every recoverable node; restore all links among survivors. Clients resolve every outstanding logical write by retrying it with its own request ID. Then one final, uniquely identified PUT is written as a **catch-up marker**. The run waits until every recoverable node has applied the marker. Client writes stop before final states are compared. The heal never edits logs, forces elections, teleports state or drops outstanding requests. Budget: 600 ticks (30 virtual seconds; the healthy envelope, §9.4). **Capacity profiles adapt the heal:** the marker key is created during Baseline and overwritten with an equal-size value, so DM-6 can never refuse it; scenarios that exhaust DM-7 admission reserve headroom below the test limit for the marker write; and an outstanding logical write refused for history capacity resolves as an explicit `refused (capacity)` outcome, which K-9 and non-vacuity count as resolved (§10.16).
 5. **Check:** run every checker (§10.5) on the recorded observations and the god view, plus non-vacuity (§10.16).
 
 **Outputs**
@@ -1078,7 +1093,7 @@ The HTTP adapter is **not** simulated. Simulated clients drive the core's inboun
   - follow `not_leader` redirects; back off on `busy`, `unavailable` and `recovering`;
   - retry `unknown_outcome` and lost responses with the same request ID; sometimes resolve via the status endpoint instead;
   - CAS typically uses the version from a recent GET, so realistic read-modify-write races occur.
-- **Misuse workload:** a separate stream reuses a request ID with a different command. Such attempts must get `request_id_conflict` and must not be counted as logical writes.
+- **Misuse workload:** a separate stream reuses a request ID with a different command, sent only after the original request has a client-observed terminal result (while both are in flight, whichever commits first is legitimately the original; that race is exercised deterministically in W29's tests, not by this random stream). Such attempts must get `request_id_conflict` and must not be counted as logical writes.
 - **History:** every attempt's invocation time, completion time, target node, request and outcome are recorded as observations.
 
 ### 10.4 Nemesis, swarm testing and coverage
@@ -1094,17 +1109,17 @@ The harness records observable events independently of the implementation's clai
 
 | ID | Checker | Property and method | Reqs |
 |---|---|---|---|
-| K-1 | Durability | Every write acknowledged as success has its first execution in the final committed log, at its reported index, with the reported effect, on every recoverable node, including after crashes, all-node restarts and the loss of up to two nodes. (A later legitimate overwrite is fine: the check is on the committed history, not the final value.) | C-2, D-1 |
-| K-2 | Exactly-once | Each request ID has at most one first execution in the committed log; every response for that ID reports the same `index` and decision; a conflicting reuse has no effect on any key. Independent of caches and attempt counts. | C-6, F-6, DM-5 |
-| K-3 | Real-time order | If acknowledged write A completed before write B was invoked, then `index(A) < index(B)`. | C-1 |
+| K-1 | Durability | Every write acknowledged as success has its first execution in the final committed log, at its reported index, with the reported effect, on every recoverable node, including after crashes, all-node restarts and the loss of up to two nodes. (A later legitimate overwrite is fine: the check is on the committed history, not the final value.) | C-2, DUR-1 |
+| K-2 | Exactly-once | Each request ID has at most one first execution in the committed log; every **terminal execution** response for that ID — excluding `request_id_conflict` answers to misuse attempts and all non-terminal refusals — reports the same `index` and decision; a conflicting reuse has no effect on any key. Independent of caches and attempt counts. | C-6, F-6, DM-5 |
+| K-3 | Real-time order | Defined over **logical writes** (attempts collapsed by request ID, as in K-10): if logical write A's first terminal decision was observed before logical write B's first invocation, then `index(A) < index(B)`. A later retry legitimately returns its original, smaller index; retries never violate this check. | C-1 |
 | K-4 | Write results | Replaying the committed log through the **reference model** (§10.14) reproduces every reported write result: versions (DM-3), `existed`, CAS success or mismatch with the correct current version, capacity outcomes, conflicts. | C-1, C-5, F-1, F-3, F-5, DM-3, DM-6 |
 | K-5 | Read validity | Every GET, SCAN page and status lookup equals the **reference model's** state at the committed prefix `[1..applied_index]` reported in `served_by`, and that prefix had actually been applied **and committed** at the serving node before it answered (god view). A read cannot borrow a prefix created after its response. For SCAN: order, uniqueness, range edges, item and byte caps, and `has_more`/`next_after` are all consistent with that one prefix. | C-3, C-8, F-2, F-4, F-9 |
 | K-6 | Read monotonicity | Per node **incarnation**, reported `applied_index` never decreases. | C-4 |
 | K-7 | Convergence | After Heal, every recoverable node has applied the catch-up marker and has an identical state digest (map and request history). Permanently lost nodes are excluded and listed. Physical journals need not be byte-identical. | A-4 |
-| K-8 | Raft safety | On the god view after every step: election safety (per term; overlapping beliefs in different terms are allowed), log matching (on entry bytes and term, not value hashes), leader completeness, state-machine safety, and leader append-only. Commitment is judged by **commit certificates**: a current-term entry durably stored on a majority, and the prefix before it. An old-term entry on three disks is not thereby committed. Certificates survive the later loss of a certifying node. | C-1, C-2 |
-| K-9 | Liveness | Within the healthy envelope (§9.4): every outstanding logical write reaches a terminal result and the catch-up marker commits, within the heal budget. | A-1, A-3, A-4 |
+| K-8 | Raft safety | On the god view after every step: election safety (per term; overlapping beliefs in different terms are allowed), log matching (on entry bytes and term, not value hashes), leader completeness, state-machine safety, and leader append-only. Commitment is judged by **commit certificates**: an entry of term T durably accepted from the term-T leader by a majority **during term T** (the god view records the acceptance term per replica), and the prefix before it. An old-term entry on three disks is not thereby committed. Certificates survive the later loss of a certifying node. | C-1, C-2 |
+| K-9 | Liveness | Within the healthy envelope (§9.4): every outstanding logical write reaches a terminal result and the catch-up marker commits, within the heal budget. In capacity profiles, an explicit history-capacity refusal counts as resolved and the pre-created marker rule applies (§10.2). | A-1, A-3, A-4 |
 | K-10 | Linearizability witness (black-box) | Using only client observations: collapse the attempts of each request ID into one logical write; take reported `index` values as an **untrusted** candidate order (reject collisions); run the reference model in that order and compare every result; then place each write within its interval by a greedy earliest-placement pass. The interval runs from the first invocation to the first client-observed **terminal** decision; an unknown outcome does not close it, and a later replay is an observation, not a new write. Polynomial time; no exponential search. Used in simulation, in the conformance suite and in v2 real-process testing. | C-1, C-5 |
-| K-11 | Persistence ordering | From the trace: every vote grant, append acknowledgement, client success and published read depends only on durability obligations already satisfied (sync completed for the relevant term, vote and entries). Catches early releases deterministically, without needing an unlucky crash. | D-1, D-2, C-2 |
+| K-11 | Persistence ordering | From the trace: every vote grant, append acknowledgement, client success and published read depends only on durability obligations already satisfied (sync completed for the relevant term, vote and entries). Catches early releases deterministically, without needing an unlucky crash. The obligations are those of DUR-2: entries, term and vote — never the commit index. | DUR-1, DUR-2, C-2 |
 | K-12 | Unknown-outcome honesty | No response after submission reports a guessed success or failure; `not_submitted` appears only for attempts that were never submitted; `status: unknown` never coincides with a claim of absence; every unresolved logical write is eventually resolved or reported unresolved. | A-5, P8, F-10 |
 | K-13 | Non-vacuity | See §10.16. | T-13, P10 |
 | K-14 | Replay identity | Fresh-process canonical-trace equality (§10.7). | T-3, T-11, P4 |
@@ -1113,7 +1128,7 @@ K-1 to K-9, K-11 and K-12 are "white-box": they may use the god view, including 
 
 ### 10.6 Checker self-test (bug injection, normative)
 
-The build supports deliberately broken variants, enabled only in test builds (T-6). Each variant has a targeted scenario and a designated catcher.
+The build supports deliberately broken variants, enabled only in test builds (T-6). All variants live behind one `bug-variants` feature; each site is a registered `bug_switch!(B-xx)` invocation. The static parity check (§10.18) allowlists exactly these registered sites, and a release-build check proves the feature is off and the sites compile to nothing. This mechanism is the sanctioned exception to T-2. Each variant has a targeted scenario and a designated catcher.
 
 | ID | Bug variant | Designated catcher |
 |---|---|---|
@@ -1153,12 +1168,13 @@ Rules:
 - Replays run in **fresh OS processes** with the same binary and manifest, and compare event counts and complete canonical traces, not just final states.
 - **T0:** 2 seeds × 2 fresh processes. **T1:** 16 pairs. **T2:** 64 pairs. **T3:** 100 pairs.
 - Also run after any dependency, patch, toolchain or configuration change.
-- Any difference fails the gate and is a P0 (R6).
+- Any difference fails the gate and is a P0 (RISK-6).
 
 ### 10.8 API conformance suite
 
 - **Independent package.** Built separately from the server workspace; depends on no production crate, DTO or generated client (T-12). It may use the reference model and the K-10 witness from the oracle crates. It reads `api/openapi.yaml` and takes five base URLs.
-- **Validated twice.** It must pass against the reference model server (§10.14) as well as the real cluster. This proves the suite and the spec are right before the real server exists, and lets the suite be built in parallel with the server.
+- **Two test classes.** *Semantic* tests exercise behaviour a single node can show; they run against the reference model server, a real single node and every node of the real cluster. *Topology and lifecycle* tests (follower `307`, no-leader `503`, health during recovery) run only against the real cluster and may drive `./dev cluster kill|restart` to create their preconditions; the model server does not implement them. Every test's registry row records its class and targets, so nothing is silently skipped.
+- **Validated twice.** The semantic tests must pass against the reference model server (§10.14) as well as the real cluster; topology tests are validated against wrong-response fixtures before the cluster exists. This proves the suite and the spec are right before the real server exists, and lets the suite be built in parallel with the server.
 - **Semantic, not just schema.** It checks that each status matches its decision, not merely that the JSON parses.
 - **Covers:**
   - every operation on every node, including follower redirects (`307` + `Location`) and no-leader `503` with node list;
@@ -1169,6 +1185,7 @@ Rules:
   - malformed JSON, unknown and duplicate fields, bad request IDs;
   - SCAN ordering, all range edges, `after` continuation, item and byte caps;
   - health live/ready during recovery; read metadata;
+  - `Cache-Control: no-store` on reads, status and health (§8.1);
   - concurrent histories judged by the K-10 witness.
 - **Tagged.** Each test declares which OpenAPI operations and error codes it exercises, for the spec coverage check (§10.13).
 
@@ -1215,22 +1232,23 @@ All gates are repo-owned commands (`./dev gate <tier>`, P7) that run on the one 
 | Tier | When | Time budget | Contents |
 |---|---|---|---|
 | **T0 fast** | Before every commit, via `./dev commit` | target ≤ 2 min warm, hard limit 3 min | format check; lint with denied warnings (incl. determinism and CD lints); dependency-rule check (CD-1); dependency ledger check (CD-12); verification registry gate and work-graph drift check (§10.13); unit/property/compile-fail tests for changed crates (incl. reference-model differential tests, golden vectors, output schema tests); UBS on the exact staged files; ~50 small simulation seeds (budget-tuned); 2 fresh-process replay pairs; the corpus or its fast subset; the negative-history fixtures |
-| **T1 integration** | Hourly during active development, at every runnable milestone, low CPU priority | target ≤ 15 min, hard limit 20 min | T0 on the whole workspace + full regression corpus + a seed budget sized to fit (initially 2,000 swarm seeds) + 16 replay pairs + checker self-test (§10.6) + conformance suite against the reference model server and a fresh local 5-node cluster + real-file crash probes and lifecycle smoke (§10.17) + `keyval doctor` on every node's data directory afterwards + parity check + traceability report |
+| **T1 integration** | Hourly during active development, at every runnable milestone, low CPU priority | target ≤ 15 min, hard limit 20 min | T0 on the whole workspace + full regression corpus + a seed budget sized to fit (initially 2,000 swarm seeds) + 16 replay pairs + checker self-test (§10.6) + conformance suite against the reference model server and a fresh local 5-node cluster started from a per-run generated config (ephemeral ports and data directories under `.local/gates/<run-id>/`, never the owner's `config/local.toml` cluster; gate-run directory retention follows an owner-approved cleanup policy) + real-file crash probes and lifecycle smoke (§10.17) + `keyval doctor` on every node's data directory afterwards + parity check + traceability report |
 | **T2 campaign** | Nightly while the machine is available; resumable after sleep; one at a time | initial 60 min allocation | full corpus + fresh swarm seeds (initially 10,000) + 64 replay pairs + all dedicated profiles + coverage matrix and measurements reports |
 | **T3 release** | At the v1 candidate and after any major safety change (manual) | as long as needed; resumable across nights | everything above + ≥ 100,000 fresh swarm seeds on the release build + 100 replay pairs + every bug variant + clean-state rehearsal (§12, W51) + required coverage cells + audits complete |
 
+- **Staged contents.** Each tier runs, of its listed contents, the checks whose registry status is `implemented` or higher (§10.13); `planned` checks are reported with the work item that will implement them and never fail the tier or file beads. The full lists are enforced in their entirety once every listed check exists; T3 always requires them all.
 - Budgets are **targets to be measured** on the actual machine, not established facts. If T0 is too slow, reduce redundant work or improve build scheduling; never drop mandatory regression evidence, weaken a checker or label an incomplete run passed.
 - A stopped or sleeping machine has **missed** scheduled runs, not passed ones. An interrupted campaign stays `incomplete`, with its completed and remaining seeds explicit.
-- **Scheduled failure → tracked work.** When T1–T3 fail, the runner first writes an immutable failure receipt and a durable local **outbox** item, keeps the crash pack, and fingerprints the failure (checker, failure class, signature). It then creates or updates exactly one `br` bug with the seed, replay command, crash-pack path (and shrunk scenario if available), build and affected requirements. If the tracker is unavailable, the outbox item stays pending and `./dev status` shows it; a failure is never dropped. No agent needs to notice the failure.
+- **Scheduled failure → tracked work.** When T1–T3 fail, the runner first writes an immutable failure receipt and a durable local **outbox** item, keeps the crash pack, and fingerprints the failure (checker, failure class, signature). It then creates or updates exactly one `br` bug with the seed, replay command, crash-pack path (and shrunk scenario if available), build and affected requirements. If the tracker is unavailable, the outbox item stays pending and `./dev status` shows it; a failure is never dropped. No agent needs to notice the failure. A `planned` (not yet implemented) check is never a failure and never files a bead.
 
 ### 10.11 Pass criteria (normative)
 
 | Gate | Pass means |
 |---|---|
 | T0 | Every selected check executed at least its registered minimum number of cases and passed; the measured budget was met; no requirement or check status was upgraded without a receipt. |
-| T1 | T0 criteria; 0 checker violations and 0 incomplete runs; every bug variant caught per §10.6; conformance 100% against both targets; real-file probes and lifecycle smoke pass; determinism self-check clean. |
-| T2 | T1 criteria over the campaign's seeds; the campaign finished; coverage and measurement reports produced. |
-| T3 | T2 criteria with 0 violations across ≥ 100,000 seeds on the release build; every required coverage cell non-zero; every MUST requirement `passed` on the release build (§10.13); no open P0/P1 beads. |
+| T1 | T0 criteria; 0 checker violations and 0 incomplete runs; every **implemented** bug variant caught per §10.6; conformance 100% for every implemented test against its declared targets (§10.8); real-file probes and lifecycle smoke pass; determinism self-check clean. |
+| T2 | T1's simulation criteria (checker violations, incompleteness, determinism, corpus) over the campaign's seeds; the campaign finished; coverage and measurement reports produced. Conformance, probes and bug variants are not re-run in T2; their latest T1 evidence stands. |
+| T3 | T2 criteria with 0 violations across ≥ 100,000 seeds on the release build; every required coverage cell non-zero; every MUST requirement `passed` on the release build (§10.13); no open P0/P1 beads. T3 alone accepts no `planned` check anywhere in its listed contents (§10.10). |
 
 ### 10.12 Measurements under failure
 
@@ -1243,7 +1261,7 @@ These are reported, not gated, in v1. Simulation metrics use virtual time; real-
 | Convergence time | All faults healed | All recoverable nodes applied the catch-up marker with identical digests (K-7) | Distribution by fault profile and survivor set |
 | Restart catch-up | Restart begins (also recording when recovery reached `Ready`) | Node applies the chosen marker | Local recovery and replication catch-up separately |
 | Unknown-outcome rate | Write attempts, and distinct logical writes | Unknown responses and disconnects before resolution | Both denominators, final resolutions, unresolved count |
-| Recovery time vs history size | Process start | Lifecycle `Ready` | Per history-size profile (R4) |
+| Recovery time vs history size | Process start | Lifecycle `Ready` | Per history-size profile (RISK-4) |
 
 T2 produces `reports/measurements-<date>.md`. The liveness checker K-9 still enforces its functional bound under the healthy envelope; that is distinct from making any latency metric a pass/fail gate.
 
@@ -1266,13 +1284,13 @@ A small, machine-readable registry in `registry/` is the index of all verificati
 1. **Plan ↔ registry.** The requirement IDs and levels in `requirements.toml` differ from §6 of this plan. (The plan wins, §0.4.)
 2. **Coverage.** An `active` MUST requirement has no check covering it.
 3. **Registry ↔ code.** A registry check has no code marker, or one appears more than once; or a code marker has no registry row.
-4. **Registry ↔ execution.** A check's `run` selector does not resolve, or executes fewer than `min_cases` cases.
+4. **Registry ↔ execution.** A check with status `implemented` or higher whose `run` selector does not resolve, or executes fewer than `min_cases` cases. (`planned` rows need no selector yet; they are reported, never failed.)
 5. **Spec ↔ code.** The error codes in `api/openapi.yaml` differ from the domain error type's variants; or an OpenAPI operation has no handler in the HTTP adapter.
 6. **Spec ↔ tests.** An OpenAPI operation or error code is exercised by no conformance test.
 7. **Bug variants.** A bug-variant row has no designated catcher. (Whether it is actually caught is checked in T1, §10.6.)
-8. **Work graph.** `workgraph.toml` differs from §12.2, contains a cycle, or disagrees with the imported beads' dependencies.
+8. **Work graph.** `workgraph.toml` differs from §12.2, contains a cycle, or disagrees with the imported beads' dependencies. The bead comparison covers only edges between `plan:W<nn>` beads; bug and discovered-work beads may add edges freely (§12.2).
 
-Conditions 5 and 6 become enforcing once the HTTP adapter (W18) and the conformance suite (W31) exist; before that they are reported, not failed.
+Conditions 5 and 6 are reported, not failed, until W32 (the complete HTTP surface) closes; W32's closure is the single switch to enforcing. (W18 implements only PUT/GET, so operation-level enforcement any earlier would fail every commit between W18 and W32.)
 
 **Status lifecycle.**
 
@@ -1294,7 +1312,7 @@ A deliberately simple, obviously correct model of keyval's semantics, used only 
 - **Uses:**
   1. **Checkers** K-4, K-5 and K-10 compute expected results with it (§10.5).
   2. **Differential property tests.** A separate test crate applies random command sequences to both the state machine and the model; results and final states must match. Runs in T0.
-  3. **Reference model server.** A test-only, single-node HTTP server over the model that implements `api/openapi.yaml`. The conformance suite must pass against it (§10.8).
+  3. **Reference model server.** A test-only, single-node HTTP server over the model that implements `api/openapi.yaml`. The conformance suite's semantic tests must pass against it (§10.8); topology and lifecycle behaviour is out of its scope.
 - **Disagreement.** If the model and the state machine disagree, the plan (§6, §8) decides which is wrong. A model bug is fixed like a checker bug (§11.5, rule 3).
 
 ### 10.15 Claim classes
@@ -1318,8 +1336,8 @@ A simulation run passes only if it did meaningful work (T-13, K-13). It is `inco
 - successful writes before the first fault;
 - at least one injected instance of **every** fault type the scenario selected (or an explicit, reported "scenario invalid");
 - reads served by more than one node;
-- a successful write after heal (the catch-up marker);
-- a terminal resolution for every admitted logical write, or a liveness failure;
+- a successful write after heal (the catch-up marker; pre-created in capacity profiles, §10.2);
+- a terminal resolution for every admitted logical write (in capacity profiles, an explicit history-capacity refusal counts as resolved, §10.2), or a liveness failure;
 - every applicable checker actually executed;
 - the event budget not exhausted.
 
@@ -1327,16 +1345,16 @@ An all-timeout run is a failure, not evidence of safety. The same principle appl
 
 ### 10.17 Real-file crash probes and lifecycle smoke
 
-Simulated bytes cannot show that the real file adapter honours real sync semantics, so v1 adds a small, fixed set of real-process checks (T-14). This is deliberately narrow; a general random real-process fault framework remains v2.
+Simulated bytes cannot show that the real file adapter drives real files correctly, so v1 adds a small, fixed set of real-process checks (T-14). These are **process-crash** probes: `SIGKILL` does not drop the OS page cache, so unsynced bytes survive the kill and a missing `fsync` cannot be detected this way. They establish crash-recovery behaviour, not power-loss durability. Two complements close part of that gap: a **sync-order check** records the adapter's file operations through an instrumented port wrapper and asserts that every append, sync and directory-sync obligation of §7.4 and DUR-7 was actually issued, in order; and power-loss durability itself is recorded as an **Assumption** (§10.15) — "the filesystem and disk honour fsync" — with a write-blocking power-loss emulator (e.g. dm-log-writes or LazyFS) as a v2 option. This is deliberately narrow; a general random real-process fault framework remains v2.
 
-- **Crash probes.** A child process runs the real journal and file adapter against a real temporary directory. Test-only failpoints (never in production builds, T-6) let the parent kill it with `SIGKILL` at each boundary: before a write, mid-append, after a write before sync, after sync before the completion is observed, and during directory creation. The parent restarts it and checks: every synced frame is present; an incomplete final frame is discarded; nothing inside the durable prefix is damaged; recovery never erases synced data; the second process cannot take the lock while the first holds it.
+- **Crash probes.** A child process runs the real journal and file adapter against a real temporary directory. Test-only failpoints (never in production builds, T-6) let the parent kill it with `SIGKILL` at each boundary: before a write, mid-append, after a write before sync, after sync before the completion is observed, during directory creation, and during tail truncation. The parent restarts it and checks: every synced frame is present; a torn tail is discarded; nothing inside the durable prefix is damaged; recovery never erases synced data; the second process cannot take the lock while the first holds it.
 - **Lifecycle smoke.** Against a real local 5-node cluster: write N acknowledged keys; `SIGKILL` the leader and one follower via `./dev cluster kill`; restart them; verify every acknowledged key via the conformance client from every node; run `keyval doctor` on every data directory.
 - **Matching.** Each probe has a scripted twin in the simulator; their observable outcomes must agree (§10.18).
 
 ### 10.18 Parity check
 
-- **Static:** a T0 check rejects `cfg`-gated or environment-specific branches in deterministic crates, and verifies that both composition roots use the same state machine, controller, Raft adapter, journal engine and command codec (dependency graph comparison).
-- **Dynamic:** a scripted, sequential scenario (writes, CAS, deletes, scans, a restart) runs both in the simulator and against a real single node and a real cluster; the semantic results (versions, decisions, pages) must match exactly. This is not a claim that the whole OS is simulated.
+- **Static:** a T0 check rejects `cfg`-gated or environment-specific branches in deterministic crates — except the registered `bug_switch!` sites of the `bug-variants` feature (§10.6), which it allowlists and verifies absent from release builds — and verifies that both composition roots use the same state machine, controller, Raft adapter, journal engine and command codec (dependency graph comparison).
+- **Dynamic:** a scripted, sequential scenario (writes, CAS, deletes, scans, a restart) runs both in the simulator and against a real single node and a real cluster; the runs must agree on **semantic transitions**: the sequence of first executions per key (commands, decisions, value states), with returned versions compared through each run's own execution order (versions are log indices, so absolute values legitimately differ across topologies whose election and no-op histories differ). Exact index equality is asserted only between runs constructed to have an identical Raft entry sequence, e.g. the simulator's scripted single-voter twin of the real single node. This is not a claim that the whole OS is simulated.
 
 ---
 
@@ -1385,7 +1403,7 @@ Tool notes:
    - The swarm size follows `bv --robot-plan` parallel tracks (§12.4). There is no point running more agents than there are ready beads.
    - Process tooling (W05–W07) runs early, alongside the database work: the point is to exercise the workflow, not to bolt it on at the end.
 6. **Timers.**
-   - T1 runs hourly and T2 nightly once W46 lands. Failures become P0 beads automatically, via the outbox (§10.10).
+   - T1 runs hourly and T2 nightly once W46 lands. Tiers run only their `implemented` checks and report `planned` ones (§10.10). Failures become P0 beads automatically, via the outbox; a `planned` check never files one (§10.10).
 7. **Checkpoints.**
    - At the end of each milestone, a drift audit runs (§11.9), and the owner runs the milestone's demo and reviews `bv` and `./dev status` (§11.6). Checkpoints never block ready work.
 8. **Release.**
@@ -1409,8 +1427,8 @@ Tool notes:
    - If it fails, fix and re-run. Never bypass it.
    - Commit only your own files. Never stash, revert or overwrite other agents' changes.
 7. **Close.**
-   - Run the bead's acceptance commands; they produce a receipt for the current tree.
-   - `br close <id>` citing the receipt, then `br sync --flush-only`, and commit `.beads/` through `./dev commit`.
+   - Run the bead's acceptance commands **in the candidate directory of the commit that carried the work**; the receipt names that committed tree ID (P11), never a shared checkout.
+   - `./dev commit --close <id> --message "…"` performs closure as one step: it validates the acceptance receipt, runs `br close <id>` and `br sync --flush-only`, and commits `.beads/` (a shared surface, §11.7) in the same wrapped commit. The wrapper accepts the just-closed bead for this `.beads/`-only commit.
    - Release reservations.
 8. **Discovered work.**
    - Anything found but not in scope becomes a new bead with dependencies, not a detour.
@@ -1440,7 +1458,7 @@ Tool notes:
 
 ### 11.5 AGENTS.md rules (normative content)
 
-`AGENTS.md` MUST contain at least the following rules. It inherits the ACFS defaults (no file deletion without permission, no destructive git, `ubs` before commit, landing-the-plane checklist) and adds the project-specific rules below.
+`AGENTS.md` MUST contain at least the following rules. It inherits the ACFS defaults (no file deletion without permission, no destructive git, `ubs` before commit) and adds the project-specific rules below. It MUST also state explicitly that this project **replaces** the ACFS landing-the-plane git checklist: commits happen only through `./dev commit` — never raw `git add`/`git commit` and never `git pull --rebase` in the shared checkout, which can disturb other agents' uncommitted work — and any push is performed by the wrapper under the commit lock once the owner has created a remote (an explicit owner action; none exists yet, §17).
 
 1. **Owner override.** Explicit owner instructions win (§0.4).
 2. **Precedence.** Follow §0.4. Report conflicts as `conflict` beads; never silently pick a side.
@@ -1493,9 +1511,9 @@ The owner does **not** review code. Mechanical gates stand in for code review: T
 
 ### 11.7 Parallelism and code areas
 
-- Code is split into areas (see Appendix A). Areas align with crates or leaf modules, so file reservations rarely collide.
+- Code is split into areas (see Appendix A). Areas align with crates, or with **leaf modules** inside the busy crates — `statemachine`, `node`, `sim` and `checker` are subdivided per module so W27/W28/W29, W36/W37/W42–W44 and W38–W41 can hold non-overlapping reservations concurrently; a crate's module facade (`lib.rs`, `mod.rs`) is a shared surface.
 - **Ports first.** W04 defines the domain types and ports early, so the production, simulation and oracle tracks can proceed in parallel against them.
-- **Shared surfaces** (workspace `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, `DEPENDENCIES.md`, `api/openapi.yaml`, `registry/*`, module export facades) are edited only under a short, explicit reservation, by beads that list them in their area. A leaf owner who needs a one-line facade or manifest change asks for that reservation rather than editing another bead's subtree.
+- **Shared surfaces** (workspace `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, `DEPENDENCIES.md`, `api/openapi.yaml`, `registry/*`, `.beads/`, module export facades) are edited only under a short, explicit reservation, by beads that list them in their area. A leaf owner who needs a one-line facade or manifest change asks for that reservation rather than editing another bead's subtree.
 - **Independent authorship.** Where staffing allows, the agent that writes a component and the agent that writes its oracle are different: the spec (W03) and the model (W10); the state machine (W09) and the model; the server (W32) and the conformance suite (W31).
 
 ### 11.8 Handling failures from T1–T3
@@ -1521,9 +1539,9 @@ The registry gate (§10.13) catches mechanical drift continuously. Audits catch 
 
 With up to six agents editing one shared checkout, running tests in that checkout proves nothing about the tree that actually gets committed. `./dev commit` therefore serialises the **commit boundary**, not the coding:
 
-1. Acquire an exclusive local commit lock (a real lock, not an advisory message). Confirm `HEAD` is on `main`, no other git operation is in progress, the bead is valid and in progress, and every path to commit is inside the agent's live reservation. Refuse any unexpected staged path.
+1. Acquire an exclusive local commit lock (a real lock, not an advisory message). Confirm `HEAD` is on `main`, no other git operation is in progress, the bead is valid and in progress (or just closed, for a `--close` closure commit, §11.3 step 7), and every path to commit is inside the agent's live reservation. Refuse any unexpected staged path.
 2. Stage only the agent's named paths. Never `git add -A`. Record the parent commit and the candidate tree ID.
-3. Materialise that tree into a plain, isolated candidate directory (e.g. `git archive` of the tree into `.local/candidates/<tree-id>/`). **Not** a branch and not a linked worktree. Other agents keep editing their unstaged files meanwhile.
+3. Materialise that tree into the **fixed** candidate directory `.local/candidate/`, refreshed in place under the commit lock (e.g. `git archive` piped over it). One stable path keeps cargo fingerprints and shared caches warm and leaves nothing to pile up; the receipt records the tree ID, never the path. **Not** a branch and not a linked worktree. Other agents keep editing their unstaged files meanwhile.
 4. Run T0 on the candidate directory. UBS scans exactly the candidate's changed files. Build caches may be shared between candidates; receipts never are.
 5. Re-check the parent, tree ID, lock ownership and index. If anything changed, stop and re-run against the new candidate; never commit a different tree because the tests already finished.
 6. Commit exactly the tested tree; record receipt, tree, parent and bead IDs; release the lock; report the result.
@@ -1553,6 +1571,7 @@ All repository operations go through one entry point (a Rust `xtask` behind a sm
 ./dev check <ID>... [--case NAME]         # run registered checks; unknown IDs and zero tests fail
 ./dev gate fast|integration|campaign|release
 ./dev commit --bead W04 --message "…"     # exact-candidate commit (§11.10)
+./dev commit --close W04 --message "…"    # closure commit: validates the receipt, closes the bead, commits .beads/ (§11.3)
 ./dev beads import [--dry-run]
 ./dev cluster up|status|down
 ./dev cluster kill|restart --node N       # never deletes data
@@ -1591,48 +1610,48 @@ Milestones are views over the work items, not extra tasks. M4 work starts as soo
 | **W02** | Raft library determinism spike | W01 | P4, T-3, T-11 | vendor, spike | `raft`/`raft-proto` 0.7.0 vendored with checksums; audit report lists every entropy, time, thread, hashing and iteration path reachable from construction, campaign, tick, step and reset; minimal patch injects the entropy port; upstream tests pass with the patch; a seeded 3-node in-memory loop gives identical canonical traces for 100 seeds × 3 fresh processes, including crash-restart and re-election; go/no-go recorded in §16 |
 | **W03** | Complete `api/openapi.yaml` per §8, with fixtures | W01 | F-1…F-10, O-1 | api | Validates as OpenAPI 3.1; every endpoint, status, code, byte limit (`x-maxUtf8Bytes`) and example in §8 is present; per-operation response schemas (a PUT cannot return a DELETE result); positive and negative fixtures pass `./dev check SPEC`; no server code |
 | **W04** | Domain types and ports | W01, W03 | CD-1…CD-5, CD-11, DM-1, DM-2, DM-4, T-1 | types | `Key::parse`/`Value::parse` enforce byte limits (255/256/257, multibyte, empty); newtypes, `ExpectedVersion`, `Mutation`, `RequestId`, lifecycle and attempt enums, an error enum matching the spec's codes, and all ports; compile-fail fixtures; determinism lint rejects `Instant::now`; dependency-rule check fails when a deterministic crate depends on an adapter crate |
-| **W05** | Verification registry, T0 registry gate, traceability report | W01, W03, W04 | P5, §10.13 | registry, xtask | Each of the eight gate conditions in §10.13 is demonstrated by a fixture that makes it fail (5–6 in report mode); `requirements.toml` matches §6; the report renders |
+| **W05** | Verification registry, T0 registry gate, traceability report | W01, W03, W04, W06 | P5, §10.13 | registry, xtask | Each of the eight gate conditions in §10.13 is demonstrated by a fixture that makes it fail (5–6 in report mode; condition 8 against W06's `workgraph.toml`); `requirements.toml` matches §6; the report renders |
 | **W06** | Work-graph manifest and idempotent bead import | W01 | G1, §11.11 | registry, xtask | `workgraph.toml` matches §12.2 and the drift check fails on a changed dependency; `--dry-run` prints the diff; a second import creates no duplicates; plan-ID ↔ bead-ID mapping stored; cycles rejected |
 | **W07** | Exact-candidate commit wrapper (`./dev commit`) | W01 | P11, §11.10 | xtask | Adversarial fixtures pass: a foreign staged path is refused; `HEAD` moving during the gate forces a re-run; a file edited in the shared checkout during the gate is not committed; the receipt's tree ID equals the committed tree; no branch or linked worktree is ever created |
-| **W08** | Config type, genesis fingerprint, limits registry | W04 | O-5, O-9, D-8, CD-3, CD-9 | types, config | Every rejection rule in §7.10 has a test; `config/local.toml` with 5 nodes parses; the fingerprint is stable and changes with every semantic parameter; bounded wrappers pass N−1/N/N+1 tests; a non-loopback address produces the warning |
+| **W08** | Config type, genesis fingerprint, limits registry | W04 | O-5, O-9, DUR-8, CD-3, CD-9 | types, config | Every rejection rule in §7.10 has a test, including 1/3/5-voter acceptance and even-count rejection; `config/local.toml` with 5 nodes parses; the fingerprint is stable and changes with every semantic parameter; bounded wrappers pass N−1/N/N+1 tests; a non-loopback address produces the warning |
 | **W09** | State machine: PUT/GET, versions, request history, live-state quota, invariants | W04, W08 | DM-3, DM-5, DM-6, F-1, F-2, F-6, C-6, CD-7 | statemachine | Property tests: version = execution index; a replay returns the original result; a conflicting digest changes nothing; the quota outcome is terminal and deterministic; corrupted-state fixtures fire assertions |
-| **W10** | Reference model, observation schema, differential tests | W03, W09 | T-7, T-12, §10.14 | model | The model covers every operation and outcome in §6/§8; the dependency check proves it has no production dependencies; the differential test passes for PUT/GET (DELETE/CAS/SCAN registered as `planned`); a deliberately broken state-machine variant fails it |
-| **W11** | Journal engine: frames, genesis, logical truncation, offset index, entry cache, recovery | W04, W08 | D-1, D-4, D-5, D-6, D-8, D-9, CD-9, CD-10 | journal | Every golden vector in §7.6 passes; recovery returns the hard state and logical log; fail-closed cases refuse with specific errors; cache eviction never changes results |
-| **W12** | Byte-storage adapters: real files and simulated disk | W11 | D-1, D-7, D-9, T-2 | server (file adapter), sim (disk adapter) | One contract test suite runs against both; simulated disk covers partial unsynced survival (none/some/all) and a lost sync completion; the file adapter syncs directories on create and its lock refuses a second process |
-| **W13** | `raft-rs` adapter and the Ready loop (§7.4) | W02, W11 | C-1, C-2, D-2 | raft_adapter | Adversarial ordering tests: no message leaves before its sync; LightReady messages and entries handled; one outstanding Ready; a snapshot Ready is an invariant failure; an old-incarnation `SyncDone` is ignored; 1- and 3-voter in-memory clusters commit and apply |
-| **W14** | Node controller: request lifecycle, reads, effects | W09, W13 | F-7, A-5, C-3, C-4 | node | Every row of the §7.8 attempt table and every §8.4 path is driven by a test through core inputs; attach-to-pending works; deadline and leadership loss give `unknown_outcome`; `recovering` until ready; reads carry `served_by` |
+| **W10** | Reference model, observation schema, differential tests | W03, W09 | T-7, T-12, §10.14 | model | The model covers every operation and outcome in §6/§8; the dependency check proves it has no production dependencies; the differential test passes for PUT/GET (DELETE/CAS/SCAN registered as `planned` — reported, not enforced, §10.13); a deliberately broken state-machine variant fails it |
+| **W11** | Journal engine: frames, genesis, logical truncation, offset index, entry cache, recovery | W04, W08 | DUR-1, DUR-4, DUR-5, DUR-6, DUR-8, DUR-9, CD-9, CD-10 | journal | Every golden vector in §7.6 passes, including torn-tail discard, crash-during-truncation and incomplete-genesis re-initialisation; recovery returns the hard state and logical log; fail-closed cases refuse with specific errors; cache eviction never changes results |
+| **W12** | Byte-storage adapters: real files and simulated disk | W11 | DUR-1, DUR-7, DUR-9, T-2 | fs_storage (file adapter), sim (disk adapter) | One contract test suite runs against both; simulated disk covers partial unsynced survival (none/some/all), a lost sync completion, directory-entry volatility until directory sync, and a crash during `Truncate`; the file adapter syncs directories on create and its lock refuses a second process |
+| **W13** | `raft-rs` adapter and the Ready loop (§7.4) | W02, W11 | C-1, C-2, DUR-2 | raft_adapter | Adversarial ordering tests: no message leaves before its sync; LightReady messages and entries handled; one outstanding Ready; a snapshot Ready is an invariant failure; an old-incarnation `SyncDone` is ignored; `initial_state` maps the recovered hard state and static `ConfState` (§7.7); 1- and 3-voter in-memory clusters commit and apply |
+| **W14** | Node controller: request lifecycle, reads, effects | W09, W13 | F-7, A-2, A-5, C-3, C-4 | node | The PUT/GET lifecycle rows of the §7.8 attempt table and their §8.4 paths (`not_leader`, `busy`, `unavailable`, `recovering`, `unknown_outcome`, replay, attach, short-circuit, F-7 decision order) are driven by tests through core inputs — the CAS-mismatch, conflict and capacity rows are accepted in W27/W29; attach requires a matching digest; deadline and leadership loss give `unknown_outcome`; `recovering` until ready; reads succeed on any ready node and carry `served_by` |
 | **W15** | Simulation scheduler and canonical trace | W04 | T-3, T-5, T-11, P4 | sim | Event ordering with seeded tie priority; per-subsystem entropy streams; trace encoding excludes host data; fresh-process replay comparison with a first-divergence report; event-budget exhaustion reports `incomplete` |
 | **W16** | Simulated network adapter | W15 | §9.1 | sim | Directed partitions, loss, delay, reorder, duplication and bounded queues each have a scenario test; stale packets are delivered across a restart; client-response loss supported |
-| **W17** | Simulation composition root: five-node durable slice | W12, W14, W15, W16 | T-2, D-3, P3 | sim | 5 nodes elect; PUT/GET succeed; crash with volatile loss and restart from bytes; `./dev sim run --seed 42 --profile slice` gives identical traces in two fresh processes; the output labels itself a slice |
-| **W18** | Production composition root: single node, PUT/GET over HTTP | W03, W08, W12, W14 | F-1, F-2, O-1, O-3, O-9, D-3 | server | A real 1-voter node serves PUT/GET per the spec; health live/ready and `/v1/cluster` work; structured logs; data survives restart; loopback by default |
+| **W17** | Simulation composition root: five-node durable slice | W12, W14, W15, W16 | T-2, DUR-3, P3 | sim | 5 nodes elect; PUT/GET succeed; crash with volatile loss and restart from bytes; `./dev sim run --seed 42 --profile slice` gives identical traces in two fresh processes; the output labels itself a slice |
+| **W18** | Production composition root: single node, PUT/GET over HTTP | W03, W08, W12, W14 | F-1, F-2, O-1, O-3, O-9, DUR-3 | server | A real 1-voter node (§7.10) serves PUT/GET per the spec; health live/ready and `/v1/cluster` work; structured logs; data survives restart; loopback by default |
 | **W19** | M1 owner demo | W17, W18 | G1 | xtask (demo) | `./dev demo m1` runs end to end and prints what is implemented and what is pending |
 | **W20** | M1 drift audit | W19 | §11.9 | audit | Fresh-context audit report filed under `reports/audits/`; every finding is a bead |
-| **W21** | Peer transport, five-node config, write routing | W18 | F-7, A-1, A-3, O-5 | server | Five real processes elect and replicate; a write to a follower gets `307` with the leader's `Location`; with no leader, `503 unavailable` lists the nodes |
+| **W21** | Peer transport, five-node config, write routing | W18 | F-7, A-1, A-3, O-5 | server | Five real processes elect and replicate; a write to a follower gets `307` with the leader's `Location`; with no leader, `503 unavailable` lists the nodes; a peer envelope with a mismatched cluster ID, protocol version, fingerprint or node ID is dropped and counted (§8.2) |
 | **W22** | Cluster launcher and lifecycle commands | W21 | O-2, O-3 | xtask | `./dev cluster up/status/kill/restart/down` work; PID receipts; refuses to signal a foreign process or use an occupied port; never deletes data |
-| **W23** | `keyval` CLI crate with `doctor` | W11 | O-7, O-6 | cli | Correct verdict on every journal golden recovery case; never modifies files (checked by hashing the directory); `--json` validates against its schema |
-| **W24** | Real-file crash probes and lifecycle smoke | W12, W22 | D-1, D-3, D-7, D-9, T-14 | journal (probe tests), xtask | `SIGKILL` at every boundary in §10.17 recovers correctly; lock contention refused; five-node smoke: acknowledged keys survive killing and restarting the leader and a follower |
+| **W23** | `keyval` CLI crate with `doctor` | W11, W12 | O-7, O-6 | cli | Correct verdict on every journal golden recovery case; never modifies files (checked by hashing the directory); `--json` validates against its schema |
+| **W24** | Real-file crash probes and lifecycle smoke | W12, W22 | DUR-1, DUR-3, DUR-7, DUR-9, T-14 | fs_storage (probe tests), xtask | `SIGKILL` at every boundary in §10.17 recovers correctly; the sync-order check asserts every §7.4/DUR-7 obligation was issued in order; lock contention refused; five-node smoke: acknowledged keys survive killing and restarting the leader and a follower |
 | **W25** | M2 owner demo | W22, W23, W24 | G1 | xtask (demo) | `./dev demo m2` runs end to end |
 | **W26** | M2 drift audit | W25 | §11.9 | audit | As W20 |
-| **W27** | DELETE and COMPARE_SWAP | W09, W14 | F-3, F-5, C-5, DM-3 | statemachine, node | Absent/present DELETE; absent/match/mismatch CAS with a terminal mismatch; versions strictly increase across delete and re-create; CAS is never evaluated at admission; differential tests against the model pass for both |
-| **W28** | SCAN | W09, W14 | F-4, C-8, DM-4 | statemachine, node | Range edges, `after` continuation, item and byte caps, one prefix per page; an independent byte-order Unicode fixture; differential tests against the model pass |
-| **W29** | Request status and the full retry/ambiguity lifecycle | W14, W27 | F-6, F-9, F-10, C-6, A-5, DM-7 | node, statemachine | Status known/unknown; conflict detection end to end; history-capacity refusal before proposal; live-quota terminal outcome; `attempt_state` rules; no status ever implies absence |
+| **W27** | DELETE and COMPARE_SWAP | W09, W10, W14 | F-3, F-5, C-5, DM-3 | statemachine, node | Absent/present DELETE; absent/match/mismatch CAS with a terminal mismatch; mismatch-before-capacity order on a matching CAS over quota (§7.5); versions strictly increase across delete and re-create; CAS is never evaluated at admission; differential tests against the model pass for both |
+| **W28** | SCAN | W09, W10, W14 | F-4, C-8, DM-4 | statemachine, node | Range edges, `after` continuation, item and decoded-byte caps, one prefix per page; an independent byte-order Unicode fixture; differential tests against the model pass |
+| **W29** | Request status and the full retry/ambiguity lifecycle | W14, W27 | F-6, F-9, F-10, C-6, A-5, DM-7 | node, statemachine | Status known/unknown; conflict detection end to end, including the in-flight same-ID different-command race (exactly one original, one conflict, whichever commits first); history-capacity refusal before proposal; live-quota terminal outcome; `attempt_state` rules; no status ever implies absence |
 | **W30** | Reference model server | W03, W10 | T-7 | model | Implements every operation in the spec; its responses validate against the spec |
-| **W31** | Independent conformance suite | W03, W30 | T-12, §10.8 | conformance | Passes against the model server; fails against a deliberately wrong response fixture; every test tagged; the dependency check proves independence |
+| **W31** | Independent conformance suite | W03, W30, W38 | T-12, §10.8 | conformance | Semantic tests pass against the model server; the suite fails against a deliberately wrong response fixture; every test tagged with its class (semantic/topology) and targets; the dependency check proves independence |
 | **W32** | Complete HTTP surface | W18, W21, W27, W28, W29, W31 | F-1…F-10, O-1 | server | The conformance suite passes 100% against a single node and a five-node cluster; registry conditions 5 and 6 switch to enforcing |
 | **W33** | CLI: all operations, pending store, bounded retries | W23, W32 | O-4, O-6, C-6 | cli | Every operation and status command works; request ID and command saved before sending; `resume` never creates a new ID; redirects and retries stay within bounds; `--json` schemas validate |
 | **W34** | M3 owner demo | W32, W33 | G1, G2 | xtask (demo) | `./dev demo m3` runs end to end |
 | **W35** | M3 drift audit | W34 | §11.9 | audit | As W20 |
-| **W36** | Workload generator and observation recording | W17 | §10.3 | sim | Histories recorded in the observation schema; same-ID retries after lost responses; edge-case keys and values; PUT/GET profiles |
-| **W37** | Nemesis, swarm configurations, scenario files, heal protocol | W12, W16, W17 | §9.1, §10.4, T-10, A-4 | sim | Every in-scope fault is triggered, incl. partial unsynced survival, a lost sync completion, pauses, all ten permanent-loss pairs and an all-node crash; a scenario file reproduces its seed's run exactly; heal resolves outstanding writes and commits the catch-up marker |
+| **W36** | Workload generator and observation recording | W10, W17 | §10.3 | sim | Histories recorded in W10's observation schema; same-ID retries after lost responses; edge-case keys and values; PUT/GET profiles |
+| **W37** | Nemesis, swarm configurations, scenario files, heal protocol | W12, W16, W17, W36 | §9.1, §10.4, T-10, A-4 | sim | Every in-scope fault is triggered, incl. partial unsynced survival, a lost sync completion, a stale completion delivered after restart, pauses, all ten permanent-loss pairs and an all-node crash; a scenario file reproduces its seed's run exactly; heal resolves outstanding writes (capacity-profile rules included, §10.2) and commits the catch-up marker |
 | **W38** | Write-history checkers K-1, K-2, K-3, K-4, K-10 | W10, W36 | C-1, C-2, C-5, C-6, DM-3 | checker | Hand-made passing and failing histories for each (incl. legal overwrites and a lost acknowledged write); K-10 runs in polynomial time on a 10,000-operation history; each registered |
-| **W39** | Read, convergence and liveness checkers K-5, K-6, K-7, K-9 | W10, W36, W37 | C-3, C-4, C-8, A-1, A-3, A-4 | checker | Fixtures incl. a read borrowing a future prefix, a SCAN across two prefixes, and permanent-loss exclusions |
-| **W40** | Raft, persistence and honesty checkers K-8, K-11, K-12 | W13, W15 | C-1, C-2, D-2, A-5 | checker | Commit-certificate fixtures (an old-term entry on three disks is not committed); a vote-before-sync trace is detected; a guessed failure is detected |
+| **W39** | Read, convergence and liveness checkers K-5, K-6, K-7, K-9 | W10, W36, W37 | C-3, C-4, C-8, A-1, A-2, A-3, A-4 | checker | Fixtures incl. a read borrowing a future prefix, a SCAN across two prefixes, a read-availability fixture (ready minority nodes serve; non-ready nodes answer `recovering`), and permanent-loss exclusions |
+| **W40** | Raft, persistence and honesty checkers K-8, K-11, K-12 | W10, W13, W14, W15, W36 | C-1, C-2, DUR-2, A-5 | checker | Commit-certificate fixtures (an old-term entry on three disks is not committed); a vote-before-sync trace is detected; a guessed failure is detected; K-12 consumes W10's observation schema and W36's client observations |
 | **W41** | Non-vacuity (K-13), coverage matrix, run verdicts | W37, W38, W39, W40 | T-13, P10 | checker, sim | An all-timeout run fails; an unexercised selected fault gives `incomplete`; budget exhaustion fails; coverage JSON produced |
 | **W42** | `sim` commands, crash packs, corpus runner | W41 | T-4, T-8, O-6 | sim | A forced failure yields a complete crash pack whose `REPLAY.md` reproduces it; the corpus (seeds and scenarios) runs; `--json` validates |
 | **W43** | Full-operation workload profiles | W27, W28, W29, W36 | §10.3 | sim | DELETE, CAS, SCAN, status, misuse and capacity profiles run; every operation and outcome cell of the coverage matrix is reachable |
 | **W44** | Scenario shrinker | W42 | T-9 | sim | A forced failure with 20+ faults shrinks to ≤ 3 faults with the same checker failing; the shrunk scenario goes into the crash pack |
-| **W45** | Bug variants and checker self-test | W31, W41, W43 | T-6, P9, §10.6 | node, statemachine, raft_adapter, journal, checker, registry | For every variant B-01…B-22: the trigger is reached, the control passes and the designated catcher fires; oracle-protection fixtures reject weakening |
-| **W46** | Gate tiers, receipts, local scheduler, failure outbox | W05, W07, W31, W42 | P7, P10, §10.10, §10.11 | xtask | Each tier selects its specified contents; zero-test and incomplete runs fail; a forced scheduled failure plus a tracker outage yields exactly one bead once the tracker returns; receipts carry tree IDs |
+| **W45** | Bug variants and checker self-test | W05, W31, W32, W41, W43 | T-6, P9, §10.6 | node, statemachine, raft_adapter, journal, vendor, server, model, conformance, sim, checker, registry, xtask | For every variant B-01…B-22: the trigger is reached, the control passes and the designated catcher fires (B-16/B-19 in vendor, B-20 against the real server, B-21 against the registry gate, B-22 against model fixtures); oracle-protection fixtures reject weakening |
+| **W46** | Gate tiers, receipts, local scheduler, failure outbox | W05, W07, W31, W42 | P7, P10, §10.10, §10.11 | xtask | Each tier selects its specified contents among checks with status `implemented`+ and reports `planned` ones (§10.10); zero-test and incomplete runs fail; a `planned` check never files a bead; a forced scheduled failure plus a tracker outage yields exactly one bead once the tracker returns; receipts carry tree IDs |
 | **W47** | Measurements report | W24, W42 | §10.12 | sim, xtask | Every metric in §10.12 with raw samples, definitions, virtual/real labels and censored counts |
 | **W48** | Parity check | W17, W32 | P3, T-2, §10.18 | xtask, sim | The static check rejects a planted `cfg`-gated semantic branch; the scripted scenario gives identical semantic results in simulation, a real node and a real cluster |
 | **W49** | `./dev status` owner view | W05, W06, W46 | O-8 | xtask | Shows milestone, ready/blocked beads, check statuses with receipts, the last gates and undelivered failures; `--json` validates |
@@ -1653,6 +1672,7 @@ flowchart LR
     W01 --> W05
     W03 --> W05
     W04 --> W05
+    W06 --> W05
     W01 --> W06
     W01 --> W07
     W04 --> W08
@@ -1683,6 +1703,7 @@ flowchart LR
     W18 --> W21
     W21 --> W22
     W11 --> W23
+    W12 --> W23
     W12 --> W24
     W22 --> W24
     W22 --> W25
@@ -1690,8 +1711,10 @@ flowchart LR
     W24 --> W25
     W25 --> W26
     W09 --> W27
+    W10 --> W27
     W14 --> W27
     W09 --> W28
+    W10 --> W28
     W14 --> W28
     W14 --> W29
     W27 --> W29
@@ -1699,6 +1722,7 @@ flowchart LR
     W10 --> W30
     W03 --> W31
     W30 --> W31
+    W38 --> W31
     W18 --> W32
     W21 --> W32
     W27 --> W32
@@ -1710,17 +1734,22 @@ flowchart LR
     W32 --> W34
     W33 --> W34
     W34 --> W35
+    W10 --> W36
     W17 --> W36
     W12 --> W37
     W16 --> W37
     W17 --> W37
+    W36 --> W37
     W10 --> W38
     W36 --> W38
     W10 --> W39
     W36 --> W39
     W37 --> W39
+    W10 --> W40
     W13 --> W40
+    W14 --> W40
     W15 --> W40
+    W36 --> W40
     W37 --> W41
     W38 --> W41
     W39 --> W41
@@ -1731,7 +1760,9 @@ flowchart LR
     W29 --> W43
     W36 --> W43
     W42 --> W44
+    W05 --> W45
     W31 --> W45
+    W32 --> W45
     W41 --> W45
     W43 --> W45
     W05 --> W46
@@ -1772,9 +1803,9 @@ flowchart LR
 | F — Contract, process and tooling | W01, W03, W05, W06, W07, W46, W47, W48, W49 |
 | Checkpoints | W19, W20, W25, W26, W34, W35, W50, W51, W52 |
 
-**Critical path** (longest dependency chain, 17 items):
+**Critical path** (longest dependency chain, 18 items):
 
-W01 → W03 → W04 → W08 → W11 → W13 → W14 → W17 → W37 → W39 → W41 → W42 → W46 → W49 → W50 → W51 → W52
+W01 → W03 → W04 → W08 → W11 → W13 → W14 → W17 → W36 → W37 → W39 → W41 → W42 → W46 → W49 → W50 → W51 → W52
 
 - The Raft spike (W02) runs alongside W03–W11 and must pass before W13 can start. It is the **highest-risk** item even though it is not on the longest chain.
 - **W02 and W13 are the technical stop/go points.** W02 can fail; if it does, the fallback in §7.3 applies and the plan is revised.
@@ -1821,25 +1852,25 @@ Not required: human code review, hosted CI, or any performance number. A complet
 
 | ID | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| R1 | The Raft library has hidden nondeterminism (internal RNG, time, iteration order), or is too stale to build cleanly. `raft-rs`'s last crates.io release is 0.7.0 (Mar 2023). | Med | High | W02 audits construction and transitive paths, vendors and pins the source, patches only entropy, and compares fresh-process traces, with an explicit go/no-go; fallback `openraft` behind the same Consensus port (D-05) |
-| R2 | Wrong Ready/LightReady sequencing acknowledges votes, entries or clients too early | Med | High | One serial persistence path (§7.4); adversarial ordering tests (W13); K-11 persistence-ordering checker; bug variants B-01–B-04, B-17 |
-| R3 | Agents weaken checkers or tests to get green | Med | High | Rule 3 in §11.5; bug-injection self-test fails if a checker is weakened; protected fixtures and corpus; receipts include their hashes |
-| R4 | Replay-on-restart and in-memory request history grow with history | High | Med | Capacity limits (DM-7); recovery time measured per history size (§10.12); v2 compaction must carry the history; never trade retry safety for speed |
-| R5 | Shared-`main` editing makes gate results describe the wrong code, or agents collide on files | High without the wrapper | High | Exact-candidate commits (§11.10); crate-aligned areas; ports first (W04); Agent Mail reservations; explicit shared surfaces |
-| R6 | Flaky, non-reproducible failures waste agent time | Med | High | Determinism lint; fresh-process replay in every tier; any nondeterminism is a P0 |
-| R7 | Simulation fidelity gap: passes in simulation, fails for real | Med | Med | Shared deterministic core incl. Raft adapter and journal (P3); real-file crash probes and lifecycle smoke; conformance on real processes; parity check |
-| R8 | Checker and implementation share a conceptual bug | Med | High | Reference model with no production dependencies, written from the plan by a different agent; black-box witness plus white-box checks; negative-history corpus; bug variants |
-| R9 | Subtle distributed bugs beyond the implementation model's reach | Med | Med | Crash packs and shrinking; god-view dumps; `hard` label → escalate to a stronger model |
-| R10 | Scope creep | Med | Med | Non-goals (§2.2); `plan-change` process |
-| R11 | One machine for 6 agents plus campaigns causes contention | High | Low | Resource arbitration (§11.12); T0 priority; one campaign at a time; measured limits |
-| R12 | 100k-seed T3 too slow on one machine | Med | Low | Resumable campaigns; parallel processes; configurable seed count; measure after W42 (Q7) |
-| R13 | Registry gate creates friction and agents route around it (e.g. never mark requirements `active`) | Med | Med | `planned`/`active` lifecycle keeps the gate usable early; §13 requires all MUST `active` and `passed`; drift audits check registry honesty |
-| R14 | Capacity and availability qualifications are mistaken for unconditional guarantees | High until accepted | Med | Explicit owner dispositions (§15); typed capacity outcomes; healthy envelope stated in reports |
-| R15 | A status of `unknown` or a later error is treated as "not applied", causing a user-level double write | Med | High | K-12; CLI pending store and `resume`; guidance text in every relevant response |
-| R16 | Tool, model or CLI drift in the ACFS stack | Med | Med | `./dev doctor` capability probes and version ledger; no auto-update during gates |
-| R17 | The unauthenticated API is exposed beyond the machine | Low | High | Loopback defaults and a prominent warning (O-9) |
-| R18 | Finite testing is described as proof | Med | Med | Claim classes (§10.15); evidence reports list builds, counts and limits |
-| R19 | Serialised commits become a throughput bottleneck | Med | Low | Keep T0 fast; measure; commits are serialised, coding is not |
+| RISK-1 | The Raft library has hidden nondeterminism (internal RNG, time, iteration order), or is too stale to build cleanly. `raft-rs`'s last crates.io release is 0.7.0 (Mar 2023). | Med | High | W02 audits construction and transitive paths, vendors and pins the source, patches only entropy, and compares fresh-process traces, with an explicit go/no-go; fallback `openraft` behind the same Consensus port (D-05) |
+| RISK-2 | Wrong Ready/LightReady sequencing acknowledges votes, entries or clients too early | Med | High | One serial persistence path (§7.4); adversarial ordering tests (W13); K-11 persistence-ordering checker; bug variants B-01–B-04, B-17 |
+| RISK-3 | Agents weaken checkers or tests to get green | Med | High | Rule 3 in §11.5; bug-injection self-test fails if a checker is weakened; protected fixtures and corpus; receipts include their hashes |
+| RISK-4 | Replay-on-restart and in-memory request history grow with history | High | Med | Capacity limits (DM-7); recovery time measured per history size (§10.12); v2 compaction must carry the history; never trade retry safety for speed |
+| RISK-5 | Shared-`main` editing makes gate results describe the wrong code, or agents collide on files | High without the wrapper | High | Exact-candidate commits (§11.10); crate-aligned areas; ports first (W04); Agent Mail reservations; explicit shared surfaces |
+| RISK-6 | Flaky, non-reproducible failures waste agent time | Med | High | Determinism lint; fresh-process replay in every tier; any nondeterminism is a P0 |
+| RISK-7 | Simulation fidelity gap: passes in simulation, fails for real | Med | Med | Shared deterministic core incl. Raft adapter and journal (P3); real-file crash probes and lifecycle smoke; conformance on real processes; parity check |
+| RISK-8 | Checker and implementation share a conceptual bug | Med | High | Reference model with no production dependencies, written from the plan by a different agent; black-box witness plus white-box checks; negative-history corpus; bug variants |
+| RISK-9 | Subtle distributed bugs beyond the implementation model's reach | Med | Med | Crash packs and shrinking; god-view dumps; `hard` label → escalate to a stronger model |
+| RISK-10 | Scope creep | Med | Med | Non-goals (§2.2); `plan-change` process |
+| RISK-11 | One machine for 6 agents plus campaigns causes contention | High | Low | Resource arbitration (§11.12); T0 priority; one campaign at a time; measured limits |
+| RISK-12 | 100k-seed T3 too slow on one machine | Med | Low | Resumable campaigns; parallel processes; configurable seed count; measure after W42 (Q7) |
+| RISK-13 | Registry gate creates friction and agents route around it (e.g. never mark requirements `active`) | Med | Med | `planned`/`active` lifecycle keeps the gate usable early; §13 requires all MUST `active` and `passed`; drift audits check registry honesty |
+| RISK-14 | Capacity and availability qualifications are mistaken for unconditional guarantees | High until accepted | Med | Explicit owner dispositions (§15); typed capacity outcomes; healthy envelope stated in reports |
+| RISK-15 | A status of `unknown` or a later error is treated as "not applied", causing a user-level double write | Med | High | K-12; CLI pending store and `resume`; guidance text in every relevant response |
+| RISK-16 | Tool, model or CLI drift in the ACFS stack | Med | Med | `./dev doctor` capability probes and version ledger; no auto-update during gates |
+| RISK-17 | The unauthenticated API is exposed beyond the machine | Low | High | Loopback defaults and a prominent warning (O-9) |
+| RISK-18 | Finite testing is described as proof | Med | Med | Claim classes (§10.15); evidence reports list builds, counts and limits |
+| RISK-19 | Serialised commits become a throughput bottleneck | Med | Low | Keep T0 fast; measure; commits are serialised, coding is not |
 
 ---
 
@@ -1908,6 +1939,14 @@ Work can start without these answers. Items marked **disposition required** chan
 | D-40 | **Thin vertical slice first** (durable PUT/GET, M1), then widen; verification tracks start in M1 | Proposed | Earliest runnable evidence; exercises every layer before breadth |
 | D-41 | **Timing:** 50 ms tick, pre-vote and check-quorum on | Proposed | Finer timers; fewer disruptive elections; a minority leader steps down on its own |
 | D-42 | **CD-8 scope:** first-party code and our Raft patch; third-party internals pinned and audited | Proposed (Q5) | No transitive ban has been established for common crates |
+| D-43 | **ID namespaces disambiguated (v1.1):** durability requirements are `DUR-n`, risks are `RISK-n`; decisions stay `D-nn`, rejected options `R-nn` | Decided | Single-digit requirement IDs D-1…D-9 and risk IDs R1…R19 clashed with decision and rejected-option IDs |
+| D-44 | **Durability obligations are entries, term and vote; the commit index is volatile** (DUR-2, K-11; v1.1) | Decided | Raft's commit index is volatile; requiring its sync before messages contradicted §7.4's LightReady rule |
+| D-45 | **Config accepts 1-, 3- or 5-voter membership; release and local profiles pin 5** (v1.1) | Decided | The M1 demo, W13/W18/W32 fixtures and the parity check need real 1- and 3-voter clusters |
+| D-46 | **Probes are process-crash probes plus a sync-order check; power-loss durability is an Assumption** (v1.1) | Decided | SIGKILL keeps the OS page cache, so kill-based probes cannot detect a missing fsync |
+| D-47 | **One registered `bug-variants` feature is the sanctioned T-2/parity exception** (v1.1) | Decided | Bug variants must live in deterministic crates without opening the door to cfg-gated semantics |
+| D-48 | **DM-7 admission is a replicated last-index limit; journal bytes are a per-node hard stop to `failed`** (v1.1) | Decided | A byte cap differs per node and shifts with leadership; protocol entries cannot be refused |
+| D-49 | **Gate tiers run their `implemented` checks and report `planned` ones; W32's closure switches registry conditions 5–6 to enforcing** (v1.1) | Decided | Fixed tier lists would be red from day one under P10 |
+| D-50 | **Torn-tail discard covers an incomplete or checksum-failing final frame; `Truncate` is a byte-storage port operation** (v1.1) | Decided | Real crashes can persist a full-length damaged tail; truncation must be simulable and probeable |
 
 **D-05 detail: Raft library**
 
@@ -1998,7 +2037,7 @@ Append-only. Records hypotheses that were tried and failed, so nobody retries th
 | **Catch-up marker** | The final uniquely identified PUT written after heal; convergence is judged when every recoverable node has applied it |
 | **Checker** | Automated oracle that judges a simulation run (§10.5) |
 | **Claim class** | The strength of a correctness statement: invariant, simulation-evidenced, measurement, assumption or proposal (§10.15) |
-| **Commit (Raft)** | An entry is committed once a current-term entry at or after it is durably stored on a majority (§3.2) |
+| **Commit (Raft)** | An entry is committed once the current-term leader has a current-term entry at or after it durably accepted by a majority during that term (§3.2, K-8) |
 | **Commit certificate** | Trace evidence that an entry is committed under the rule above; used by K-8 |
 | **Composition root** | The one place per environment that wires adapters to the core (server binary; simulator) |
 | **Corpus** | Append-only set of seeds and scenario files that once failed; rerun in T1/T3 (and T0 while it fits) |
@@ -2067,7 +2106,8 @@ keyval/
 │   ├── journal/            # area: journal — frames, recovery, offset index, entry cache; golden/ vectors
 │   ├── raft_adapter/       # area: raft_adapter — Consensus port over vendored raft-rs; the Ready loop
 │   │   # --- environment adapters + composition roots ---
-│   ├── server/             # area: server — production root: HTTP API, peer transport, file storage, clock, entropy
+│   ├── fs_storage/         # area: fs_storage — real-file byte-storage adapter (used by server, cli doctor and the probes)
+│   ├── server/             # area: server — production root: HTTP API, peer transport, clock, entropy
 │   ├── sim/                # area: sim — simulation root: scheduler, network, disk, clock, nemesis, workload, trace, shrinker
 │   │   # --- oracles (no production dependencies) ---
 │   ├── model/              # area: model — reference model + model server (test-only, §10.14)
@@ -2083,7 +2123,7 @@ keyval/
 ├── reports/                # T2/T3, measurements, coverage, traceability, claims, audits/
 ├── artifacts/              # git-ignored: crashpacks/, receipts/, outbox/
 ├── .local/                 # git-ignored: node data dirs, logs, PID receipts, candidate trees
-└── .beads/                 # beads database (committed)
+└── .beads/                 # beads database (committed) — shared surface (§11.7)
 ```
 
 ---
