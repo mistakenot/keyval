@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document version | 1.5 |
+| Document version | 1.5.1 |
 | Status | **Draft** — awaiting owner approval (see §15 for the decisions that need an explicit answer) |
 | Last revised | 2026-09-30 |
 | Owner | Project owner (the human running the swarm) |
@@ -66,7 +66,7 @@
 When two sources disagree, the higher one wins:
 
 1. Explicit owner instruction (chat, or a bead comment written by the owner)
-2. This `PLAN.md` (and `registry/workgraph.toml`, which mirrors §12.2 exactly)
+2. This `PLAN.md` (and `registry/workgraph.toml`, which mirrors §12.2's ids, dependencies, reqs and areas, §11.11)
 3. `api/openapi.yaml`
 4. Checkers, invariants, the reference model and the verification registry (§10.5, §10.13, §10.14)
 5. Tests
@@ -1254,7 +1254,7 @@ All gates are repo-owned commands (`./dev gate <tier>`, P7) that run on the one 
 | **T3 release** | At the v1 candidate and after any major safety change (manual) | as long as needed; resumable across nights | everything above + ≥ 100,000 fresh swarm seeds on the release build + 100 replay pairs + every bug variant + the clean-state rehearsal procedure (fresh clone → `./dev doctor` → build → `./dev cluster init` + `up` → smoke) + required coverage cells + audits complete (M1–M4 plus W51's pre-campaign final audit) |
 
 - **Staged contents.** Each tier runs, of its listed contents, the checks whose registry status is `implemented` or higher (§10.13); `planned` checks are reported with the work item that will implement them and never fail the tier or file beads. The full lists are enforced in their entirety once every listed check exists; T3 always requires them all. Before the registry exists, `./dev gate fast` runs W01's fixed bootstrap set (format check, lints, dependency-rule check, xtask unit tests, UBS); registry-driven staging takes over when W05 lands.
-- **Tree isolation.** T0-in-commit runs in `.local/candidate/` (§11.10); T1, T2 and T3 each materialise their own per-run tree directory, so a long campaign never shares a directory with commits or acceptance runs (§11.3).
+- **Tree isolation.** T0-in-commit runs in `.local/candidate/` (§11.10); T1, T2 and T3 each materialise their own per-run tree directory, so a long campaign never shares a directory with commits or acceptance runs (§11.3). Every materialised tree — candidate, accept and per-run alike — runs under the same git-isolation discipline (`GIT_DIR`/`GIT_CEILING_DIRECTORIES`, `build_id` from the recorded tree ID, §11.10 step 4).
 - Budgets are **targets to be measured** on the actual machine, not established facts. If T0 is too slow, reduce redundant work or improve build scheduling; never drop mandatory regression evidence, weaken a checker or label an incomplete run passed.
 - A stopped or sleeping machine has **missed** scheduled runs, not passed ones. An interrupted campaign stays `incomplete`, with its completed and remaining seeds explicit.
 - **Scheduled failure → tracked work.** When T1–T3 fail, the runner first writes an immutable failure receipt and a durable local **outbox** item, keeps the crash pack, and fingerprints the failure (checker, failure class, signature). It then creates or updates exactly one `br` bug with the seed, replay command, crash-pack path (and shrunk scenario if available), build and affected requirements. If the tracker is unavailable, the outbox item stays pending and `./dev status` shows it; a failure is never dropped. No agent needs to notice the failure. A `planned` (not yet implemented) check is never a failure and never files a bead.
@@ -1306,7 +1306,7 @@ A small, machine-readable registry in `registry/` is the index of all verificati
 5. **Spec ↔ code.** The error codes in `api/openapi.yaml` differ from the domain error type's variants; or an OpenAPI operation has no handler in the HTTP adapter.
 6. **Spec ↔ tests.** An OpenAPI operation or error code is exercised by no conformance test.
 7. **Bug variants.** A bug-variant row has no designated catcher. (Whether it is actually caught is checked in T1, §10.6.)
-8. **Work graph.** `workgraph.toml` differs from §12.2, contains a cycle, or disagrees with the imported beads' dependencies. The §12.2 comparison covers `id`, `deps`, `reqs` (ranges like "F-1…F-10" expand), `area` and `milestone`; the `accept` selectors and bead IDs are registry-owned detail. The bead comparison covers only edges between `plan:W<nn>` beads; bug and discovered-work beads may add edges freely (§12.2).
+8. **Work graph.** `workgraph.toml` differs from §12.2, contains a cycle, or disagrees with the imported beads' dependencies. The §12.2 comparison covers `id`, `deps`, `reqs` (ranges like "F-1…F-10" expand) and `area`; the `accept` selectors, `milestone` (derived from the `m0`–`m5` epic labels; §12.2 has no milestone column) and bead IDs are registry-owned detail. The bead comparison covers only edges between `plan:W<nn>` beads; bug and discovered-work beads may add edges freely (§12.2).
 
 Conditions 5 and 6 are reported, not failed, until W32 (the complete HTTP surface) closes; W32's closure is the single switch to enforcing. (W18 implements only PUT/GET, so operation-level enforcement any earlier would fail every commit between W18 and W32.)
 
@@ -1353,7 +1353,7 @@ Registry check rows carry the class of the claim that check supports. Reports pu
 A simulation run passes only if it did meaningful work (T-13, K-13). It is `incomplete` (which fails) if any of these is missing:
 
 - successful writes before the first fault;
-- at least one injected instance of **every** fault type the scenario selected (or an explicit, reported "scenario invalid");
+- at least one injected instance of **every** fault type the scenario selected (a reported `scenario invalid` itself fails the run as `incomplete` — it indicates a generator defect, §10.2);
 - reads served by more than one node (five-node profiles; scripted 1- and 3-voter profiles instead require reads from every voter);
 - a successful write after heal (the catch-up marker; pre-created in DM-6 capacity profiles, replaced by quiet-period convergence in DM-7 profiles, §10.2);
 - a terminal resolution for every admitted logical write (capacity profiles: resolution by §10.2's status-lookup rule), or a liveness failure;
@@ -1465,7 +1465,7 @@ Tool notes:
    - If it fails, fix and re-run. Never bypass it.
    - Commit only your own files. Never stash, revert or overwrite other agents' changes.
 7. **Close.**
-   - Run `./dev accept <bead> --tree <id>`: it materialises the named committed tree into `.local/accept/<tree-id>/` (outside the commit lock, content-verified like the candidate, §11.10), runs the bead's acceptance selectors there, and writes a receipt naming that tree ID (P11) — never a shared checkout, and never the commit-locked candidate directory. "The current tree" always means the tree of the commit that carried the work.
+   - Run `./dev accept <bead> --tree <id>`: it materialises the named committed tree into `.local/accept/<tree-id>/` (outside the commit lock; content-verified **and git-isolated** exactly like the candidate, §11.10 step 4), runs the bead's acceptance selectors there, and writes a receipt naming that tree ID (P11) — never a shared checkout, and never the commit-locked candidate directory. "The current tree" always means the tree of the commit that carried the work.
    - `./dev commit --close <id> --message "…"` performs closure as one step: it validates the acceptance receipt, runs `br close <id>` and `br sync --flush-only`, recomputes requirement activation in `registry/requirements.toml` (a requirement turns `active` when its last listing bead closes, §10.13), and commits `.beads/` plus that registry file (both shared surfaces, §11.7) in the same wrapped commit. The wrapper accepts the just-closed bead for this closure commit.
    - Release reservations.
 8. **Discovered work.**
@@ -1588,7 +1588,7 @@ A failed gate preserves the agent's work and evidence and never cleans up anybod
 
 ### 11.11 Work graph → beads
 
-- `registry/workgraph.toml` mirrors §12.2's ids, dependencies, reqs, areas and milestones exactly; its `accept` selectors are the executable form of the acceptance prose (§10.13). The registry gate fails on any drift (§10.13, condition 8).
+- `registry/workgraph.toml` mirrors §12.2's ids, dependencies, reqs and areas exactly; its `accept` selectors are the executable form of the acceptance prose, and its `milestone` field derives from the `m0`–`m5` epic labels (§10.13). The registry gate fails on any drift (§10.13, condition 8).
 - `./dev beads import --dry-run` shows what would change; `./dev beads import` applies it idempotently: labels `plan:W<nn>` identify beads, repeated imports never duplicate, and the tracker's generated IDs are recorded in `workgraph.toml`, never guessed.
 - Plan changes flow **plan → workgraph.toml → beads**, never the other way.
 
@@ -1690,11 +1690,11 @@ Milestones are views over the work items, not extra tasks. M4 work starts as soo
 | **W38** | Write-history checkers K-1, K-2, K-3, K-4, K-10 | W10, W36 | C-1, C-2, C-5, C-6, DM-3 | checker | Hand-made passing and failing histories for each (incl. legal overwrites and a lost acknowledged write); K-10 runs in polynomial time on a 10,000-operation history; each registered |
 | **W39** | Read, convergence and liveness checkers K-5, K-6, K-7, K-9 | W10, W36, W37 | C-3, C-4, C-8, A-1, A-2, A-3, A-4 | checker | Fixtures incl. a read borrowing a future prefix, a SCAN across two prefixes, a read-availability fixture (ready minority nodes serve; non-ready nodes answer `recovering`), and permanent-loss exclusions |
 | **W40** | Raft, persistence and honesty checkers K-8, K-11, K-12 | W10, W13, W14, W15, W36 | C-1, C-2, DUR-2, A-5 | checker | Commit-certificate fixtures (an old-term entry on three disks is not committed); a vote-before-sync trace is detected; a guessed failure is detected; K-12 consumes W10's observation schema and W36's client observations |
-| **W41** | Non-vacuity (K-13), coverage matrix, run verdicts | W37, W38, W39, W40 | T-13, P10 | checker, sim | An all-timeout run fails; an unexercised selected fault gives `incomplete`; budget exhaustion fails; coverage JSON produced and `./dev report coverage` renders it; `registry/coverage.toml`'s required-set structure authored (§10.4) |
+| **W41** | Non-vacuity (K-13), coverage matrix, run verdicts | W37, W38, W39, W40 | T-13, P10 | checker, sim, registry | An all-timeout run fails; an unexercised selected fault gives `incomplete`; budget exhaustion fails; coverage JSON produced and `./dev report coverage` renders it; `registry/coverage.toml`'s required-set structure authored (§10.4) |
 | **W42** | `sim` commands, crash packs, corpus runner | W41 | T-4, T-8, O-6 | sim | A forced failure yields a complete crash pack whose `REPLAY.md` reproduces it; the corpus (seeds and scenarios) runs; `--json` validates |
 | **W43** | Full-operation workload profiles | W27, W28, W29, W36, W37, W41 | §10.3 | sim | DELETE, CAS, SCAN, status, misuse and capacity profiles run; the capacity-profile heal follows §10.2 (DM-6 pre-created marker; DM-7 certified-drain convergence and status-lookup resolution); a journal-exhaustion scenario drives a node to its hard stop → `failed` while reads elsewhere continue (DM-7); every operation and outcome cell of the coverage matrix is reachable |
 | **W44** | Scenario shrinker | W42 | T-9 | sim | A forced failure with 20+ faults shrinks to ≤ 3 faults with the same checker failing; the shrunk scenario goes into the crash pack |
-| **W45** | Bug variants and checker self-test | W05, W31, W32, W41, W43 | T-6, P9, §10.6 | node, statemachine, raft_adapter, journal, server, model, conformance, sim, checker, registry, xtask | For every variant B-01…B-22: the trigger is reached, the control passes and the designated catcher fires (B-16/B-19 injected in `raft_adapter`, §10.6 — never in vendor; B-20 against the real server, B-21 against the registry gate, B-22 against model fixtures); oracle-protection fixtures reject weakening |
+| **W45** | Bug variants and checker self-test | W05, W31, W32, W41, W43 | T-6, P9, §10.6 | node, statemachine, raft_adapter, journal, server, model, conformance, sim, checker, registry, xtask | For every variant B-01…B-22: the trigger is reached, the control passes and the designated catcher fires (B-16 injected in `raft_adapter`, B-19 wired at the test composition root, §10.6 — never in vendor; B-20 against the real server, B-21 against the registry gate, B-22 against model fixtures); oracle-protection fixtures reject weakening |
 | **W46** | Gate tiers, receipts, local scheduler, failure outbox | W05, W07, W31, W42 | P7, P10, §10.10, §10.11 | xtask | Each tier selects its specified contents among checks with status `implemented`+ and reports `planned` ones (§10.10); zero-test and incomplete runs fail; a `planned` check never files a bead; a forced scheduled failure plus a tracker outage yields exactly one bead once the tracker returns; `./dev prune` applies the Q9 retention rule and logs every removal in a receipt; receipts carry tree IDs |
 | **W47** | Measurements report | W24, W42 | §10.12 | sim, xtask | Every metric in §10.12 with raw samples, definitions, virtual/real labels and censored counts |
 | **W48** | Parity check | W17, W24, W32 | P3, T-2, §10.18 | xtask, sim | The static check rejects a planted `cfg`-gated semantic branch; the scripted scenario gives identical semantic results in simulation, a real node and a real cluster; each §10.17 probe's scripted simulator twin runs and their observable outcomes match |
@@ -1897,7 +1897,7 @@ v1 is done when **all** of the following hold, established by `./dev gate releas
 8. T0 is enforced on every commit through `./dev commit`, with durations recorded in receipts and within budget on trend (§10.11); a scheduled failure demonstrably becomes exactly one bead, including after a tracker outage.
 9. The measurements report (§10.12) has been generated.
 10. There are no open P0 beads, no open P1 **defect** (`BUG`) beads (release-orchestration beads W51/W52 close last and are exempt while they run), no open `conflict` beads, and no owner disposition in §15 left unanswered.
-11. The owner has completed the M1–M5 checkpoints (§11.6), and the M1–M4 drift audits plus W52's final audit (§11.9) are complete with no open findings above P2.
+11. The owner has completed the M1–M5 checkpoints (§11.6), and the M1–M4 drift audits plus W51's pre-campaign final (M5) audit (§11.9) are complete with no open findings above P2.
 12. All 53 work items are closed with acceptance receipts.
 13. §16 is up to date: all decisions, rejections and negative evidence recorded.
 14. The final evidence report states every claim in its correct class (§10.15), with builds, profiles, seed counts, coverage and remaining limits.
