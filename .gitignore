@@ -1,0 +1,63 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+
+# Build outputs
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+*.lcov
+
+# NTM session runtime state (logs, pids, rate limits)
+.ntm/
+
+# Agent Mail project-local MCP configs (contain bearer tokens)
+agy.mcp.json
+gemini.mcp.json
+
+# Beads transient runtime state not covered by .beads/.gitignore
+.beads/.br-wal-index-*/
+agy.mcp.json
+gemini.mcp.json
+/agy.mcp.json
+/gemini.mcp.json
+/..gitignore.*.tmp
+/..gitignore.*.bak
+/..gitignore.*.replaced
+/.agy.mcp.json.*.tmp
+/.agy.mcp.json.*.bak
+/.agy.mcp.json.*.replaced
+/agy.mcp.json.bak*
+/.gemini.mcp.json.*.tmp
+/.gemini.mcp.json.*.bak
+/.gemini.mcp.json.*.replaced
+/gemini.mcp.json.bak*

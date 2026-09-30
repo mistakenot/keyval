@@ -1,0 +1,15 @@
+# Claude Code Settings
+# See: https://docs.anthropic.com/claude-code
+
+[model]
+# Preferred model for this project
+# default = "claude-sonnet-4-6"
+
+[context]
+# Additional context files to include
+# include = ["README.md", "ARCHITECTURE.md"]
+
+[tools]
+# Tool permissions
+# allow_bash = true
+# allow_edit = true
