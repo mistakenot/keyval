@@ -40,6 +40,11 @@ coverage/
 # NTM session runtime state (logs, pids, rate limits)
 .ntm/
 
+# ee memory workspace (local database, index, keys) and export backups
+.ee/
+AGENTS.md.ee-backup
+AGENTS.md.bak
+
 # Agent Mail project-local MCP configs (contain bearer tokens)
 agy.mcp.json
 gemini.mcp.json
