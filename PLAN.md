@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Document version | 1.6 |
+| Document version | 1.7 |
 | Status | **Active** — approved by the owner on 2026-10-01 after five independent review rounds and a fix-verification pass (D-43…D-76, §16); all §15 dispositions accepted at their defaults. Change control per §0.5 and §16. |
-| Last revised | 2026-10-01 |
+| Last revised | 2026-10-03 |
 | Owner | Project owner (the human running the swarm) |
 | Project name | `keyval` |
 | Delivery shape | Rust; one five-voter Raft group; HTTP/JSON; local development and verification |
@@ -698,7 +698,7 @@ Each **attempt** (one HTTP request) moves through explicit states (CD-2):
 - a voter count other than 1, 3 or 5 — one odd count per config; the release and local profiles pin 5 voters, while 1- and 3-voter configurations exist for development, tests, probes and demos, each with its own genesis identity (DUR-8);
 - duplicate or zero node IDs, or duplicate client addresses, peer addresses or data directories;
 - a missing cluster ID or protocol version;
-- any cross-limit inconsistency: `max_key_bytes` + `max_value_bytes` + command-envelope overhead must fit the canonical-command limit, which must fit the journal-frame and HTTP-body limits (§7.11); `max_journal_bytes` must be ≥ 1.25 × `max_history_bytes` + `max_log_entries` × the per-entry overhead bound + `journal_protocol_allowance` (a named constant, default 64 MiB, §7.11) — the overhead bound (frame header/trailer plus entry envelope, ≈ 64 B) is derived from the §7.6 frame spec and pinned by a test, and the same formula applies to small test limits so capacity profiles are not flaky (DM-7); replication in-flight batches × max batch size must be ≤ per-peer send-queue bytes (§7.11); node IDs must be nonzero and ≤ 2^53 (R-22);
+- any cross-limit inconsistency: `max_key_bytes` + `max_value_bytes` + command-envelope overhead must fit the canonical-command limit, which must fit the journal-frame and HTTP-body limits (§7.11); `max_journal_bytes` must be ≥ 1.25 × `max_history_bytes` + `max_log_entries` × the per-entry overhead bound + `journal_protocol_allowance` (a named constant, default 64 MiB, §7.11) — the overhead bound (frame header/trailer plus entry envelope, ≈ 64 B) is derived from the §7.6 frame spec and pinned by a test, and the same formula applies to small test limits so capacity profiles are not flaky (DM-7); replication in-flight batches × max batch size must be ≤ per-peer send-queue bytes (§7.11); node IDs must be nonzero and below 2^53 (§8.1, R-22);
 - heartbeat interval < 1 tick;
 - election timeout minimum < 5 × heartbeat interval;
 - election timeout maximum ≤ minimum;
@@ -808,7 +808,7 @@ Described in §10.2. It wires 5 cores to the simulation adapters from §7.2, in 
 - **No caching.** Every response — reads, status and health included — carries `Cache-Control: no-store`, so no intermediary can serve a stale `served_by`, lifecycle or result; the conformance suite checks the header.
 - **Byte limits** (DM-1, DM-2) apply after decoding. JSON Schema length keywords count characters, so the spec records byte limits with an `x-maxUtf8Bytes` extension, and conformance tests check them.
 - **Writes require an `Idempotency-Key` header**: 32 lowercase hex characters (F-6). The CLI generates it.
-- **Integers** (versions, indices, terms, node IDs) are JSON numbers, all validated below 2^53 so every JSON client handles them exactly: indices and versions are bounded by DM-7's admission ceiling plus the bounded in-flight and protocol-entry overshoot; node IDs are validated at config parse (§7.10); a CAS `expected.version` above 2^53 is `invalid_request`; and a term above 2^53 is asserted unreachable at the adapter (terms grow only with elections — a stated assumption, §10.15).
+- **Integers** (versions, indices, terms, node IDs) are JSON numbers, all validated below 2^53 (the largest valid integer is 2^53 − 1 = 9007199254740991) so every JSON client handles them exactly: indices and versions are bounded by DM-7's admission ceiling plus the bounded in-flight and protocol-entry overshoot; node IDs are validated at config parse (§7.10); a CAS `expected.version` at or above 2^53 is `invalid_request`; and a term at or above 2^53 is asserted unreachable at the adapter (terms grow only with elections — a stated assumption, §10.15).
 - **Terminal results are immutable.** `request_id`, `index` and the decision never change across retries or status lookups; `served_by` and `replayed` may.
 - **Every error has the same envelope:** `{"error": {"code": "<code>", "message": "<text>", "details": {…}}}`, with three write-error `details` schemas, matched exactly by the §8.4 table:
   1. **Terminal execution results** (`version_mismatch`, live-quota `capacity_exceeded`): always `request_id`, `index` (the first execution's log index), `replayed` and the decision, exactly as immutable as a success.
@@ -2036,6 +2036,7 @@ Items marked **disposition required** change what a requirement guarantees, so v
 | D-74 | **Candidate and accept directories run git-isolated (GIT_DIR/ceiling; build_id from the tree ID); `.local/` retention is 5 gate runs + 5 accept trees + all failures via `./dev prune` (W46, Q9); W15 creates `sim` and precedes W12; B-19 injects at the test composition root** (v1.5) | Decided | Gates inside the shared checkout could see the wrong tree; unbounded artifact growth met the no-deletion rule head-on |
 | D-75 | **raft-rs's fixed [t, 2t) election range is a validation rule; `journal_protocol_allowance` is a named constant; conformance resolves every write before K-10 (`inconclusive` ⇒ `incomplete`) and polls stale reads; F-7 is a complete decision order; SHA-256 is in-crate; one crash-model definition (§10.2)** (v1.5) | Decided | Free-form election bounds were unimplementable with an entropy-only patch; both reviewers independently flagged the SCAN cap and SHA-256 provenance |
 | D-76 | **All §15 dispositions accepted at their defaults (Q1–Q6, Q9 confirmed; Q7/Q8 defaults stand pending their stated procedures); plan status Draft → Active** (v1.6, 2026-10-01) | Decided | Owner approval after five review rounds and the fix-verification pass; §13 item 10's disposition requirement is satisfied |
+| D-77 | **Every API integer is below 2^53: the largest valid value is 2^53 − 1 (9007199254740991), for CAS `expected.version`, terms and node IDs alike** (v1.7, 2026-10-03) | Decided | Owner decision on `br-s4dg`. §8.1 said "below 2^53" generally but "above 2^53" for CAS versions and terms, and §7.10 said "≤ 2^53" for node IDs, so 2^53 itself was both valid and invalid. 2^53 − 1 is the largest integer every JSON client represents exactly |
 
 **D-05 detail: Raft library**
 
