@@ -459,14 +459,20 @@ Practicalities:
 - **Closing** needs a passing acceptance receipt for the current tree (rule 16), quoted
   in a bead comment. A failed spike is never closed: it stays open with `failed` +
   `needs-owner` (§11.4).
-- **Split-off beads** (owner decision, `br-njik`). When part of a bead's work moves to a
-  split-off bead, for example because its files were reserved, every commit of the
-  split-off bead also names the parent. Its commit message carries a line
-  `Bead: <parent-id>`, and the wrapper adds `Bead: <split-off-id>` itself.
-  `./dev commit --close` takes a bead's work tree from the newest `main` commit with a
-  `Bead: <id>` line anywhere in its message. So the parent's work tree is then the one
-  that contains the acceptance check the split-off landed, and both beads close through
-  the wrapper. Never amend or rewrite an earlier commit to add a trailer.
+- **Parent `Bead:` lines** (owner decisions, `br-njik`). `./dev commit --close` takes a
+  bead's work tree from the newest `main` commit with a `Bead: <id>` line anywhere in its
+  message, and that tree must contain the bead's acceptance check. In two cases a
+  commit's message therefore also carries a line `Bead: <parent-id>`; the wrapper adds
+  `Bead: <own-id>` itself.
+  - **Split-off beads.** When part of a bead's work moves to a split-off bead, for
+    example because its files were reserved, every commit of the split-off bead names
+    the parent. The parent's work tree then contains the check the split-off landed.
+  - **Completing subtasks.** The commit of a W-item's last open subtask, after which the
+    parent's accept selectors pass on that tree, names the parent W bead, so
+    `--close` can validate the parent on it.
+
+  Never amend or rewrite an earlier commit to add a line. A bead whose work tree missed
+  it closes only by an owner decision.
 
 ---
 
