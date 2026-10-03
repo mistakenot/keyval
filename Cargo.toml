@@ -1,0 +1,38 @@
+# keyval workspace — virtual manifest (PLAN.md Appendix A).
+#
+# Shared surface (§11.7): edit only under a short, explicit Agent Mail reservation.
+# Crates are created by the first bead that needs them (P6: no empty crates).
+# Every direct dependency is declared once under [workspace.dependencies] and listed
+# in DEPENDENCIES.md in the same commit (CD-12).
+[workspace]
+resolver = "3"
+members = ["xtask"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+# Lint policy (§5.2; AGENTS.md "Lint Policy"). The probe files of W01.3 prove that each
+# denied lint actually fires on this toolchain. Never `allow` a lint that enforces a CD
+# principle; any other allow is narrow and documented with the bead that decided it.
+[workspace.lints.rust]
+unsafe_code = "forbid" # CD-8
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# CD-8: expected failures are values; broken invariants use CD-7 assertions (`invariant!`).
+# clippy.toml permits unwrap/expect/panic inside tests.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"

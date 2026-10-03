@@ -1,0 +1,10 @@
+# Pinned project toolchain (PLAN.md §5.2, T-3; AGENTS.md "Toolchain").
+#
+# Bumping this is a deliberate change made in its own bead: a newer toolchain can
+# strengthen the denied lint groups, and it invalidates trace comparisons (T-3).
+# Re-run the full lint gate and the lint probes after any bump.
+# `fuzz/` pins its own nightly separately (§10.19, W53).
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

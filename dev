@@ -1,0 +1,13 @@
+#!/bin/sh
+# ./dev — launcher for keyval's xtask binary (PLAN.md §11.13, D-38).
+#
+# Builds xtask with the pinned toolchain (rust-toolchain.toml) against the committed
+# Cargo.lock and runs it with the given arguments. `--locked` means a launcher run never
+# rewrites the lockfile (CD-12). All behaviour lives in xtask; keep this file tiny.
+#
+# KEYVAL_ROOT tells xtask where the workspace root is, so ./dev works from any
+# directory without changing what relative path arguments mean.
+set -eu
+KEYVAL_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+export KEYVAL_ROOT
+exec cargo run --quiet --locked --manifest-path "$KEYVAL_ROOT/xtask/Cargo.toml" -- "$@"

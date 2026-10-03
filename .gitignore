@@ -10,8 +10,8 @@
 Thumbs.db
 
 # Dependencies
+# (No `vendor/` entry: vendor/raft/ is committed source, PLAN.md Appendix A, W02.)
 node_modules/
-vendor/
 .venv/
 venv/
 __pycache__/
@@ -66,3 +66,11 @@ gemini.mcp.json
 /.gemini.mcp.json.*.bak
 /.gemini.mcp.json.*.replaced
 /gemini.mcp.json.bak*
+
+# keyval (PLAN.md Appendix A): build output, generated local state and run artifacts.
+# .local/ holds node data dirs, logs, PID receipts and candidate/accept trees;
+# artifacts/ holds crash packs, receipts and the failure outbox. Both are pruned only
+# by ./dev prune (W46).
+/target/
+/.local/
+/artifacts/

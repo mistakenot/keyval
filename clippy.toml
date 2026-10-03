@@ -1,0 +1,6 @@
+# Clippy configuration for the workspace (PLAN.md §5.2; AGENTS.md "Lint Policy").
+#
+# CD-8: tests may use unwrap/expect/panic; first-party production code may not.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
