@@ -335,7 +335,7 @@ title = "The simulator runs the same code paths as production"
 [[requirement]]
 id = "T-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Same seed and build give a byte-identical canonical trace"
 
 [[requirement]]
@@ -347,7 +347,7 @@ title = "Every simulation failure is replayable with one command"
 [[requirement]]
 id = "T-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A global view of every node's state after each step"
 
 [[requirement]]
@@ -384,7 +384,7 @@ title = "The simulator runs from scenario files as well as seeds"
 [[requirement]]
 id = "T-11"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Replay identity is checked in fresh OS processes"
 
 [[requirement]]
