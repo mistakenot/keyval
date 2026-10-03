@@ -11,10 +11,10 @@
 //! hand (§11.5 rule 12).
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 
 use serde::Deserialize;
+
+use crate::git::Git;
 
 /// The work graph, relative to the root (W06).
 pub const WORKGRAPH: &str = "registry/workgraph.toml";
@@ -51,19 +51,13 @@ pub fn parse_workgraph(text: &str) -> Result<Vec<Item>, String> {
         .map_err(|err| format!("invalid {WORKGRAPH}: {}", err.message()))
 }
 
-/// Reads `<root>/registry/workgraph.toml`, or `None` if it does not exist yet.
-pub fn load_workgraph(root: &Path) -> Result<Option<Vec<Item>>, String> {
-    read_optional(&root.join(WORKGRAPH))?
+/// The work graph as committed in `tree` (a tree or commit), or `None` if it has none
+/// yet. Acceptance and closure read the registry from committed trees only, never from
+/// the shared checkout's working files, which other agents may be editing.
+pub fn workgraph_at(git: &Git, tree: &str) -> Result<Option<Vec<Item>>, String> {
+    git.file_at(tree, WORKGRAPH)?
         .map(|text| parse_workgraph(&text))
         .transpose()
-}
-
-fn read_optional(path: &Path) -> Result<Option<String>, String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("cannot read {}: {err}", path.display())),
-    }
 }
 
 /// The work item a bead implements: the item whose recorded `bead` is `bead`, else the
@@ -117,11 +111,6 @@ pub fn parse_requirements(text: &str) -> Result<Vec<Requirement>, String> {
         .collect()
 }
 
-/// Reads `<root>/registry/requirements.toml`, or `None` if it does not exist yet.
-pub fn load_requirements_text(root: &Path) -> Result<Option<String>, String> {
-    read_optional(&root.join(REQUIREMENTS))
-}
-
 /// The requirements that become active when `closed` (a canonical item's ID) closes,
 /// given every item's closed-ness after the closure (`is_closed(item_id)`).
 pub fn newly_active(
@@ -158,7 +147,7 @@ pub fn activate(text: &str, ids: &[String]) -> Result<String, String> {
     let mut changed: BTreeMap<String, bool> = ids.iter().map(|id| (id.clone(), false)).collect();
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim();
-        if trimmed.starts_with("[[") || trimmed.starts_with('[') {
+        if trimmed.starts_with('[') {
             current = None;
         }
         if let Some(value) = key_value(trimmed, "id") {

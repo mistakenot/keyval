@@ -2,24 +2,34 @@
 //!
 //! It serialises the commit boundary, not the coding:
 //!
-//! 1. Take an exclusive lock (`.local/commit.lock`). Check that HEAD is on `main`, that
-//!    no git operation is in progress, that the bead is in progress, and that every path
-//!    lies inside the agent's live Agent Mail reservation. Refuse if anything foreign is
-//!    already staged.
-//! 2. Stage only the agent's named paths, and record the parent commit and the candidate
-//!    tree ID.
+//! 1. Take an exclusive lock (`.local/commit.lock`). Check that HEAD is on `main` and
+//!    that no git operation is in progress. Check that every named path can be staged,
+//!    lies inside the agent's live Agent Mail reservation, and is not inside another
+//!    agent's exclusive one. Refuse if anything foreign is already staged. Then run the
+//!    request's [`Prepare`] step, if it has one (closure's tracker update), and check that
+//!    the bead has the status the commit needs (exactly that ID, never a partial one).
+//! 2. Stage only the agent's named paths, and record the parent commit, the candidate
+//!    tree ID and the files it changes. Each changed file is checked against the
+//!    reservations again.
 //! 3. Refresh the fixed `.local/candidate/` directory in place to hold exactly that tree,
 //!    and verify its manifest ([`crate::candidate`]).
-//! 4. Run the T0 gate there, git-isolated, in candidate mode (`--tree`, `--changed`).
-//! 5. Re-check the parent, the index tree and the candidate. If anything changed, run
-//!    again on the new candidate (up to [`MAX_ATTEMPTS`]); never commit a different tree
-//!    because a gate already passed.
+//! 4. Run the T0 gate there, git-isolated, in candidate mode (`--tree`, `--changed`). The
+//!    judge is the candidate's own `./dev`, built from the tree under test, never the
+//!    shared checkout's possibly uncommitted xtask.
+//! 5. Re-check the candidate, the parent and the index tree. If HEAD moved, rebuild the
+//!    index as the new HEAD plus exactly the tree's changes (never the working files,
+//!    which may have been edited during the gate), and run again (up to
+//!    [`MAX_ATTEMPTS`]). Refuse instead if the concurrent commit changed one of those
+//!    files, or if anyone else staged meanwhile: step 1 never commits foreign staging.
+//!    Never commit a different tree because a gate already passed.
 //! 6. Commit exactly the tested tree with `git commit-tree`, and move `main` with a
 //!    compare-and-swap on the recorded parent. Push `main` and the `master` mirror
 //!    (§17 step 2). Write a commit receipt and release the lock.
 //!
-//! A failed gate unstages the agent's paths and leaves every working file alone, the
-//! agent's and everybody else's. Nothing here creates a branch or a worktree.
+//! A commit that is not made gives the index back: reset to HEAD if it still holds the
+//! wrapper's own staging, otherwise with only the agent's paths unstaged. Every working
+//! file is left alone, the agent's and everybody else's. Nothing here creates a branch or
+//! a worktree.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, TryLockError};
@@ -36,6 +46,7 @@ use crate::clock::Utc;
 use crate::git::Git;
 use crate::output::Report;
 use crate::process;
+use crate::tracker::{LiveTracker, Tracker as _};
 
 /// Schema identifier of the `--json` report and of the commit receipt file.
 pub const SCHEMA: &str = "keyval.dev.commit/v1";
@@ -55,10 +66,21 @@ pub const LOCK_FILE: &str = ".local/commit.lock";
 /// An Agent Mail file reservation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reservation {
+    /// The agent holding it.
+    pub agent: String,
     /// Glob pattern, e.g. `xtask/**`.
     pub pattern: String,
+    /// Whether it is exclusive.
+    pub exclusive: bool,
     /// Seconds until it expires.
     pub remaining_seconds: u64,
+}
+
+impl Reservation {
+    /// Whether it is live and its pattern covers `file`.
+    fn covers(&self, file: &str) -> bool {
+        self.remaining_seconds > 0 && (glob_match(&self.pattern, file) || self.pattern == file)
+    }
 }
 
 /// The outcome of one gate run on the candidate.
@@ -74,14 +96,26 @@ pub struct GateRun {
 
 /// The outside world the wrapper depends on; tests substitute fakes.
 pub trait Ports {
-    /// The bead's tracker status, e.g. `in_progress`.
+    /// The bead's tracker status, e.g. `in_progress`. Fails unless `bead` is a full ID.
     fn bead_status(&self, bead: &str) -> Result<String, String>;
-    /// The agent's live reservations.
+    /// Every live reservation in the project, as read by `agent`: its own and everyone
+    /// else's.
     fn reservations(&self, agent: &str) -> Result<Vec<Reservation>, String>;
     /// Runs the T0 gate on the candidate directory holding `tree`.
     fn gate(&self, candidate: &Path, tree: &str, changed: &[String]) -> Result<GateRun, String>;
     /// Pushes after a commit; one line per refspec.
     fn push(&self, git: &Git) -> Vec<String>;
+}
+
+/// Work a commit does under the commit lock, after the checkout and path checks and
+/// before staging: closure's tracker update and requirement activation (§11.3 step 7).
+/// Running it there serialises concurrent closures, so none overwrites another's
+/// `.beads/` export or registry flip, and a refused commit never touches the tracker.
+pub trait Prepare {
+    /// The paths the commit carries besides the request's own. Must not change anything.
+    fn paths(&self, git: &Git) -> Result<Vec<String>, String>;
+    /// Makes the change those paths carry.
+    fn apply(&self, git: &Git) -> Result<(), String>;
 }
 
 /// What the agent asked to commit.
@@ -95,7 +129,8 @@ pub struct Request {
     pub agent: String,
     /// The commit message.
     pub message: String,
-    /// Paths (files or directories) to commit, relative to the root.
+    /// Paths (files or directories) to commit, relative to the root. A [`Prepare`] step
+    /// can add more.
     pub paths: Vec<String>,
 }
 
@@ -159,7 +194,7 @@ pub struct CommitReport {
     pub bead: String,
     /// The agent.
     pub agent: String,
-    /// The requested paths.
+    /// The requested paths, including any a [`Prepare`] step added.
     pub paths: Vec<String>,
     /// The staged changes the commit carries.
     pub changed: Vec<String>,
@@ -181,6 +216,9 @@ pub struct CommitReport {
     pub detail: Option<String>,
     /// Time of the decision (UTC).
     pub at: String,
+    /// Whether the index was given back after a commit that was not made.
+    #[serde(skip)]
+    index_restored: bool,
 }
 
 impl CommitReport {
@@ -201,7 +239,8 @@ impl CommitReport {
             push: Vec::new(),
             receipt_path: None,
             detail: None,
-            at: Utc::now().rfc3339(),
+            at: String::new(),
+            index_restored: false,
         }
     }
 
@@ -210,12 +249,32 @@ impl CommitReport {
         self.detail = Some(why.into());
         self
     }
+
+    fn note(&mut self, note: &str) {
+        self.detail = Some(
+            self.detail
+                .take()
+                .map_or_else(|| note.to_owned(), |d| format!("{d}; {note}")),
+        );
+    }
 }
 
 /// Runs the commit protocol for `request` in the repository `git`, writing the receipt
 /// under `artifacts/receipts/`.
 pub fn run(git: &Git, request: &Request, ports: &dyn Ports, artifacts: &Path) -> CommitReport {
-    let mut report = commit(git, request, ports);
+    run_prepared(git, request, ports, artifacts, None)
+}
+
+/// [`run`], with a [`Prepare`] step that runs under the commit lock.
+pub fn run_prepared(
+    git: &Git,
+    request: &Request,
+    ports: &dyn Ports,
+    artifacts: &Path,
+    prepare: Option<&dyn Prepare>,
+) -> CommitReport {
+    let mut report = commit(git, request, ports, prepare);
+    report.at = Utc::now().rfc3339();
     let receipts = artifacts.join("receipts");
     let name = format!(
         "commit-{}-{}-{}.json",
@@ -238,33 +297,38 @@ pub fn run(git: &Git, request: &Request, ports: &dyn Ports, artifacts: &Path) ->
         });
     if let Err(why) = written {
         report.receipt_path = None;
-        let note = format!("cannot write the commit receipt: {why}");
-        report.detail = Some(
-            report
-                .detail
-                .map_or_else(|| note.clone(), |d| format!("{d}; {note}")),
-        );
+        report.note(&format!("cannot write the commit receipt: {why}"));
     }
     report
 }
 
-fn commit(git: &Git, request: &Request, ports: &dyn Ports) -> CommitReport {
-    let report = CommitReport::new(request);
+fn commit(
+    git: &Git,
+    request: &Request,
+    ports: &dyn Ports,
+    prepare: Option<&dyn Prepare>,
+) -> CommitReport {
+    let mut report = CommitReport::new(request);
     let _lock = match acquire_lock(&git.root().join(LOCK_FILE)) {
         Ok(lock) => lock,
         Err(why) => return report.refuse(why),
     };
-    let paths = match normalise_paths(&request.paths) {
+    if let Err(why) = checkout_ready(git) {
+        return report.refuse(why);
+    }
+    if let Some(prepare) = prepare {
+        match prepare.paths(git) {
+            Ok(extra) => report.paths.extend(extra),
+            Err(why) => return report.refuse(why),
+        }
+    }
+    let paths = match normalise_paths(&report.paths) {
         Ok(paths) => paths,
         Err(why) => return report.refuse(why),
     };
-    if let Err(why) = preconditions(git, request, ports) {
+    if let Err(why) = named_paths_ready(git, &request.agent, &paths, ports) {
         return report.refuse(why);
     }
-    let reservations = match ports.reservations(&request.agent) {
-        Ok(found) => found,
-        Err(why) => return report.refuse(format!("cannot read Agent Mail reservations: {why}")),
-    };
     match foreign_staged(git, &paths) {
         Ok(foreign) if foreign.is_empty() => {}
         Ok(foreign) => {
@@ -275,36 +339,120 @@ fn commit(git: &Git, request: &Request, ports: &dyn Ports) -> CommitReport {
         }
         Err(why) => return report.refuse(why),
     }
+    if let Some(prepare) = prepare
+        && let Err(why) = prepare.apply(git)
+    {
+        return report.refuse(why);
+    }
+    if let Err(why) = bead_ready(request, ports) {
+        return report.refuse(why);
+    }
     if let Err(why) = git.stage(&paths) {
-        return report.refuse(format!("cannot stage {paths:?}: {why}"));
+        // `git add` stages nothing when it fails, but give the index back regardless.
+        report = report.refuse(format!("cannot stage {paths:?}: {why}"));
+    } else {
+        report = gated_commit(git, request, ports, &paths, report);
     }
-    let outcome = gated_commit(git, request, ports, &paths, &reservations, report);
-    if outcome.outcome != Outcome::Committed {
-        // Give the index back. If it still holds exactly our last snapshot, nobody else
-        // staged, so reset it to HEAD: that also drops the stale view a re-run left when
-        // HEAD moved. Otherwise unstage only our paths and leave theirs alone. Working
-        // files are never touched.
-        let ours = outcome
-            .tree
-            .as_ref()
-            .is_some_and(|tree| git.write_tree().ok().as_ref() == Some(tree));
-        let _ = if ours {
-            git.run(&["read-tree", "HEAD"]).map(drop)
-        } else {
-            git.unstage(&paths)
-        };
+    if report.outcome != Outcome::Committed {
+        match restore_index(git, report.tree.as_deref(), &paths) {
+            Ok(()) => report.index_restored = true,
+            Err(why) => report.note(&format!(
+                "the index could not be given back ({why}); unstage {paths:?} by hand"
+            )),
+        }
     }
-    outcome
+    report
 }
 
-fn preconditions(git: &Git, request: &Request, ports: &dyn Ports) -> Result<(), String> {
+/// Gives the index back after a commit that was not made. If it still holds exactly the
+/// last tree we staged (`ours`), nobody else staged: reset it to HEAD, which also drops
+/// the view a re-run built on an older HEAD. Otherwise unstage only our paths and leave
+/// the rest alone. Working files are never touched.
+fn restore_index(git: &Git, ours: Option<&str>, paths: &[String]) -> Result<(), String> {
+    let untouched = ours.map_or(Ok(false), |tree| git.write_tree().map(|now| now == tree))?;
+    if untouched {
+        git.run(&["read-tree", "HEAD"]).map(drop)
+    } else {
+        git.unstage(paths)
+    }
+}
+
+/// HEAD is on `main` and no merge, rebase or similar operation is in progress.
+fn checkout_ready(git: &Git) -> Result<(), String> {
     match git.branch() {
         Some(branch) if branch == BRANCH => {}
         other => return Err(format!("HEAD must be on {BRANCH}, found {other:?}")),
     }
-    if let Some(what) = git.operation_in_progress()? {
-        return Err(format!("{what}; finish it first"));
+    git.operation_in_progress()?
+        .map_or(Ok(()), |what| Err(format!("{what}; finish it first")))
+}
+
+/// Before anything changes: every named path can be staged, and every named file lies
+/// inside the agent's live reservation and outside any other agent's exclusive one.
+/// (Directories are checked file by file once staged, in [`snapshot`].)
+fn named_paths_ready(
+    git: &Git,
+    agent: &str,
+    paths: &[String],
+    ports: &dyn Ports,
+) -> Result<(), String> {
+    let mut args = vec!["add", "--dry-run", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    git.run(&args)
+        .map_err(|why| format!("cannot stage {paths:?}: {why}"))?;
+    let reservations = ports
+        .reservations(agent)
+        .map_err(|why| format!("cannot read Agent Mail reservations: {why}"))?;
+    let files: Vec<String> = paths
+        .iter()
+        .filter(|path| !git.root().join(path).is_dir())
+        .cloned()
+        .collect();
+    check_reservations(agent, &files, &reservations)
+}
+
+/// Refuses any of `files` outside `agent`'s live reservations or inside another agent's
+/// live exclusive reservation (§11.5 rule 8).
+fn check_reservations(
+    agent: &str,
+    files: &[String],
+    reservations: &[Reservation],
+) -> Result<(), String> {
+    let unreserved: Vec<&String> = files
+        .iter()
+        .filter(|file| {
+            !reservations
+                .iter()
+                .any(|r| r.agent == agent && r.covers(file))
+        })
+        .collect();
+    if !unreserved.is_empty() {
+        return Err(format!(
+            "not inside a live Agent Mail reservation of {agent}: {unreserved:?}; reserve \
+             them first (§11.5 rule 8)"
+        ));
     }
+    let claimed: Vec<String> = files
+        .iter()
+        .filter_map(|file| {
+            reservations
+                .iter()
+                .find(|r| r.agent != agent && r.exclusive && r.covers(file))
+                .map(|r| format!("{file} ({} holds {})", r.agent, r.pattern))
+        })
+        .collect();
+    if claimed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "inside another agent's exclusive reservation: {claimed:?}; those files are \
+             theirs to commit (§11.5 rule 8)"
+        ))
+    }
+}
+
+/// The bead has the status this kind of commit needs.
+fn bead_ready(request: &Request, ports: &dyn Ports) -> Result<(), String> {
     let status = ports.bead_status(&request.bead)?;
     let allowed = request.kind.statuses();
     if !allowed.contains(&status.as_str()) {
@@ -326,26 +474,31 @@ fn gated_commit(
     request: &Request,
     ports: &dyn Ports,
     paths: &[String],
-    reservations: &[Reservation],
     mut report: CommitReport,
 ) -> CommitReport {
     let candidate_dir = git.root().join(CANDIDATE_DIR);
-    let mut previous: Option<String> = None;
+    let mut previous: Option<Snapshot> = None;
     while report.attempts < MAX_ATTEMPTS {
         report.attempts += 1;
-        if let Some(tree) = &previous
-            && let Err(why) = rebase_index(git, tree, paths)
+        if let Some(previous) = &previous
+            && let Err(why) = rebase_index(git, previous)
         {
             return report.refuse(why);
         }
-        let snapshot = match snapshot(git, paths, reservations) {
+        // Read afresh each attempt: a reservation can expire during a long gate.
+        let reservations = match ports.reservations(&request.agent) {
+            Ok(found) => found,
+            Err(why) => {
+                return report.refuse(format!("cannot read Agent Mail reservations: {why}"));
+            }
+        };
+        let snapshot = match snapshot(git, &request.agent, paths, &reservations) {
             Ok(snapshot) => snapshot,
             Err(why) => return report.refuse(why),
         };
         report.changed.clone_from(&snapshot.changed);
         report.parent = Some(snapshot.parent.clone());
         report.tree = Some(snapshot.tree.clone());
-        previous = Some(snapshot.tree.clone());
         let prepared = candidate::materialise(git, &snapshot.tree, &candidate_dir)
             .and_then(|_| candidate::verify(git, &snapshot.tree, &candidate_dir));
         if let Err(why) = prepared {
@@ -368,9 +521,15 @@ fn gated_commit(
             return report;
         }
         // Step 5: commit only if nothing moved while the gate ran.
+        if let Err(why) = checkout_ready(git) {
+            return report.refuse(why);
+        }
         match snapshot_unchanged(git, &snapshot) {
             Ok(true) => {}
-            Ok(false) => continue,
+            Ok(false) => {
+                previous = Some(snapshot);
+                continue;
+            }
             Err(why) => return report.refuse(why),
         }
         let message = format!(
@@ -386,12 +545,15 @@ fn gated_commit(
             Ok(commit) => commit,
             Err(why) => return report.refuse(why),
         };
-        if git
-            .advance_branch(BRANCH, &commit, &snapshot.parent)
-            .is_err()
-        {
-            // HEAD moved between the re-check and the update: run again.
-            continue;
+        if let Err(why) = git.advance_branch(BRANCH, &commit, &snapshot.parent) {
+            match git.rev_parse("HEAD") {
+                // HEAD moved between the re-check and the update: run again.
+                Ok(head) if head != snapshot.parent => {
+                    previous = Some(snapshot);
+                    continue;
+                }
+                _ => return report.refuse(format!("cannot move {BRANCH}: {why}")),
+            }
         }
         report.commit = Some(commit);
         report.outcome = Outcome::Committed;
@@ -405,35 +567,56 @@ fn gated_commit(
     ))
 }
 
-/// Prepares a re-run after the checkout moved during the gate (§11.10 step 5).
+/// Prepares a re-run after HEAD moved during the gate (§11.10 step 5).
 ///
-/// If the index still holds exactly the tree we staged (`staged`), only HEAD moved: the
-/// index is reset to the new HEAD (index only, working files untouched) and our paths
-/// are staged again, so the new candidate is the new HEAD plus our changes and never
-/// reverts the concurrent commit. If anything else changed the index, someone staged
-/// during the gate: refuse, and leave their staging alone.
-fn rebase_index(git: &Git, staged: &str, paths: &[String]) -> Result<(), String> {
-    if git.write_tree()? != staged {
-        let touched = git.run(&["diff-index", "--cached", "--name-only", staged])?;
+/// The index must still hold exactly the tree we staged; if it does not, someone staged
+/// during the gate, so refuse and leave their staging alone. The concurrent commit must
+/// not have changed any of our files; if it did, refuse rather than pick a side.
+/// Otherwise the index becomes the new HEAD plus exactly our snapshot's changes, copied
+/// from the gated tree (index only): the re-run judges what was asked for, never a file
+/// edited during the gate, and never reverts the concurrent commit.
+fn rebase_index(git: &Git, previous: &Snapshot) -> Result<(), String> {
+    if git.write_tree()? != previous.tree {
+        let touched = git.run(&["diff-index", "--cached", "--name-only", &previous.tree])?;
         let touched: Vec<&str> = touched.lines().collect();
         return Err(format!(
             "the index changed while the gate ran ({touched:?}); the wrapper never commits or \
              discards another agent's staging (§11.10 step 1)"
         ));
     }
+    let head = git.rev_parse("HEAD")?;
+    let clash: Vec<String> = git
+        .changed_between(&previous.parent, &head)?
+        .into_iter()
+        .filter(|path| previous.changed.contains(path))
+        .collect();
+    if !clash.is_empty() {
+        return Err(format!(
+            "a commit that landed during the gate also changed {clash:?}; review it, then \
+             commit again (§11.10 step 5)"
+        ));
+    }
     git.run(&["read-tree", "HEAD"])?;
-    git.stage(paths)
+    git.copy_entries(&previous.tree, &previous.changed)
 }
 
-/// The parent, the staged tree and the changes it carries, at one moment.
+/// The parent, the staged tree and the files it changes relative to that parent, taken
+/// in that order so the three always agree.
 struct Snapshot {
     parent: String,
     tree: String,
     changed: Vec<String>,
 }
 
-fn snapshot(git: &Git, paths: &[String], reservations: &[Reservation]) -> Result<Snapshot, String> {
-    let changed = git.staged_paths()?;
+fn snapshot(
+    git: &Git,
+    agent: &str,
+    paths: &[String],
+    reservations: &[Reservation],
+) -> Result<Snapshot, String> {
+    let parent = git.rev_parse("HEAD")?;
+    let tree = git.write_tree()?;
+    let changed = git.changed_between(&parent, &tree)?;
     if changed.is_empty() {
         return Err(format!("nothing to commit: {paths:?} have no changes"));
     }
@@ -441,28 +624,16 @@ fn snapshot(git: &Git, paths: &[String], reservations: &[Reservation]) -> Result
     if !foreign.is_empty() {
         return Err(format!("unexpected staged paths: {foreign:?}"));
     }
-    let unreserved: Vec<&String> = changed
-        .iter()
-        .filter(|c| !reserved(c, reservations))
-        .collect();
-    if !unreserved.is_empty() {
-        return Err(format!(
-            "not inside a live Agent Mail reservation of this agent: {unreserved:?}; \
-             reserve them first (§11.5 rule 8)"
-        ));
-    }
+    check_reservations(agent, &changed, reservations)?;
     Ok(Snapshot {
-        parent: git.rev_parse("HEAD")?,
-        tree: git.write_tree()?,
+        parent,
+        tree,
         changed,
     })
 }
 
 fn snapshot_unchanged(git: &Git, snapshot: &Snapshot) -> Result<bool, String> {
-    Ok(git.branch().as_deref() == Some(BRANCH)
-        && git.operation_in_progress()?.is_none()
-        && git.rev_parse("HEAD")? == snapshot.parent
-        && git.write_tree()? == snapshot.tree)
+    Ok(git.rev_parse("HEAD")? == snapshot.parent && git.write_tree()? == snapshot.tree)
 }
 
 fn foreign_staged(git: &Git, paths: &[String]) -> Result<Vec<String>, String> {
@@ -481,12 +652,6 @@ fn covered(file: &str, paths: &[String]) -> bool {
                 .strip_prefix(path.as_str())
                 .is_some_and(|rest| rest.starts_with('/'))
     })
-}
-
-fn reserved(file: &str, reservations: &[Reservation]) -> bool {
-    reservations
-        .iter()
-        .any(|r| r.remaining_seconds > 0 && (glob_match(&r.pattern, file) || r.pattern == file))
 }
 
 /// Shell-style glob as Agent Mail uses it (Python `fnmatchcase`): `*` matches any run
@@ -585,15 +750,11 @@ const GATE_LIMIT: Duration = Duration::from_mins(60);
 
 impl Ports for LivePorts {
     fn bead_status(&self, bead: &str) -> Result<String, String> {
-        let mut cmd = Command::new("br");
-        cmd.args(["show", bead, "--json"]).current_dir(&self.root);
-        let captured = process::run(&mut cmd, TOOL_LIMIT).map_err(|err| format!("br: {err}"))?;
-        let value: serde_json::Value = serde_json::from_str(&captured.stdout)
-            .map_err(|err| format!("br show {bead} --json: {err}"))?;
-        value[0]["status"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| format!("no bead {bead}"))
+        LiveTracker {
+            root: self.root.clone(),
+        }
+        .bead(bead)
+        .map(|bead| bead.status)
     }
 
     fn reservations(&self, agent: &str) -> Result<Vec<Reservation>, String> {
@@ -611,31 +772,14 @@ impl Ports for LivePorts {
         let captured = process::run(&mut cmd, TOOL_LIMIT).map_err(|err| format!("am: {err}"))?;
         let value: serde_json::Value = serde_json::from_str(&captured.stdout)
             .map_err(|err| format!("am reservations --json: {err}"))?;
-        let mine = value["my_reservations"]
-            .as_array()
-            .ok_or("am reservations --json: no my_reservations")?;
-        Ok(mine
-            .iter()
-            .filter(|r| r["agent"] == agent)
-            .filter_map(|r| {
-                Some(Reservation {
-                    pattern: r["path"].as_str()?.to_owned(),
-                    remaining_seconds: r["remaining_seconds"].as_u64()?,
-                })
-            })
-            .collect())
+        if value["my_reservations"].as_array().is_none() {
+            return Err("am reservations --json: no my_reservations".to_owned());
+        }
+        Ok(parse_reservations(&value))
     }
 
     fn gate(&self, candidate: &Path, tree: &str, changed: &[String]) -> Result<GateRun, String> {
-        let xtask_self = std::env::current_exe().map_err(|err| err.to_string())?;
-        let mut cmd = gate_command(
-            &xtask_self,
-            &self.root,
-            &self.artifacts,
-            candidate,
-            tree,
-            changed,
-        )?;
+        let mut cmd = gate_command(&self.root, &self.artifacts, candidate, tree, changed)?;
         let captured = process::run(&mut cmd, GATE_LIMIT).map_err(|err| format!("gate: {err}"))?;
         // The gate's step records arrive on stderr; pass them through as progress.
         let _ = io::stderr().lock().write_all(captured.stderr.as_bytes());
@@ -671,17 +815,56 @@ impl Ports for LivePorts {
     }
 }
 
-/// The `xtask gate fast` command that judges `candidate` in candidate mode, git-isolated
+/// The reservations in an `am reservations --agent <name> --json` reply: the agent's own
+/// (`my_reservations`) and everyone's (`all_active`), each listed once.
+fn parse_reservations(value: &serde_json::Value) -> Vec<Reservation> {
+    let mut found: Vec<Reservation> = Vec::new();
+    for key in ["my_reservations", "all_active"] {
+        let listed = value[key].as_array().map_or(&[][..], Vec::as_slice);
+        for entry in listed {
+            let (Some(agent), Some(pattern), Some(remaining_seconds)) = (
+                entry["agent"].as_str(),
+                entry["path"].as_str(),
+                entry["remaining_seconds"].as_u64(),
+            ) else {
+                continue;
+            };
+            let reservation = Reservation {
+                agent: agent.to_owned(),
+                pattern: pattern.to_owned(),
+                // An entry that does not say is treated as exclusive: the safe reading.
+                exclusive: entry["exclusive"].as_bool().unwrap_or(true),
+                remaining_seconds,
+            };
+            if !found
+                .iter()
+                .any(|r| r.agent == reservation.agent && r.pattern == reservation.pattern)
+            {
+                found.push(reservation);
+            }
+        }
+    }
+    found
+}
+
+/// The command that judges `candidate` in candidate mode: the candidate's own `./dev
+/// gate fast`, so the judge is built from the tree under test (P11), git-isolated
 /// (§11.10 step 4) and building into the candidate's own target directory.
 fn gate_command(
-    xtask: &Path,
     root: &Path,
     artifacts: &Path,
     candidate: &Path,
     tree: &str,
     changed: &[String],
 ) -> Result<Command, String> {
-    let mut cmd = Command::new(xtask);
+    let executable = candidate.join("dev");
+    if !executable.is_file() {
+        return Err(format!(
+            "the candidate has no ./dev launcher ({})",
+            executable.display()
+        ));
+    }
+    let mut cmd = Command::new(&executable);
     cmd.args(["--json", "gate", "fast", "--tree", tree, "--artifacts"])
         .arg(artifacts);
     for path in changed {
@@ -695,7 +878,7 @@ fn gate_command(
     // The candidate builds into its own target dir, never the checkout's or a shared one,
     // so the gate's tests are the candidate's own build (br-gate-shared-target-dir-dtqu).
     // Under the shared base, it also stays out of the candidate, whose manifest must stay
-    // exact.
+    // exact. The launcher derives the same directory from the base.
     let base = cargo::target_base(root);
     cmd.env(cargo::TARGET_BASE_ENV, &base).env(
         cargo::TARGET_DIR_ENV,
@@ -724,10 +907,14 @@ impl Report for CommitReport {
                 self.detail.as_deref().unwrap_or("")
             ),
             Outcome::GateFailed => format!(
-                "commit NOT made for {}: the gate failed ({}); your paths were unstaged and \
-                 your files are untouched\n",
+                "commit NOT made for {}: the gate failed ({}); {}your files are untouched\n",
                 self.bead,
-                self.detail.as_deref().unwrap_or("")
+                self.detail.as_deref().unwrap_or(""),
+                if self.index_restored {
+                    "your paths were unstaged and "
+                } else {
+                    ""
+                }
             ),
         };
         for line in &self.push {
@@ -761,14 +948,21 @@ mod tests {
         gate_trees: RefCell<Vec<String>>,
     }
 
+    /// A live exclusive reservation of `pattern` by `agent`.
+    fn reservation(agent: &str, pattern: &str, remaining_seconds: u64) -> Reservation {
+        Reservation {
+            agent: agent.to_owned(),
+            pattern: pattern.to_owned(),
+            exclusive: true,
+            remaining_seconds,
+        }
+    }
+
     impl Fake<'_> {
         fn new() -> Self {
             Self {
                 status: "in_progress",
-                reservations: vec![Reservation {
-                    pattern: "**".to_owned(),
-                    remaining_seconds: 600,
-                }],
+                reservations: vec![reservation("TestAgent", "**", 600)],
                 passed: true,
                 during_gate: RefCell::new(Box::new(|| {})),
                 gate_trees: RefCell::new(Vec::new()),
@@ -819,12 +1013,17 @@ mod tests {
     }
 
     #[test]
-    fn the_candidate_gate_builds_into_the_candidates_own_target_dir() {
+    fn the_candidate_gate_is_the_candidates_own_launcher_building_into_its_own_target_dir() {
         let root = scratch_dir("commit-gate-cmd");
         let candidate = root.join(CANDIDATE_DIR);
         fs::create_dir_all(&candidate).unwrap();
+        let no_launcher = gate_command(&root, &root.join("artifacts"), &candidate, "0123", &[]);
+        assert!(
+            no_launcher.is_err_and(|e| e.contains("no ./dev launcher")),
+            "rule: without the tree's own launcher there is no judge"
+        );
+        fixture::write(&candidate, "dev", "#!/bin/sh\n");
         let cmd = gate_command(
-            Path::new("/bin/xtask"),
             &root,
             &root.join("artifacts"),
             &candidate,
@@ -832,6 +1031,12 @@ mod tests {
             &["a.rs".to_owned()],
         )
         .unwrap();
+        assert_eq!(
+            Path::new(cmd.get_program()),
+            candidate.join("dev"),
+            "rule: the judge is built from the tree under test, never the shared \
+             checkout's xtask (P11); cmd={cmd:?}"
+        );
         let env = |key: &str| {
             cmd.get_envs()
                 .find(|(name, _)| *name == key)
@@ -919,27 +1124,28 @@ mod tests {
 
     #[test]
     fn preconditions_refuse_without_touching_the_index() {
-        let cases: [(&str, Setup, &str); 5] = [
+        let cases: [(&str, Setup, &str); 6] = [
             ("bead", Box::new(|_, f| f.status = "open"), "claim it"),
             (
                 "reservation",
                 Box::new(|_, f| {
-                    f.reservations = vec![Reservation {
-                        pattern: "dir/**".to_owned(),
-                        remaining_seconds: 600,
-                    }];
+                    f.reservations = vec![reservation("TestAgent", "dir/**", 600)];
                 }),
                 "not inside a live Agent Mail reservation",
             ),
             (
                 "expired",
                 Box::new(|_, f| {
-                    f.reservations = vec![Reservation {
-                        pattern: "**".to_owned(),
-                        remaining_seconds: 0,
-                    }];
+                    f.reservations = vec![reservation("TestAgent", "**", 0)];
                 }),
                 "not inside a live Agent Mail reservation",
+            ),
+            (
+                "claimed",
+                Box::new(|_, f| {
+                    f.reservations.push(reservation("OtherAgent", "a.rs", 600));
+                }),
+                "OtherAgent holds a.rs",
             ),
             (
                 "branch",
@@ -998,10 +1204,24 @@ mod tests {
         fixture::write(git.root(), "a.rs", "a2\n");
         let mut fake = Fake::new();
         fake.passed = false;
+        let other = git.clone();
+        *fake.during_gate.borrow_mut() = Box::new(move || {
+            fixture::write(other.root(), "b.rs", "b2\n");
+            other.stage(&["b.rs".to_owned()]).unwrap();
+        });
         let report = commit_in(&git, &request(&["a.rs"]), &fake);
         assert_eq!(report.outcome, Outcome::GateFailed, "report={report:#?}");
         assert_eq!(git.rev_parse("HEAD").unwrap(), head);
-        assert_eq!(git.staged_paths().unwrap(), Vec::<String>::new());
+        assert_eq!(
+            git.staged_paths().unwrap(),
+            ["b.rs"],
+            "rule: our path is unstaged; staging another agent did meanwhile survives"
+        );
+        assert!(
+            report.render_human().contains("your paths were unstaged"),
+            "{}",
+            report.render_human()
+        );
         assert_eq!(
             fs::read_to_string(git.root().join("a.rs")).unwrap(),
             "a2\n",
@@ -1020,6 +1240,8 @@ mod tests {
             (vec!["../escape.rs"], "not a repository-relative path"),
             (vec!["/etc/passwd"], "not a repository-relative path"),
             (vec![".git/config"], "not a repository-relative path"),
+            (vec!["missing.rs"], "cannot stage"),
+            (vec!["*.rs"], "cannot stage"),
             (vec!["a.rs"], "nothing to commit"),
         ] {
             let report = commit_in(&git, &request(&paths), &Fake::new());
@@ -1147,6 +1369,148 @@ mod tests {
             "rule: the committed tree is the tree the deciding gate run tested (P11)"
         );
         assert_eq!(report.tree.as_deref(), Some(head_tree.as_str()));
+    }
+
+    #[test]
+    fn a_rerun_after_head_moved_commits_the_staged_version_not_a_mid_gate_edit() {
+        let git = repo("adv-moving-head-and-edit");
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let other = git.clone();
+        let edited = RefCell::new(false);
+        let fake = Fake::new();
+        *fake.during_gate.borrow_mut() = Box::new(|| {
+            if !*edited.borrow() {
+                *edited.borrow_mut() = true;
+                fixture::write(other.root(), "a.rs", "a3 (edited during the gate)\n");
+                concurrent_commit(&other, "other.rs", "theirs\n");
+            }
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(report.attempts, 2, "rule: HEAD moved, so the gate re-ran");
+        assert_eq!(
+            git.run(&["show", "HEAD:a.rs"]).unwrap(),
+            "a2\n",
+            "rule: the re-run judges and commits what was staged, never a file edited \
+             during the gate (§11.10)"
+        );
+        assert_eq!(git.run(&["show", "HEAD:other.rs"]).unwrap(), "theirs\n");
+        assert_eq!(
+            fs::read_to_string(git.root().join("a.rs")).unwrap(),
+            "a3 (edited during the gate)\n"
+        );
+        assert_eq!(git.staged_paths().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_concurrent_commit_to_one_of_our_files_is_refused_not_reverted() {
+        let git = repo("adv-clash");
+        fixture::write(git.root(), "a.rs", "ours\n");
+        let other = git.clone();
+        let theirs = RefCell::new(None);
+        let fake = Fake::new();
+        *fake.during_gate.borrow_mut() = Box::new(|| {
+            if theirs.borrow().is_none() {
+                *theirs.borrow_mut() = Some(concurrent_commit(&other, "a.rs", "theirs\n"));
+            }
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Refused, "report={report:#?}");
+        assert!(
+            report.detail.as_deref().is_some_and(|d| d.contains("a.rs")),
+            "report={report:#?}"
+        );
+        assert_eq!(
+            git.rev_parse("HEAD").unwrap(),
+            theirs.borrow().clone().unwrap(),
+            "rule: the concurrent commit stands, unreverted"
+        );
+        assert_eq!(
+            git.staged_paths().unwrap(),
+            Vec::<String>::new(),
+            "rule: the index is back at the new HEAD, with no stale view of the old one"
+        );
+        assert_eq!(
+            fs::read_to_string(git.root().join("a.rs")).unwrap(),
+            "ours\n"
+        );
+    }
+
+    #[test]
+    fn a_branch_update_that_fails_without_head_moving_is_refused_with_its_error() {
+        let git = repo("adv-ref-lock");
+        let head = git.rev_parse("HEAD").unwrap();
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let lock = git.root().join(".git/refs/heads/main.lock");
+        let planted = lock.clone();
+        *fake.during_gate.borrow_mut() = Box::new(move || fs::write(&planted, "").unwrap());
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(report.outcome, Outcome::Refused, "report={report:#?}");
+        assert_eq!(
+            report.attempts, 1,
+            "rule: only a moved HEAD earns a re-run; report={report:#?}"
+        );
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("cannot move main")),
+            "report={report:#?}"
+        );
+        assert_eq!(git.rev_parse("HEAD").unwrap(), head);
+    }
+
+    #[test]
+    fn a_transient_index_lock_during_the_gate_does_not_force_a_rerun() {
+        let git = repo("adv-index-lock");
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let lock = git.root().join(".git/index.lock");
+        let releaser = RefCell::new(None);
+        let fake = Fake::new();
+        *fake.during_gate.borrow_mut() = Box::new(|| {
+            fs::write(&lock, "").unwrap();
+            let held = lock.clone();
+            *releaser.borrow_mut() = Some(std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                fs::remove_file(held).unwrap();
+            }));
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        releaser.borrow_mut().take().unwrap().join().unwrap();
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(
+            report.attempts, 1,
+            "rule: another agent's momentary index.lock is waited out, not treated as a \
+             moved checkout"
+        );
+    }
+
+    #[test]
+    fn reservations_parse_from_both_am_lists_once_each() {
+        let value = serde_json::json!({
+            "my_reservations": [
+                {"agent": "Me", "path": "xtask/**", "exclusive": true, "remaining_seconds": 60}
+            ],
+            "all_active": [
+                {"agent": "Me", "path": "xtask/**", "exclusive": true, "remaining_seconds": 60},
+                {"agent": "Them", "path": "api/**", "exclusive": false, "remaining_seconds": 9},
+                {"agent": "Them", "path": "broken"}
+            ]
+        });
+        assert_eq!(
+            parse_reservations(&value),
+            [
+                reservation("Me", "xtask/**", 60),
+                Reservation {
+                    agent: "Them".to_owned(),
+                    pattern: "api/**".to_owned(),
+                    exclusive: false,
+                    remaining_seconds: 9,
+                }
+            ]
+        );
     }
 
     #[test]

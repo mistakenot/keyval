@@ -57,14 +57,22 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
     and commits it. The tracker export (`.beads/`) goes in separate beads-only
     commits.
 - **W07 has landed the wrapper:**
-  - `./dev commit --bead <id> <path>…` (§11.10) takes the commit lock and checks that
-    HEAD is on `main`, that the bead is `in_progress`, and that every path is inside
-    your live Agent Mail reservation. It refuses foreign staging. It stages only your
-    paths and refreshes the fixed `.local/candidate/` from the staged tree, verified
-    against its manifest. It runs `./dev gate fast --tree` there, git-isolated, and
-    re-runs if HEAD or the index moved. It commits exactly the gated tree, compare-and-
-    swapping `main` from its parent (trailer `Bead: <id>`), pushes, and writes a
-    receipt.
+  - `./dev commit --bead <id> <path>…` (§11.10) takes the commit lock and checks:
+    - HEAD is on `main`;
+    - the bead is `in_progress` (full ID only);
+    - every path is inside your live Agent Mail reservation and outside any other
+      agent's exclusive one.
+
+    It refuses foreign staging. It stages only your paths and refreshes the fixed
+    `.local/candidate/` from the staged tree, verified against its manifest. It runs
+    the candidate's own `./dev gate fast --tree` there, git-isolated, so the judge is
+    built from the tree under test.
+  - If HEAD moved during the gate, it rebuilds the candidate as the new HEAD plus
+    exactly your staged changes (never files edited meanwhile) and re-runs. It refuses
+    instead if that concurrent commit changed one of your files, or if anyone staged
+    meanwhile.
+  - It commits exactly the gated tree, compare-and-swapping `main` from its parent
+    (trailer `Bead: <id>`), pushes, and writes a receipt.
   - When self-serve starts, set `AGENT_NAME` (or pass `--agent`) to your Agent Mail
     name.
 
@@ -303,21 +311,25 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   step 7):
   - it needs the newest passing accept receipt to name the tree of the newest `main`
     commit carrying `Bead: <id>`;
-  - then it runs `br close` and `br sync --flush-only`, and recomputes requirement
-    activation (only a canonical item's §6 requirements, once every listing item is
-    closed);
+  - then, under the commit lock and only once the wrapper's path checks pass, it runs
+    `br close` and `br sync --flush-only`, and recomputes requirement activation from
+    the registry as committed at HEAD (only a canonical item's §6 requirements, once
+    every listing item is closed);
   - it commits `.beads/` plus any `registry/requirements.toml` flips as one closure
-    commit (`Closes: <id>`).
+    commit (`Closes: <id>`). Re-running it finishes an interrupted closure, and succeeds
+    with nothing to commit if HEAD already records the closure.
 
   `--close <id> --failed --evidence <PATH>` records a failed spike. The bead is
-  labelled `failed` + `needs-owner` and stays open, so its dependants stay blocked; the
-  evidence file is committed (`Failed: <id>`).
+  labelled `failed` + `needs-owner` (once, even on a re-run) and stays open, so its
+  dependants stay blocked; the evidence file is committed (`Failed: <id>`).
 - `./dev accept <id> --tree <tree-id>` — runs the bead's acceptance selectors on a
   committed tree, materialised in `.local/accept/<tree-id>/`, git-isolated, with its
   own cargo target dir, and writes a `keyval.dev.accept/v1` receipt naming that tree.
-  - Selectors: `registry/workgraph.toml` `accept` for canonical `plan:W` beads;
-    `accept:<CHECK-ID>` labels for subtasks and discovered work. An empty selection
-    fails.
+  - Selectors: the `accept` list in `registry/workgraph.toml` as committed in that tree,
+    for canonical `plan:W` beads; `accept:<CHECK-ID>` labels for subtasks and
+    discovered work. An empty selection fails.
+  - Each selector runs through the tree's own `./dev`, so the judge is that tree's
+    xtask, never the shared checkout's. A check that does not exist in the tree fails.
   - Each new accept tree is a cold build: about 1 minute and about 470 MB of target dir.
 - `./dev gate fast` — the T0 gate in its fixed bootstrap form (§10.10): fmt, clippy with
   denied warnings, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests,
@@ -331,7 +343,8 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   `GIT_CEILING_DIRECTORIES=<candidate>:<candidate's parent>`, which is what
   `candidate::git_isolation` sets. Other tiers report "not implemented" (W46).
 
-Gate receipts — not your say-so — are what close beads (rule 16).
+Receipts, not your say-so, are the evidence (rule 16): gate receipts for commits, and
+accept receipts for closing beads.
 
 ---
 

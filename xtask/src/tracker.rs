@@ -80,11 +80,21 @@ fn bead_from_json(value: &serde_json::Value) -> Option<Bead> {
 }
 
 impl Tracker for LiveTracker {
+    /// `br show` also resolves a partial ID, such as `dtqu`. Trailers, receipts and
+    /// closure match IDs exactly, so anything but the full ID is refused.
     fn bead(&self, id: &str) -> Result<Bead, String> {
         let out = self.br(&["show", id, "--json"])?;
         let value: serde_json::Value =
             serde_json::from_str(&out).map_err(|err| format!("br show {id} --json: {err}"))?;
-        bead_from_json(&value[0]).ok_or_else(|| format!("no bead {id}"))
+        let bead = bead_from_json(&value[0]).ok_or_else(|| format!("no bead {id}"))?;
+        if bead.id == id {
+            Ok(bead)
+        } else {
+            Err(format!(
+                "{id:?} is not a full bead ID; name it as {}",
+                bead.id
+            ))
+        }
     }
 
     fn all_beads(&self) -> Result<Vec<Bead>, String> {
@@ -161,6 +171,13 @@ mod tests {
         let done = create(&root, "done");
         br(&root, &["dep", "add", &dependant, &spike, "--json"]);
         let tracker = LiveTracker { root: root.clone() };
+        let partial = spike.rsplit('-').next().unwrap();
+        assert!(
+            tracker
+                .bead(partial)
+                .is_err_and(|e| e.contains("not a full bead ID") && e.contains(&spike)),
+            "rule: br resolves {partial:?} to {spike}, but trailers and receipts need the full ID"
+        );
 
         tracker
             .mark_failed(&spike, "evidence: reports/spike.md")

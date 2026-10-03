@@ -3,15 +3,17 @@
 //!
 //! 1. The tree must be the tree of a commit on `main` ("the current tree" is the tree of
 //!    the commit that carried the work).
-//! 2. The bead's selectors come from `registry/workgraph.toml` `accept` for a canonical
-//!    work item (matched by recorded bead ID, else by its `plan:W<nn>` label), or from
-//!    `accept:<CHECK-ID>` labels on a scoped subtask or discovered-work bead. Those are
-//!    tracker metadata, so the canonical work graph gains no rows. An empty selection
-//!    fails (P10).
+//! 2. The bead's selectors come from the `accept` list in `registry/workgraph.toml` **as
+//!    committed in the judged tree** for a canonical work item (matched by recorded bead
+//!    ID, else by its `plan:W<nn>` label), or from `accept:<CHECK-ID>` labels on a scoped
+//!    subtask or discovered-work bead. Labels are tracker metadata, so the canonical work
+//!    graph gains no rows. An empty selection fails (P10). Nothing comes from the shared
+//!    checkout's working files, so the receipt's tree alone determines what ran.
 //! 3. The tree is materialised into `.local/accept/<tree-id>/`, refreshed in place if a
 //!    previous accept left it, under a per-directory lock and outside the commit lock. It
 //!    is content-verified like the candidate.
-//! 4. Each selector runs there, git-isolated (§11.10 step 4), building into the
+//! 4. Each selector runs there through the tree's own `./dev`, so the judge is built from
+//!    the judged tree. It runs git-isolated (§11.10 step 4) and builds into the
 //!    directory's own target dir (`cargo::checkout_target_dir`,
 //!    br-gate-shared-target-dir-dtqu). A new accept tree is therefore a cold build.
 //! 5. The tree is verified again, so tests cannot have edited it, and the receipt is
@@ -106,14 +108,16 @@ pub trait SelectorRunner {
     fn run(&self, accept_dir: &Path, target_dir: &Path, args: &[String]) -> SelectorResult;
 }
 
-/// The bead's selectors and where they came from, or why there are none.
+/// The bead's selectors for judging `tree`, and where they came from, or why there are
+/// none. The work graph is read from `tree` itself.
 pub fn selectors(
-    root: &Path,
+    git: &Git,
+    tree: &str,
     tracker: &dyn Tracker,
     bead: &str,
 ) -> Result<(SelectorSource, Option<String>, Vec<String>), String> {
     let info = tracker.bead(bead)?;
-    let items = registry::load_workgraph(root)?.unwrap_or_default();
+    let items = registry::workgraph_at(git, tree)?.unwrap_or_default();
     if let Some(item) = registry::item_for_bead(&items, bead, &info.labels) {
         return Ok((
             SelectorSource::Workgraph,
@@ -207,7 +211,7 @@ fn accept(
             crate::commit::BRANCH
         ));
     }
-    let (source, item, selectors) = selectors(git.root(), tracker, &report.bead)?;
+    let (source, item, selectors) = selectors(git, &tree, tracker, &report.bead)?;
     report.source = Some(source);
     report.item = item;
     if selectors.is_empty() {
@@ -290,8 +294,9 @@ fn write_receipt(report: &mut AcceptReport, artifacts: &Path) {
     }
 }
 
-/// Runs selectors as `xtask --json <args>` in the accept directory, git-isolated and
-/// building into the directory's own target dir.
+/// Runs selectors as `<accept dir>/dev --json <args>`: the judged tree's own launcher, so
+/// the judge is built from that tree (never the shared checkout's xtask), git-isolated
+/// and building into the directory's own target dir.
 pub struct LiveRunner;
 
 impl SelectorRunner for LiveRunner {
@@ -302,14 +307,15 @@ impl SelectorRunner for LiveRunner {
             checks: Vec::new(),
             detail: None,
         };
-        let xtask_self = match std::env::current_exe() {
-            Ok(path) => path,
-            Err(err) => {
-                result.detail = Some(err.to_string());
-                return result;
-            }
-        };
-        let mut cmd = Command::new(&xtask_self);
+        let executable = accept_dir.join("dev");
+        if !executable.is_file() {
+            result.detail = Some(format!(
+                "the tree has no ./dev launcher ({})",
+                executable.display()
+            ));
+            return result;
+        }
+        let mut cmd = Command::new(&executable);
         cmd.arg("--json").args(args).current_dir(accept_dir);
         for (key, value) in isolated_env(accept_dir, target_dir) {
             cmd.env(key, value);
@@ -427,6 +433,9 @@ pub mod tests {
     pub struct FakeTracker {
         pub beads: RefCell<Vec<Bead>>,
         pub flushed: RefCell<u32>,
+        /// Where `flush` writes the export, one JSON line per bead, as
+        /// `br sync --flush-only` does.
+        pub export: RefCell<Option<PathBuf>>,
     }
 
     impl FakeTracker {
@@ -443,6 +452,7 @@ pub mod tests {
                         .collect(),
                 ),
                 flushed: RefCell::new(0),
+                export: RefCell::new(None),
             }
         }
 
@@ -479,7 +489,19 @@ pub mod tests {
         }
         fn flush(&self) -> Result<(), String> {
             *self.flushed.borrow_mut() += 1;
-            Ok(())
+            let Some(path) = self.export.borrow().clone() else {
+                return Ok(());
+            };
+            let lines: Vec<String> = self
+                .beads
+                .borrow()
+                .iter()
+                .map(|b| {
+                    serde_json::json!({"id": b.id, "status": b.status, "labels": b.labels})
+                        .to_string()
+                })
+                .collect();
+            fs::write(path, lines.join("\n") + "\n").map_err(|err| err.to_string())
         }
     }
 
@@ -656,6 +678,22 @@ pub mod tests {
             failed.receipt_path.is_some(),
             "rule: a failing run still leaves its receipt"
         );
+    }
+
+    #[test]
+    fn selectors_come_from_the_judged_tree_never_the_shared_working_files() {
+        let (git, tree) = repo("accept-tree-selectors");
+        // Another agent's uncommitted, half-done edit of the shared work graph.
+        fixture::write(git.root(), "registry/workgraph.toml", "[[item]\nbroken");
+        let tracker = FakeTracker::new(&[("br-w07", "in_progress", &["plan:W07"])]);
+        let runner = FakeRunner::passing();
+        let report = accept_in(&git, &tracker, &runner, "br-w07", &tree);
+        assert!(
+            report.ok,
+            "rule: the judged tree's committed work graph decides what runs (P11); \
+             report={report:#?}"
+        );
+        assert_eq!(runner.ran.borrow().len(), 2, "both committed selectors ran");
     }
 
     #[test]

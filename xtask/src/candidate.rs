@@ -55,10 +55,11 @@ pub struct Sync {
 
 /// Refreshes `dir` in place so that it holds exactly `tree`.
 pub fn materialise(git: &Git, tree: &str, dir: &Path) -> Result<Sync, String> {
-    // This removes files the tree lacks, so it must never point at a working tree.
-    if dir.join(".git").exists() || dir == git.root() {
+    // This removes files the tree lacks, so it must never point at a working tree, nor at
+    // a directory that contains the checkout.
+    if dir.join(".git").exists() || git.root().starts_with(dir) {
         return Err(format!(
-            "refusing to materialise into {}: it is a git working tree",
+            "refusing to materialise into {}: it is or contains a git working tree",
             dir.display()
         ));
     }
@@ -446,11 +447,13 @@ mod tests {
     fn materialise_refuses_a_working_tree() {
         let git = fixture::repo("cand-guard", &[("a.rs", "a\n")]);
         let tree = git.write_tree().unwrap();
-        let refused = materialise(&git, &tree, git.root());
-        assert!(
-            refused.is_err_and(|e| e.contains("git working tree")),
-            "rule: the candidate sync never deletes files from a checkout"
-        );
+        for dir in [git.root(), git.root().parent().unwrap()] {
+            let refused = materialise(&git, &tree, dir);
+            assert!(
+                refused.is_err_and(|e| e.contains("git working tree")),
+                "rule: the candidate sync never deletes files from a checkout; dir={dir:?}"
+            );
+        }
     }
 
     #[test]
