@@ -25,6 +25,7 @@ mod process;
 mod prune;
 mod raft_audit;
 mod registry;
+mod registry_gate;
 #[cfg(test)]
 mod schemas;
 mod spec;

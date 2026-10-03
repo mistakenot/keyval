@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://keyval.invalid/schemas/dev/check.v1.schema.json",
-  "title": "keyval.dev.check/v1",
+  "$id": "https://keyval.invalid/schemas/dev/check.v2.schema.json",
+  "title": "keyval.dev.check/v2",
   "description": "The `./dev check <ID>... --json` report (xtask/src/check.rs): one result per requested check ID, in request order.",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     }
   },
   "properties": {
-    "schema": { "const": "keyval.dev.check/v1" },
+    "schema": { "const": "keyval.dev.check/v2" },
     "ok": { "type": "boolean" },
     "case": { "type": ["string", "null"], "minLength": 1 },
     "runner": { "enum": ["rch", "local"] },
@@ -45,7 +45,8 @@
         "rerun",
         "commands",
         "duration_ms",
-        "detail"
+        "detail",
+        "reported"
       ],
       "properties": {
         "id": { "type": "string" },
@@ -67,7 +68,12 @@
         "rerun": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "commands": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "duration_ms": { "$ref": "#/$defs/count" },
-        "detail": { "type": ["string", "null"], "minLength": 1 }
+        "detail": { "type": ["string", "null"], "minLength": 1 },
+        "reported": {
+          "description": "Findings a report-mode condition lists without failing the check (§10.13 conditions 5 and 6 until W32).",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     }
   }

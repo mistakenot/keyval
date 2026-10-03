@@ -250,6 +250,30 @@ min_cases = 4
 status = "implemented"
 
 [[check]]
+id = "REGISTRY"
+summary = "the verification registry agrees with the plan, the code, the spec, the tests and the work graph (§10.13 conditions 1-8; 5-6 reported until W32)"
+kind = "static"
+covers = ["P5", "P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check REGISTRY"
+min_cases = 923
+status = "implemented"
+
+[[check]]
+id = "REGISTRY-FIXTURES"
+summary = "each §10.13 registry gate condition has a fixture that makes it fail, and malformed rows fail whatever their status"
+kind = "test_group"
+covers = ["P5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check REGISTRY-FIXTURES"
+min_cases = 11
+status = "implemented"
+
+[[check]]
 id = "DEV-PRUNE"
 summary = "./dev prune keeps the newest accept trees and every failing run, removes the rest with their target dirs, and logs every removal"
 kind = "test_group"

@@ -313,18 +313,34 @@ output only together with its schema, and bump the version when the change break
   clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, DEV-PRUNE,
-  DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES,
-  RAFT-VENDOR, RAFT-AUDIT, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE,
-  DOMAIN-ENUMS, ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM,
-  SIM-SCHEDULER. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
-  check's minimum case count fail (P10). A failure prints its exact re-run command.
+  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, REGISTRY,
+  REGISTRY-FIXTURES, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE,
+  DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT,
+  NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES,
+  SPIKE-DETERMINISM, SIM-SCHEDULER. Unknown IDs, zero-case selections, `#[ignore]`d cases
+  and runs below the check's minimum case count fail (P10). A failure prints its exact
+  re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
-  REGISTRY-FILES fails (rule 12). W05.2 makes the file the catalogue's source.
-  `registry/requirements.toml` holds every §6 requirement; its statuses are derived
-  (rule 12), so a closure outside `./dev commit --close` applies the activation itself.
-  Every check has exactly one `// check: <ID>` marker in code.
+  REGISTRY-FILES fails (rule 12). W05.4 makes `./dev gate fast` run the file's
+  implemented T0 rows. `registry/requirements.toml` holds every §6 requirement; its
+  statuses are derived (rule 12), so a closure outside `./dev commit --close` applies
+  the activation itself.
+- **The registry gate** (check REGISTRY, §10.13, W05.2) judges the registry against the
+  plan, the code, the spec, the tests and the work graph. REGISTRY-FIXTURES gives each of
+  its eight conditions a fixture that makes it fail. It also runs in every gate's xtask
+  tests, so a commit that breaks the agreement fails T0:
+  - every `requirements.toml` status equals its derivation, so a hand edit fails;
+  - every active MUST requirement is covered by an implemented check;
+  - every implemented check has exactly one `// check: <ID>` marker in code, and a
+    cargo-test selector's filters match at least one `#[test]` in its package. A
+    `planned` row needs neither yet, and has at most one marker;
+  - malformed rows fail whatever their status: bad IDs or vocabulary, or covered IDs
+    that are neither §6 requirements nor PLAN.md goals and principles (G…, P…, CD-…);
+  - HTTP handlers under `crates/server/` carry `// api: <operationId>`, and
+    conformance tests under `conformance/` carry `// api-test: <operationId or error
+    code>`. Until W32, gaps are listed under `reported` in the check's JSON
+    (`keyval.dev.check/v2`) and do not fail it (conditions 5–6).
 - `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit
   wrapper (see Git Discipline). `./dev commit --close <id> -m MSG` closes a bead (§11.3
   step 7):

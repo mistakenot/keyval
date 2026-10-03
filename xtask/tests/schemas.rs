@@ -113,10 +113,10 @@ mod schemas {
     #[test]
     fn check_reports_are_valid_whether_they_pass_or_not() {
         let args = ["check", "AGENTS-RULES", "--json"];
-        let passed = assert_output_matches(&args, &[0], "keyval.dev.check/v1");
+        let passed = assert_output_matches(&args, &[0], "keyval.dev.check/v2");
         assert_eq!(passed["checks"][0]["status"], "passed");
         let args = ["check", "NOPE", "AGENTS-RULES", "--json"];
-        let unknown = assert_output_matches(&args, &[1], "keyval.dev.check/v1");
+        let unknown = assert_output_matches(&args, &[1], "keyval.dev.check/v2");
         assert_eq!(unknown["checks"][0]["status"], "unknown");
     }
 

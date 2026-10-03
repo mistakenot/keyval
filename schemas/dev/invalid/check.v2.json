@@ -2,7 +2,7 @@
   "rule": "a passing check report ran only passing checks (P10)",
   "error_at": "/checks/1/status",
   "instance": {
-    "schema": "keyval.dev.check/v1",
+    "schema": "keyval.dev.check/v2",
     "ok": true,
     "case": null,
     "runner": "rch",
@@ -28,7 +28,8 @@
         "rerun": [],
         "commands": [],
         "duration_ms": 4,
-        "detail": null
+        "detail": null,
+        "reported": []
       },
       {
         "id": "WORKGRAPH",
@@ -50,7 +51,8 @@
         "rerun": [],
         "commands": [],
         "duration_ms": 5,
-        "detail": null
+        "detail": null,
+        "reported": []
       }
     ]
   }

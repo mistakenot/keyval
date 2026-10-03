@@ -22,7 +22,7 @@ use crate::output::Report;
 use crate::process::{self, Captured};
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.check/v1";
+pub const SCHEMA: &str = "keyval.dev.check/v2";
 
 /// Wall-clock limit for listing or running one check's cases, including compilation.
 const RUN_LIMIT: Duration = Duration::from_mins(30);
@@ -95,6 +95,9 @@ pub enum StaticCheck {
     Spec,
     /// registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 and is acyclic (W06).
     Workgraph,
+    /// The verification registry agrees with the plan, the code, the spec, the tests
+    /// and the work graph (§10.13; W05.2).
+    Registry,
     /// The Raft spike's traces are byte-identical across fresh processes (W02.4).
     SpikeDeterminism,
 }
@@ -112,7 +115,28 @@ impl StaticCheck {
             Self::RaftAudit => crate::raft_audit::check_raft_audit(root),
             Self::Spec => crate::spec::check_spec(root),
             Self::Workgraph => crate::workgraph::check_workgraph(root),
+            Self::Registry => {
+                crate::registry_gate::check_registry(root).map(|verdict| StaticOutcome {
+                    cases: verdict.cases,
+                    violations: verdict.violations,
+                })
+            }
             Self::SpikeDeterminism => crate::spike::check_spike(root),
+        }
+    }
+
+    /// [`StaticCheck::run`], plus the findings a report-mode condition lists without
+    /// failing (REGISTRY's conditions 5 and 6 until W32).
+    fn run_reporting(self, root: &Path) -> Result<(StaticOutcome, Vec<String>), String> {
+        if self == Self::Registry {
+            let verdict = crate::registry_gate::check_registry(root)?;
+            let outcome = StaticOutcome {
+                cases: verdict.cases,
+                violations: verdict.violations,
+            };
+            Ok((outcome, verdict.reported))
+        } else {
+            self.run(root).map(|outcome| (outcome, Vec::new()))
         }
     }
 
@@ -128,6 +152,7 @@ impl StaticCheck {
             Self::RaftAudit => "RAFT-AUDIT",
             Self::Spec => "SPEC",
             Self::Workgraph => "WORKGRAPH",
+            Self::Registry => "REGISTRY",
             Self::SpikeDeterminism => "SPIKE-DETERMINISM",
         }
     }
@@ -144,6 +169,7 @@ impl StaticCheck {
             Self::RaftAudit => "file(s)+rule(s)",
             Self::Spec => "rule(s)+fixture(s)+mutant(s)",
             Self::Workgraph => "field(s)+edge(s)+rule(s)",
+            Self::Registry => "row(s)+marker(s)+edge(s)",
             Self::SpikeDeterminism => "seed-process run(s)+control",
         }
     }
@@ -427,6 +453,31 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 4,
     },
     CheckDef {
+        id: "REGISTRY",
+        summary: "the verification registry agrees with the plan, the code, the spec, the \
+                  tests and the work graph (§10.13 conditions 1-8; 5-6 reported until W32)",
+        kind: Kind::Static,
+        covers: &["P5", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::Registry),
+        min_cases: 923,
+    },
+    CheckDef {
+        id: "REGISTRY-FIXTURES",
+        summary: "each §10.13 registry gate condition has a fixture that makes it fail, and \
+                  malformed rows fail whatever their status",
+        kind: Kind::TestGroup,
+        covers: &["P5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["registry_gate::"],
+        },
+        min_cases: 11,
+    },
+    CheckDef {
         id: "DEV-PRUNE",
         summary: "./dev prune keeps the newest accept trees and every failing run, removes \
                   the rest with their target dirs, and logs every removal",
@@ -653,6 +704,9 @@ pub struct CheckResult {
     pub duration_ms: u64,
     /// Why the check did not pass, when it did not.
     pub detail: Option<String>,
+    /// Findings a report-mode condition lists without failing the check (§10.13
+    /// conditions 5 and 6 until W32).
+    pub reported: Vec<String>,
     /// Tail of the captured output of a failed run (human mode only).
     #[serde(skip)]
     pub output_tail: Option<String>,
@@ -678,6 +732,7 @@ impl CheckResult {
             commands: Vec::new(),
             duration_ms: 0,
             detail: None,
+            reported: Vec::new(),
             output_tail: None,
         }
     }
@@ -688,7 +743,7 @@ impl CheckResult {
     }
 }
 
-/// The `./dev check` report (`keyval.dev.check/v1`).
+/// The `./dev check` report (`keyval.dev.check/v2`).
 #[derive(Debug, Serialize)]
 pub struct CheckReport {
     /// Schema identifier.
@@ -856,10 +911,11 @@ fn run_static(
                 .to_owned(),
         );
     }
-    let outcome = match check.run(root) {
-        Ok(outcome) => outcome,
+    let (outcome, reported) = match check.run_reporting(root) {
+        Ok(run) => run,
         Err(why) => return result.fail(format!("the check could not run: {why}")),
     };
+    result.reported = reported;
     result.selected = count(outcome.cases);
     if !outcome.violations.is_empty() {
         result.failed = count(outcome.violations.len());
@@ -989,6 +1045,9 @@ impl Report for CheckReport {
             };
             for name in &check.failures {
                 let _ = writeln!(out, "  failed: {name}");
+            }
+            for line in &check.reported {
+                let _ = writeln!(out, "  reported: {line}");
             }
             for command in &check.rerun {
                 let _ = writeln!(out, "  rerun:  {command}");

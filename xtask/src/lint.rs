@@ -400,7 +400,7 @@ fn names_a_bead(line: &str) -> bool {
 /// `text` with the contents of comments, string literals and character literals
 /// replaced by spaces, so that attribute-like text inside them is never matched.
 /// Newlines are kept, so byte offsets and line numbers are unchanged.
-fn mask_comments_and_strings(text: &str) -> String {
+pub fn mask_comments_and_strings(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = bytes.to_vec();
     let mut i = 0;

@@ -10,7 +10,7 @@
 //! parent. Statuses are derived here and written by `./dev commit --close`, never by
 //! hand (§11.5 rule 12).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -137,6 +137,61 @@ pub fn newly_active(
         })
         .cloned()
         .collect()
+}
+
+/// PLAN.md §6's requirement rows as `(id, level)`, in plan order.
+pub fn plan_requirements(plan: &str) -> Vec<(String, String)> {
+    let section = plan
+        .split("\n## 6. Requirements")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## 7.").next())
+        .unwrap_or_default();
+    section
+        .lines()
+        .filter_map(|line| {
+            let mut cells = line.strip_prefix("| ")?.split(" | ");
+            let (id, level) = (cells.next()?, cells.next()?);
+            matches!(level, "MUST" | "SHOULD" | "MAY").then(|| (id.to_owned(), level.to_owned()))
+        })
+        .collect()
+}
+
+/// The work items with a closed bead in a tracker export (`.beads/issues.jsonl`), judged
+/// as `./dev commit --close` judges them: any bead recorded for the item, or labelled
+/// `plan:<id>`.
+pub fn closed_items(items: &[Item], export: &str) -> BTreeSet<String> {
+    let beads: Vec<serde_json::Value> = export
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    items
+        .iter()
+        .filter(|item| {
+            let label = format!("plan:{}", item.id);
+            beads.iter().any(|bead| {
+                let labelled = bead["labels"]
+                    .as_array()
+                    .is_some_and(|labels| labels.iter().any(|l| l == label.as_str()));
+                (bead["id"] == item.bead.as_str() || labelled) && bead["status"] == "closed"
+            })
+        })
+        .map(|item| item.id.clone())
+        .collect()
+}
+
+/// The status §10.13 derives for requirement `id`: `active` once every work item listing
+/// it has closed, and `planned` while one is open or none lists it (never vacuously
+/// active, P10).
+pub fn derived_status(items: &[Item], id: &str, closed: &BTreeSet<String>) -> &'static str {
+    let listing: Vec<&Item> = items
+        .iter()
+        .filter(|item| item.reqs.iter().any(|r| r == id))
+        .collect();
+    if !listing.is_empty() && listing.iter().all(|item| closed.contains(&item.id)) {
+        "active"
+    } else {
+        "planned"
+    }
 }
 
 /// `text` with the status of each requirement in `ids` changed from `planned` to
@@ -340,7 +395,6 @@ mod files {
     use super::*;
     use crate::check::CATALOGUE;
     use crate::test_support::workspace_root;
-    use std::collections::BTreeSet;
     use std::fs;
 
     const CHECKS: &str = "registry/checks.toml";
@@ -397,61 +451,6 @@ mod files {
         toml::from_str(&read(REQUIREMENTS)).unwrap_or_else(|err| panic!("{REQUIREMENTS}: {err}"))
     }
 
-    /// PLAN.md §6's requirement rows as `(id, level)`, in plan order.
-    fn plan_section_6(plan: &str) -> Vec<(String, String)> {
-        let section = plan
-            .split("\n## 6. Requirements")
-            .nth(1)
-            .and_then(|rest| rest.split("\n## 7.").next())
-            .unwrap_or_default();
-        section
-            .lines()
-            .filter_map(|line| {
-                let mut cells = line.strip_prefix("| ")?.split(" | ");
-                let (id, level) = (cells.next()?, cells.next()?);
-                matches!(level, "MUST" | "SHOULD" | "MAY")
-                    .then(|| (id.to_owned(), level.to_owned()))
-            })
-            .collect()
-    }
-
-    /// The work items with a closed bead in the tracker export, judged as `./dev commit
-    /// --close` judges them: any bead recorded for the item, or labelled `plan:<id>`.
-    fn closed_items(items: &[Item], export: &str) -> BTreeSet<String> {
-        let beads: Vec<serde_json::Value> = export
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-        items
-            .iter()
-            .filter(|item| {
-                let label = format!("plan:{}", item.id);
-                beads.iter().any(|bead| {
-                    let labelled = bead["labels"]
-                        .as_array()
-                        .is_some_and(|labels| labels.iter().any(|l| l == label.as_str()));
-                    (bead["id"] == item.bead.as_str() || labelled) && bead["status"] == "closed"
-                })
-            })
-            .map(|item| item.id.clone())
-            .collect()
-    }
-
-    /// The status §10.13 derives for requirement `id`: `active` once every work item listing
-    /// it has closed, and `planned` while one is open or none lists it (never vacuously
-    /// active, P10).
-    fn derived_status(items: &[Item], id: &str, closed: &BTreeSet<String>) -> &'static str {
-        let listing: Vec<&Item> = items
-            .iter()
-            .filter(|item| item.reqs.iter().any(|r| r == id))
-            .collect();
-        if !listing.is_empty() && listing.iter().all(|item| closed.contains(&item.id)) {
-            "active"
-        } else {
-            "planned"
-        }
-    }
-
     #[test]
     fn requirements_toml_equals_plan_section_6() {
         let file = requirements_file();
@@ -461,7 +460,7 @@ mod files {
             .iter()
             .map(|r| (r.id.clone(), r.level.clone()))
             .collect();
-        let plan = plan_section_6(&read("PLAN.md"));
+        let plan = plan_requirements(&read("PLAN.md"));
         assert!(plan.len() >= 60, "PLAN.md §6 parsed to {} rows", plan.len());
         assert_eq!(
             rows, plan,

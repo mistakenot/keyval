@@ -52,7 +52,7 @@ mod check {
         let context = describe(&args, &out);
         assert_eq!(out.status.code(), Some(1), "{context}");
         let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(report["schema"], "keyval.dev.check/v1", "{context}");
+        assert_eq!(report["schema"], "keyval.dev.check/v2", "{context}");
         assert_eq!(report["ok"], false, "{context}");
         assert_eq!(report["checks"][0]["id"], "NOPE", "{context}");
         assert_eq!(report["checks"][0]["status"], "unknown", "{context}");
