@@ -333,8 +333,9 @@ output only together with its schema, and bump the version when the change break
   - every `requirements.toml` status equals its derivation, so a hand edit fails;
   - every active MUST requirement is covered by an implemented check;
   - every implemented check has exactly one `// check: <ID>` marker in code, and a
-    cargo-test selector's filters match at least one `#[test]` in its package. A
-    `planned` row needs neither yet, and has at most one marker;
+    cargo-test selector's filters match at least one, and at least `min_cases`,
+    `#[test]` functions in its package. A `planned` row needs neither yet, and has at
+    most one marker;
   - malformed rows fail whatever their status: bad IDs or vocabulary, or covered IDs
     that are neither §6 requirements nor PLAN.md goals and principles (G…, P…, CD-…);
   - HTTP handlers under `crates/server/` carry `// api: <operationId>`, and

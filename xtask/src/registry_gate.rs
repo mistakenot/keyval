@@ -12,8 +12,9 @@
 //!    marker in first-party code; every marker has a row, and a `planned` row at most one.
 //! 4. **Registry and execution** (static in T0). Every `implemented` check's `run` is
 //!    `./dev check <ID>` and resolves to a catalogue check, and a cargo-test selector
-//!    matches at least one `#[test]` in its package's sources. Its `min_cases` is enforced
-//!    where the check runs. Every catalogue check has a row.
+//!    matches at least one `#[test]`, and at least its `min_cases`, in its package's
+//!    sources (a short selection would fail its run, P10). Every catalogue check has a
+//!    row.
 //! 5. **Spec and code** (reported until W32). The spec's `ErrorCode` enum equals the
 //!    domain `ErrorCode` codes, and every operation has a `// api: <operationId>` handler
 //!    marker under `crates/server/`.
@@ -563,6 +564,13 @@ fn execution(checks: &ChecksFile, inputs: &Inputs<'_>, verdict: &mut Judgement) 
                     c.id,
                     names.len()
                 ));
+            } else if usize::try_from(c.min_cases).is_ok_and(|min| selected < min) {
+                verdict.violations.push(format!(
+                    "condition 4: check {} selects {selected} #[test] case(s) of package \
+                     {package} (filters {filters:?}), fewer than its min_cases {}, so its run \
+                     would fail (P10)",
+                    c.id, c.min_cases
+                ));
             }
         }
     }
@@ -1084,7 +1092,7 @@ impl ErrorCode {
     }
 
     #[test]
-    fn condition_4_fails_on_an_unresolved_or_empty_selector() {
+    fn condition_4_fails_on_an_unresolved_an_empty_or_a_short_selector() {
         let mut texts = Texts::valid();
         texts.checks = texts
             .checks
@@ -1097,6 +1105,18 @@ impl ErrorCode {
         let mut texts = Texts::valid();
         texts.sources[0].1 = texts.sources[0].1.replace("#[test]", "#[allow(dead_code)]");
         fails_only(&texts, "condition 4", "a cargo-test selector lists a case");
+        let mut texts = Texts::valid();
+        assert!(
+            texts.checks.starts_with(
+                "schema = \"keyval.registry.checks/v1\"\n\n[[check]]\nid = \"A-CHECK\""
+            )
+        );
+        texts.checks = texts.checks.replacen("min_cases = 1", "min_cases = 2", 1);
+        fails_only(
+            &texts,
+            "fewer than its min_cases 2",
+            "a selection short of min_cases fails before it runs (P10)",
+        );
         let mut texts = Texts::valid();
         texts.checks = [
             texts.checks.clone(),
@@ -1174,6 +1194,20 @@ impl ErrorCode {
         texts.export = [
             bead("b1", "closed", &[]),
             bead("b2", "closed", &["b1"]),
+            bead("s1", "open", &["b2", "b3"]),
+            bead("b3", "open", &["b1", "b2", "s1"]),
+        ]
+        .concat();
+        let verdict = texts.judge();
+        assert!(
+            verdict.violations.is_empty(),
+            "rule: only work-item beads' edges are compared; a subtask's edges are free \
+             (§12.2); {verdict:#?}"
+        );
+        let mut texts = Texts::valid();
+        texts.export = [
+            bead("b1", "closed", &[]),
+            bead("b2", "closed", &["b1"]),
             bead("b3", "open", &["b1"]),
         ]
         .concat();
@@ -1194,6 +1228,16 @@ impl ErrorCode {
             .workgraph
             .replace("area = [\"vendor\", \"spike\"]", "area = [\"vendor\"]");
         fails_only(&texts, "condition 8", "workgraph.toml mirrors §12.2");
+        let mut texts = Texts::valid();
+        let listed = "reqs = [\"F-1\", \"F-2\", \"§8\"]";
+        assert_eq!(texts.workgraph.matches(listed).count(), 1);
+        texts.workgraph = texts.workgraph.replace(listed, "reqs = [\"F-1\", \"§8\"]");
+        fails_only(
+            &texts,
+            "condition 8",
+            "the plan's range F-1…F-2 expands to both IDs, so a work item listing only F-1 \
+             has drifted",
+        );
     }
 
     #[test]
