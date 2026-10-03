@@ -4,11 +4,13 @@
 
 // check: XTASK
 
+mod accept;
 mod agents;
 mod candidate;
 mod cargo;
 mod check;
 mod clock;
+mod closure;
 mod commit;
 mod doctor;
 mod gate;
@@ -19,10 +21,12 @@ mod lint;
 mod metadata;
 mod output;
 mod process;
+mod registry;
 mod steplog;
 #[cfg(test)]
 mod test_support;
 mod tiers;
+mod tracker;
 mod workspace;
 
 use std::env;
@@ -68,11 +72,28 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         case: Option<String>,
     },
-    /// Commit the named paths: gate the exact staged tree, then commit it (§11.10).
+    /// Commit through the exact-candidate wrapper (§11.10): `--bead <id> <PATH>...` commits
+    /// work; `--close <id>` closes a bead with its accept receipt (§11.3 step 7);
+    /// `--close <id> --failed --evidence <PATH>` records a failure and leaves it open.
     Commit {
-        /// The in-progress bead this work belongs to.
+        /// The in-progress bead whose work the paths carry.
+        #[arg(
+            long,
+            value_name = "BEAD",
+            conflicts_with = "close",
+            required_unless_present = "close"
+        )]
+        bead: Option<String>,
+        /// Close this bead: validate its accept receipt, close it, commit `.beads/` and
+        /// registry activation.
         #[arg(long, value_name = "BEAD")]
-        bead: String,
+        close: Option<String>,
+        /// With --close: record a failure instead (labels failed + needs-owner; stays open).
+        #[arg(long, requires = "close", requires = "evidence")]
+        failed: bool,
+        /// With --failed: the failure-evidence report to commit, relative to the root.
+        #[arg(long, value_name = "PATH", requires = "failed")]
+        evidence: Option<String>,
         /// Your Agent Mail name, whose live reservations must cover the paths
         /// (default: `$AGENT_NAME`).
         #[arg(long, value_name = "NAME")]
@@ -80,9 +101,23 @@ enum Command {
         /// The commit message.
         #[arg(long, short, value_name = "TEXT")]
         message: String,
-        /// Files or directories to commit, relative to the workspace root.
-        #[arg(required = true, value_name = "PATH")]
+        /// Files or directories to commit (with --bead), relative to the workspace root.
+        #[arg(
+            value_name = "PATH",
+            required_unless_present = "close",
+            conflicts_with = "close"
+        )]
         paths: Vec<String>,
+    },
+    /// Run a bead's acceptance selectors on a committed tree in .local/accept/<tree-id>/
+    /// and write a receipt naming that tree (§11.3 step 7).
+    Accept {
+        /// The bead to accept.
+        #[arg(value_name = "BEAD")]
+        bead: String,
+        /// The committed tree to judge: the tree of the commit that carried the work.
+        #[arg(long, value_name = "TREE_ID")]
+        tree: String,
     },
     /// Run a gate tier on an exact tree and write a receipt (§10.10).
     Gate {
@@ -147,6 +182,9 @@ fn run(cli: Cli) -> Status {
         } => run_gate(&root, format, tier, tree.as_deref(), changed, artifacts),
         Command::Commit {
             bead,
+            close,
+            failed: _,
+            evidence,
             agent,
             message,
             paths,
@@ -155,18 +193,50 @@ fn run(cli: Cli) -> Status {
                 let message = "name your Agent Mail identity with --agent or $AGENT_NAME";
                 return output::report_error(format, ErrorKind::Usage, message, message);
             };
-            let request = commit::Request {
-                bead,
-                agent,
-                message,
-                paths,
-            };
             let artifacts = root.join("artifacts");
+            let git = git::Git::new(&root);
             let ports = commit::LivePorts {
                 root: root.clone(),
                 artifacts: artifacts.clone(),
             };
-            let report = commit::run(&git::Git::new(&root), &request, &ports, &artifacts);
+            match (bead, close) {
+                (Some(bead), None) => {
+                    let request = commit::Request {
+                        kind: commit::CommitKind::Work,
+                        bead,
+                        agent,
+                        message,
+                        paths,
+                    };
+                    output::emit(format, &commit::run(&git, &request, &ports, &artifacts))
+                }
+                (None, Some(bead)) => {
+                    let request = closure::CloseRequest {
+                        bead,
+                        agent,
+                        message,
+                        failed_evidence: evidence,
+                    };
+                    let tracker = tracker::LiveTracker { root };
+                    let report = closure::run(&git, &request, &tracker, &ports, &artifacts);
+                    output::emit(format, &report)
+                }
+                _ => {
+                    let message = "give exactly one of --bead or --close";
+                    output::report_error(format, ErrorKind::Usage, message, message)
+                }
+            }
+        }
+        Command::Accept { bead, tree } => {
+            let tracker = tracker::LiveTracker { root: root.clone() };
+            let report = accept::run(
+                &git::Git::new(&root),
+                &tracker,
+                &accept::LiveRunner,
+                &bead,
+                &tree,
+                &root.join("artifacts"),
+            );
             output::emit(format, &report)
         }
     }

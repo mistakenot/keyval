@@ -297,6 +297,33 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 14,
     },
     CheckDef {
+        id: "DEV-ACCEPT",
+        summary: "./dev accept runs a bead's selectors on a committed tree in its own dir",
+        kind: Kind::TestGroup,
+        covers: &["P11", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["accept::", "tracker::"],
+        },
+        min_cases: 7,
+    },
+    CheckDef {
+        id: "DEV-CLOSE",
+        summary: "closure needs a receipt for the work tree; activation waits for the last \
+                  canonical parent; a failed spike stays open",
+        kind: Kind::TestGroup,
+        covers: &["P11", "P5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["closure::", "registry::"],
+        },
+        min_cases: 12,
+    },
+    CheckDef {
         id: "INVARIANT",
         summary: "invariant! holds silently and panics with its ID and context (CD-7)",
         kind: Kind::TestGroup,

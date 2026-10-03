@@ -87,6 +87,8 @@ pub trait Ports {
 /// What the agent asked to commit.
 #[derive(Clone, Debug)]
 pub struct Request {
+    /// What sort of commit this is.
+    pub kind: CommitKind,
     /// The bead the commit belongs to.
     pub bead: String,
     /// The Agent Mail identity whose reservations cover the paths.
@@ -95,6 +97,41 @@ pub struct Request {
     pub message: String,
     /// Paths (files or directories) to commit, relative to the root.
     pub paths: Vec<String>,
+}
+
+/// What a commit carries, which decides the bead status it requires and its trailer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitKind {
+    /// The bead's work. The bead must be `in_progress`; trailer `Bead: <id>`, which is
+    /// how closure finds the commit that carried the work (§11.3 step 7).
+    Work,
+    /// A closure (`./dev commit --close`): `.beads/` plus registry flips. The bead must
+    /// be the just-closed one; trailer `Closes: <id>`.
+    Closure,
+    /// A failure record (`--close --failed`): `.beads/` plus the evidence report. The bead
+    /// must still be open; trailer `Failed: <id>`.
+    Failure,
+}
+
+impl CommitKind {
+    /// The bead statuses this kind of commit accepts.
+    const fn statuses(self) -> &'static [&'static str] {
+        match self {
+            Self::Work => &["in_progress"],
+            Self::Closure => &["closed"],
+            Self::Failure => &["open", "in_progress"],
+        }
+    }
+
+    /// The trailer key naming the bead.
+    pub const fn trailer(self) -> &'static str {
+        match self {
+            Self::Work => "Bead",
+            Self::Closure => "Closes",
+            Self::Failure => "Failed",
+        }
+    }
 }
 
 /// How a commit attempt ended.
@@ -258,10 +295,16 @@ fn preconditions(git: &Git, request: &Request, ports: &dyn Ports) -> Result<(), 
         return Err(format!("{what}; finish it first"));
     }
     let status = ports.bead_status(&request.bead)?;
-    if status != "in_progress" {
+    let allowed = request.kind.statuses();
+    if !allowed.contains(&status.as_str()) {
+        let hint = match request.kind {
+            CommitKind::Work => "claim it (in_progress) before committing its work",
+            CommitKind::Closure => "a closure commit carries a bead that was just closed",
+            CommitKind::Failure => "a failure record leaves the bead open",
+        };
         return Err(format!(
-            "bead {} is {status}; claim it (in_progress) before committing its work",
-            request.bead
+            "bead {} is {status}; {hint} ({:?} commits need {allowed:?})",
+            request.bead, request.kind
         ));
     }
     Ok(())
@@ -313,8 +356,9 @@ fn gated_commit(
             Err(why) => return report.refuse(why),
         }
         let message = format!(
-            "{}\n\nBead: {}\nAgent: {}\nTree: {}\nGate-Receipt: {}\n",
+            "{}\n\n{}: {}\nAgent: {}\nTree: {}\nGate-Receipt: {}\n",
             request.message.trim_end(),
+            request.kind.trailer(),
             request.bead,
             request.agent,
             snapshot.tree,
@@ -717,6 +761,7 @@ mod tests {
 
     fn request(paths: &[&str]) -> Request {
         Request {
+            kind: CommitKind::Work,
             bead: "br-test".to_owned(),
             agent: "TestAgent".to_owned(),
             message: "test commit".to_owned(),
