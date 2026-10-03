@@ -215,8 +215,12 @@ mod doctor {
         let (out, report) = json_report("complete");
         let context = describe("complete", &out);
         assert_eq!(out.status.code(), Some(0), "{context}");
-        assert_eq!(report["schema"], "keyval.dev.doctor/v1", "{context}");
+        assert_eq!(report["schema"], "keyval.dev.doctor/v2", "{context}");
         assert_eq!(report["ok"], true, "{context}");
+        assert_eq!(
+            report["raft_codegen"]["ok"], true,
+            "rule: the real vendored Raft library passes doctor's codegen pin; {context}"
+        );
         assert_eq!(report["pinned_toolchain"], "1.99.0", "{context}");
         for (name, version) in [
             ("rustc", "rustc 1.99.0 (fake)"),

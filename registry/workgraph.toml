@@ -55,7 +55,7 @@ deps = ["W01"]
 reqs = ["P4", "T-3", "T-11"]
 area = ["vendor", "spike"]
 milestone = "m0"
-accept = []
+accept = ["./dev check RAFT-VENDOR"]
 bead = ""
 
 [[item]]

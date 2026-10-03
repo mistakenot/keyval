@@ -4,7 +4,8 @@
 //! a real capability: usually its robot-mode JSON output (§11.5 rule 14). A tool's
 //! documented behaviour is never assumed (RISK-16). A missing, broken or wrongly
 //! versioned **required** tool fails the command. Optional tools are reported but never
-//! fail it.
+//! fail it. Doctor also verifies the vendored Raft library's pinned code generation
+//! (§12.2 W02; the RAFT-VENDOR assertions in [`crate::vendor`]).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -15,9 +16,10 @@ use serde::Serialize;
 
 use crate::output::Report;
 use crate::process::{self, Captured, RunError};
+use crate::vendor::CodegenPin;
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.doctor/v1";
+pub const SCHEMA: &str = "keyval.dev.doctor/v2";
 
 const PROBE_LIMIT: Duration = Duration::from_secs(30);
 
@@ -255,7 +257,7 @@ pub struct Machine {
     pub cpus: Option<usize>,
 }
 
-/// The `./dev doctor` report (`keyval.dev.doctor/v1`).
+/// The `./dev doctor` report (`keyval.dev.doctor/v2`).
 #[derive(Debug, Serialize)]
 pub struct DoctorReport {
     /// Schema identifier.
@@ -274,10 +276,18 @@ pub struct DoctorReport {
     pub tools: Vec<ToolReport>,
     /// Names of required tools that are not `ok`.
     pub failures: Vec<&'static str>,
+    /// The vendored Raft library and its pinned code generation (W02).
+    pub raft_codegen: CodegenPin,
 }
 
-/// Probes every tool in `tools` from `root`, judging the toolchain against `pin`.
-pub fn run(root: &Path, pin: Result<String, String>, tools: &[ToolSpec]) -> DoctorReport {
+/// Probes every tool in `tools` from `root`, judging the toolchain against `pin`; the
+/// report also carries `raft_codegen`, the RAFT-VENDOR verdict on `root`.
+pub fn run(
+    root: &Path,
+    pin: Result<String, String>,
+    tools: &[ToolSpec],
+    raft_codegen: CodegenPin,
+) -> DoctorReport {
     let (pinned_toolchain, pin_error) = match pin {
         Ok(pin) => (Some(pin), None),
         Err(why) => (None, Some(why)),
@@ -293,7 +303,7 @@ pub fn run(root: &Path, pin: Result<String, String>, tools: &[ToolSpec]) -> Doct
         .collect();
     DoctorReport {
         schema: SCHEMA,
-        ok: failures.is_empty() && pin_error.is_none(),
+        ok: failures.is_empty() && pin_error.is_none() && raft_codegen.ok,
         root: root.display().to_string(),
         pinned_toolchain,
         pin_error,
@@ -302,6 +312,7 @@ pub fn run(root: &Path, pin: Result<String, String>, tools: &[ToolSpec]) -> Doct
         },
         tools: reports,
         failures,
+        raft_codegen,
     }
 }
 
@@ -508,20 +519,38 @@ impl Report for DoctorReport {
                 .unwrap_or("");
             let _ = writeln!(out, "  {status:<8} {:<8} {shown}{need}", tool.name);
         }
+        let codegen = &self.raft_codegen;
+        if codegen.ok {
+            let _ = writeln!(
+                out,
+                "  ok       raft-codegen {} pinned; {} vendored file(s) match VENDOR.toml",
+                codegen.protoc.as_deref().unwrap_or("protoc"),
+                codegen.files_verified
+            );
+        } else {
+            for violation in &codegen.violations {
+                let _ = writeln!(out, "  BROKEN   raft-codegen {violation}");
+            }
+        }
         if self.ok {
             out.push_str("doctor: ok");
         } else {
-            let _ = write!(
-                out,
-                "doctor: FAILED ({} required tool(s) not ok: {}{})",
-                self.failures.len(),
-                self.failures.join(", "),
-                if self.pin_error.is_some() {
-                    "; toolchain pin unreadable"
-                } else {
-                    ""
-                }
-            );
+            let mut reasons = Vec::new();
+            if !self.failures.is_empty() {
+                reasons.push(format!(
+                    "{} required tool(s) not ok: {}",
+                    self.failures.len(),
+                    self.failures.join(", ")
+                ));
+            }
+            if self.pin_error.is_some() {
+                reasons.push("toolchain pin unreadable".to_owned());
+            }
+            if !codegen.ok {
+                reasons
+                    .push("vendored Raft codegen pin broken (./dev check RAFT-VENDOR)".to_owned());
+            }
+            let _ = write!(out, "doctor: FAILED ({})", reasons.join("; "));
         }
         out
     }
@@ -664,6 +693,7 @@ mod tests {
             &crate::test_support::workspace_root(),
             Ok("1.99.0".to_owned()),
             std::slice::from_ref(spec),
+            pinned(),
         );
         let tool = report.tools.first().unwrap();
         assert_eq!(
@@ -686,7 +716,7 @@ mod tests {
             ),
             capability: None,
         };
-        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[spec]);
+        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[spec], pinned());
         let tool = report.tools.first().unwrap();
         assert_eq!(tool.status, ToolStatus::Missing, "observed={tool:?}");
         assert!(!report.ok, "rule: a missing required tool fails doctor");
@@ -709,7 +739,12 @@ mod tests {
             version: probe(&["keyval-definitely-not-installed"], Expect::FirstLine),
             capability: None,
         };
-        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[present, absent]);
+        let report = run(
+            Path::new("."),
+            Ok("1.99.0".to_owned()),
+            &[present, absent],
+            pinned(),
+        );
         assert!(report.ok, "observed={report:?}");
         assert_eq!(
             report.tools.get(1).map(|t| t.status),
@@ -733,7 +768,7 @@ mod tests {
                 Expect::JsonKey("version"),
             )),
         };
-        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[spec]);
+        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[spec], pinned());
         let tool = report.tools.first().unwrap();
         assert_eq!(tool.status, ToolStatus::Broken, "observed={tool:?}");
         assert!(!report.ok);
@@ -745,9 +780,53 @@ mod tests {
             Path::new("."),
             Err("no rust-toolchain.toml".to_owned()),
             &[],
+            pinned(),
         );
         assert!(!report.ok, "observed={report:?}");
         assert!(report.render_human().contains("pin error"));
+    }
+
+    /// A passing RAFT-VENDOR verdict, so a test judges only the tools it probes.
+    fn pinned() -> CodegenPin {
+        CodegenPin {
+            ok: true,
+            protoc: Some("libprotoc 3.9.0 (sha256 30c6)".to_owned()),
+            files_verified: 72,
+            violations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_broken_codegen_pin_fails_doctor_and_says_why() {
+        let broken = CodegenPin {
+            ok: false,
+            protoc: None,
+            files_verified: 0,
+            violations: vec!["vendor/raft/raft/src/raft.rs: content differs".to_owned()],
+        };
+        let report = run(Path::new("."), Ok("1.99.0".to_owned()), &[], broken);
+        assert!(
+            !report.ok,
+            "rule: a broken codegen pin fails doctor; observed={report:?}"
+        );
+        let human = report.render_human();
+        assert!(
+            human.contains("BROKEN   raft-codegen vendor/raft/raft/src/raft.rs")
+                && human.ends_with(
+                    "doctor: FAILED (vendored Raft codegen pin broken (./dev check RAFT-VENDOR))"
+                ),
+            "rule: the failure names the file and the check to re-run, and no empty tool \
+             list; human={human}"
+        );
+        let passing = run(Path::new("."), Ok("1.99.0".to_owned()), &[], pinned());
+        assert!(passing.ok, "observed={passing:?}");
+        assert!(
+            passing
+                .render_human()
+                .contains("raft-codegen libprotoc 3.9.0 (sha256 30c6) pinned; 72 vendored"),
+            "human={}",
+            passing.render_human()
+        );
     }
 
     #[test]

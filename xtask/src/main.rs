@@ -27,6 +27,7 @@ mod steplog;
 mod test_support;
 mod tiers;
 mod tracker;
+mod vendor;
 mod workspace;
 
 use std::env;
@@ -162,7 +163,11 @@ fn run(cli: Cli) -> Status {
     match cli.command {
         Command::Doctor => {
             let pin = workspace::pinned_toolchain(&root).map_err(|err| err.to_string());
-            output::emit(format, &doctor::run(&root, pin, doctor::TOOLS))
+            let raft_codegen = vendor::codegen_pin(&root);
+            output::emit(
+                format,
+                &doctor::run(&root, pin, doctor::TOOLS, raft_codegen),
+            )
         }
         Command::Check { ids, case } => {
             let report = check::run(

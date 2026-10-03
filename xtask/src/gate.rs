@@ -41,10 +41,10 @@ use crate::process::{self, Captured};
 use crate::steplog::{self, StepLog};
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.gate/v2";
+pub const SCHEMA: &str = "keyval.dev.gate/v3";
 
 /// Schema identifier of a receipt file.
-pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v2";
+pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v3";
 
 /// T0 time budget: target and alert threshold (§10.10). A run is never cut off.
 const TARGET: Duration = Duration::from_mins(2);
@@ -174,7 +174,7 @@ pub struct StepResult {
 }
 
 /// Inputs hashed into the build ID (§10.2 run manifest: tree, toolchain, target,
-/// lockfile, features and Raft patch).
+/// lockfile, features and Raft patch; T-3: generated-code provenance).
 #[derive(Debug, Serialize)]
 pub struct BuildInputs {
     /// `rustc -vV` output.
@@ -189,6 +189,9 @@ pub struct BuildInputs {
     pub features: &'static str,
     /// SHA-256 of `third_party/raft.patch`, once W02 adds it.
     pub raft_patch_sha256: Option<String>,
+    /// SHA-256 of `vendor/raft/VENDOR.toml`: the vendored Raft library's per-file hashes
+    /// and its pinned code generation (protoc, generator and runtime versions; W02.1).
+    pub raft_vendor_sha256: Option<String>,
 }
 
 /// Tools that shaped the run.
@@ -238,7 +241,7 @@ pub struct Budget {
     pub over_alert: bool,
 }
 
-/// A gate receipt (`keyval.dev.receipt/v2`): exactly what ran, on exactly which tree.
+/// A gate receipt (`keyval.dev.receipt/v3`): exactly what ran, on exactly which tree.
 ///
 /// v2 adds `tools.cargo_target_dir` (br-gate-shared-target-dir-dtqu) and
 /// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g).
@@ -291,7 +294,7 @@ pub struct StepLogSummary {
     pub dropped: usize,
 }
 
-/// The `./dev gate` report (`keyval.dev.gate/v2`, which embeds a v2 receipt).
+/// The `./dev gate` report (`keyval.dev.gate/v3`, which embeds a v3 receipt).
 #[derive(Debug, Serialize)]
 pub struct GateReport {
     /// Schema identifier.
@@ -1121,20 +1124,24 @@ fn build_inputs(root: &Path) -> Result<BuildInputs, String> {
         raft_patch_sha256: fs::read(root.join("third_party/raft.patch"))
             .ok()
             .map(|patch| sha256_hex(&patch)),
+        raft_vendor_sha256: fs::read(root.join(crate::vendor::DIR).join(crate::vendor::MANIFEST))
+            .ok()
+            .map(|manifest| sha256_hex(&manifest)),
     })
 }
 
 /// `sha256:` of the tree ID and every build input, in a fixed, labelled order.
 pub fn build_id(tree_id: &str, inputs: &BuildInputs) -> String {
     let canonical = format!(
-        "keyval-build-id/v1\ntree {tree_id}\nrustc {}\ncargo {}\ntarget {}\nlockfile {}\n\
-         features {}\nraft-patch {}\n",
+        "keyval-build-id/v2\ntree {tree_id}\nrustc {}\ncargo {}\ntarget {}\nlockfile {}\n\
+         features {}\nraft-patch {}\nraft-vendor {}\n",
         inputs.rustc,
         inputs.cargo,
         inputs.target,
         inputs.lockfile_sha256,
         inputs.features,
         inputs.raft_patch_sha256.as_deref().unwrap_or("none"),
+        inputs.raft_vendor_sha256.as_deref().unwrap_or("none"),
     );
     format!("sha256:{}", sha256_hex(canonical.as_bytes()))
 }
@@ -1492,6 +1499,20 @@ mod tests {
     }
 
     #[test]
+    fn the_build_inputs_record_the_vendored_raft_manifest() {
+        let root = crate::test_support::workspace_root();
+        let inputs = build_inputs(&root).unwrap();
+        let manifest =
+            fs::read(root.join(crate::vendor::DIR).join(crate::vendor::MANIFEST)).unwrap();
+        assert_eq!(
+            inputs.raft_vendor_sha256.as_deref(),
+            Some(sha256_hex(&manifest).as_str()),
+            "rule: the build ID covers the vendored Raft library's code-generation \
+             provenance (T-3, W02.1); inputs={inputs:#?}"
+        );
+    }
+
+    #[test]
     fn the_build_id_covers_every_input() {
         let inputs = || BuildInputs {
             rustc: "rustc 1.99.0".to_owned(),
@@ -1500,6 +1521,7 @@ mod tests {
             lockfile_sha256: "aa".to_owned(),
             features: "all",
             raft_patch_sha256: None,
+            raft_vendor_sha256: None,
         };
         let base = build_id(TREE, &inputs());
         assert_eq!(
@@ -1541,6 +1563,13 @@ mod tests {
                 TREE,
                 &BuildInputs {
                     raft_patch_sha256: Some("cc".to_owned()),
+                    ..inputs()
+                },
+            ),
+            build_id(
+                TREE,
+                &BuildInputs {
+                    raft_vendor_sha256: Some("dd".to_owned()),
                     ..inputs()
                 },
             ),

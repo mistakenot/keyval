@@ -84,6 +84,8 @@ pub enum StaticCheck {
     DepLedger,
     /// AGENTS.md carries every PLAN.md §11.5 rule verbatim (W01).
     AgentsRules,
+    /// The vendored Raft library matches VENDOR.toml and its codegen stays pinned (W02).
+    RaftVendor,
 }
 
 impl StaticCheck {
@@ -95,6 +97,7 @@ impl StaticCheck {
             Self::DepRule => crate::tiers::check_dependency_rule(root),
             Self::DepLedger => crate::ledger::check_ledger(root),
             Self::AgentsRules => crate::agents::check_agents_rules(root),
+            Self::RaftVendor => crate::vendor::check_vendor(root),
         }
     }
 
@@ -106,6 +109,7 @@ impl StaticCheck {
             Self::DepRule => "DEP-RULE",
             Self::DepLedger => "DEP-LEDGER",
             Self::AgentsRules => "AGENTS-RULES",
+            Self::RaftVendor => "RAFT-VENDOR",
         }
     }
 
@@ -117,6 +121,7 @@ impl StaticCheck {
             Self::DepRule => "crate(s)+edge(s)",
             Self::DepLedger => "edge(s)+row(s)",
             Self::AgentsRules => "rule(s)+statement(s)",
+            Self::RaftVendor => "file(s)+assertion(s)",
         }
     }
 }
@@ -256,6 +261,17 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::AgentsRules),
         min_cases: 18,
+    },
+    CheckDef {
+        id: "RAFT-VENDOR",
+        summary: "vendor/raft matches VENDOR.toml file for file, and raft-proto's code \
+                  generation stays pinned (vendored output, no build script)",
+        kind: Kind::Static,
+        covers: &["P4", "T-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::RaftVendor),
+        min_cases: 83,
     },
     CheckDef {
         id: "DEV-GATE",
