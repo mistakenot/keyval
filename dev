@@ -14,10 +14,12 @@
 # binaries. The shared base (CARGO_TARGET_DIR, else <root>/target) is kept in
 # KEYVAL_TARGET_BASE, and each checkout gets keyval-checkout-<first 16 hex digits of the
 # SHA-256 of its real path> under it. xtask's cargo::checkout_target_dir computes the same
-# name for the checkouts it materialises itself.
+# name for the checkouts it materialises itself. The directory's keyval-checkout.path
+# names the checkout, so ./dev prune can remove it once the checkout is gone (Q9).
 set -eu
 KEYVAL_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 KEYVAL_TARGET_BASE=${KEYVAL_TARGET_BASE:-${CARGO_TARGET_DIR:-$KEYVAL_ROOT/target}}
 CARGO_TARGET_DIR=$KEYVAL_TARGET_BASE/keyval-checkout-$(printf '%s' "$KEYVAL_ROOT" | sha256sum | cut -c1-16)
 export KEYVAL_ROOT KEYVAL_TARGET_BASE CARGO_TARGET_DIR
+{ mkdir -p "$CARGO_TARGET_DIR" && printf '%s\n' "$KEYVAL_ROOT" >"$CARGO_TARGET_DIR/keyval-checkout.path"; } 2>/dev/null || true
 exec cargo run --quiet --locked --manifest-path "$KEYVAL_ROOT/xtask/Cargo.toml" -- "$@"

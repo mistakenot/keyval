@@ -304,9 +304,11 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, LINT-PROBES, LINT-ALLOWS,
-  LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
-  check's minimum case count fail (P10). A failure prints its exact re-run command.
+  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, DEV-PRUNE, LINT-PROBES,
+  LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, SPEC,
+  WORKGRAPH, DEV-BEADS, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases
+  and runs below the check's minimum case count fail (P10). A failure prints its exact
+  re-run command.
   Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
   Every check has exactly one `// check: <ID>` marker in code.
 - `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit
@@ -334,6 +336,15 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   - Each selector runs through the tree's own `./dev`, so the judge is that tree's
     xtask, never the shared checkout's. A check that does not exist in the tree fails.
   - Each new accept tree is a cold build: about 1 minute and about 470 MB of target dir.
+- `./dev prune [--dry-run]` — the `.local/` retention rule (§10.10, Q9) for accept
+  trees, and the only sanctioned deleter of generated `.local/` artifacts:
+  - keeps the newest 5 accept trees, and every tree with a failing or interrupted run
+    or whose lock is held; removes the rest with their per-checkout target dirs;
+  - removes a `keyval-checkout-*` target dir whose checkout is gone, as named by the
+    `keyval-checkout.path` marker the `./dev` launcher writes into it; a dir without a
+    valid marker is only reported;
+  - logs every removal (or, with `--dry-run`, every removal it would make) in a
+    `keyval.dev.prune/v1` receipt. Gate-run retention comes with W46.
 - `./dev gate fast` — the T0 gate in its fixed bootstrap form (§10.10): fmt, clippy with
   denied warnings, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests,
   and UBS on the exact changed files (all first-party sources if no source changed).

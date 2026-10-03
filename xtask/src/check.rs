@@ -388,6 +388,20 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 12,
     },
     CheckDef {
+        id: "DEV-PRUNE",
+        summary: "./dev prune keeps the newest accept trees and every failing run, removes \
+                  the rest with their target dirs, and logs every removal",
+        kind: Kind::TestGroup,
+        covers: &["CD-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["prune::", "cargo::"],
+        },
+        min_cases: 9,
+    },
+    CheckDef {
         id: "INVARIANT",
         summary: "invariant! holds silently and panics with its ID and context (CD-7)",
         kind: Kind::TestGroup,

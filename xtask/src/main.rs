@@ -22,6 +22,7 @@ mod lint;
 mod metadata;
 mod output;
 mod process;
+mod prune;
 mod registry;
 mod spec;
 mod steplog;
@@ -122,6 +123,13 @@ enum Command {
         /// The committed tree to judge: the tree of the commit that carried the work.
         #[arg(long, value_name = "TREE_ID")]
         tree: String,
+    },
+    /// Apply the .local/ retention rule (§10.10, Q9): keep the newest accept trees and
+    /// every failing run, remove the rest with their target dirs, log it in a receipt.
+    Prune {
+        /// Report what would be removed, and remove nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Run a gate tier on an exact tree and write a receipt (§10.10).
     Gate {
@@ -253,6 +261,7 @@ fn run(cli: Cli) -> Status {
             }
         }
         Command::Beads { action } => run_beads(&root, format, action),
+        Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
             let report = accept::run(
@@ -277,6 +286,17 @@ fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {
             output::emit(format, &beads::run(root, &graph, dry_run))
         }
     }
+}
+
+/// `./dev prune`: the `.local/` retention rule (§10.10, Q9) under this checkout's target
+/// base.
+fn run_prune(root: &Path, format: Format, dry_run: bool) -> Status {
+    let layout = prune::Layout {
+        root: root.to_path_buf(),
+        base: cargo::target_base(root),
+        artifacts: root.join("artifacts"),
+    };
+    output::emit(format, &prune::run(&layout, dry_run))
 }
 
 fn run_gate(

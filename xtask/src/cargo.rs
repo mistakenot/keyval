@@ -46,6 +46,11 @@ pub fn target_base(root: &Path) -> PathBuf {
         .map_or_else(|| root.join("target"), PathBuf::from)
 }
 
+/// The file in each per-checkout target directory that names its checkout's real path,
+/// one line. The `./dev` launcher writes it on every run, so `./dev prune` can tell when
+/// a checkout is gone and its target directory is an orphan (Q9).
+pub const CHECKOUT_MARKER: &str = "keyval-checkout.path";
+
 /// The target directory of the checkout at `checkout`: `keyval-checkout-<hash>` under
 /// `base`, where `<hash>` is the first 16 hex digits of the SHA-256 of the checkout's
 /// real path. Exactly what the `./dev` launcher exports, so every spelling of one
@@ -53,12 +58,18 @@ pub fn target_base(root: &Path) -> PathBuf {
 pub fn checkout_target_dir(base: &Path, checkout: &Path) -> Result<PathBuf, String> {
     let real = fs::canonicalize(checkout)
         .map_err(|err| format!("cannot resolve {}: {err}", checkout.display()))?;
+    Ok(base.join(checkout_dir_name(&real)))
+}
+
+/// The target directory name of the checkout whose real path is `real`, which must
+/// already be resolved: [`checkout_target_dir`] resolves it, and a marker records it.
+pub fn checkout_dir_name(real: &Path) -> String {
     let digest = Sha256::digest(real.as_os_str().as_bytes());
     let hash = digest.iter().take(8).fold(String::new(), |mut hex, byte| {
         let _ = write!(hex, "{byte:02x}");
         hex
     });
-    Ok(base.join(format!("keyval-checkout-{hash}")))
+    format!("keyval-checkout-{hash}")
 }
 
 /// How cargo is launched.
@@ -283,6 +294,18 @@ mod tests {
             expected(&a, &shared),
             "rule: the launcher and cargo::checkout_target_dir agree"
         );
+        let real_a = fs::canonicalize(&a).unwrap();
+        assert_eq!(
+            fs::read_to_string(Path::new(&from_a[2]).join(CHECKOUT_MARKER)).unwrap(),
+            format!("{}\n", real_a.display()),
+            "rule: the launcher names the checkout in its target dir, so ./dev prune can \
+             tell when it is gone (Q9)"
+        );
+        assert_eq!(
+            Path::new(&from_a[2]).file_name().unwrap().to_string_lossy(),
+            checkout_dir_name(&real_a),
+            "rule: the marker's path hashes to the directory's own name"
+        );
         let from_b = launcher_env(&b, &fake_bin, &[(TARGET_DIR_ENV, &shared_str)]);
         assert_eq!(from_b, expected(&b, &shared));
         assert_ne!(
@@ -302,7 +325,6 @@ mod tests {
             "rule: nesting never compounds"
         );
         let unset = launcher_env(&a, &fake_bin, &[]);
-        let real_a = fs::canonicalize(&a).unwrap();
         assert_eq!(
             unset,
             expected(&a, &real_a.join("target")),
