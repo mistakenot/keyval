@@ -380,3 +380,15 @@ tier = "T0"
 run = "./dev check SPIKE-DETERMINISM"
 min_cases = 301
 status = "implemented"
+
+[[check]]
+id = "SIM-SCHEDULER"
+summary = "the simulator orders events by virtual time, seeded tie priority and insertion sequence; entropy streams split per subsystem and per node incarnation never shift each other; an exhausted event budget is incomplete (§10.2)"
+kind = "test_group"
+covers = ["P4", "T-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check SIM-SCHEDULER"
+min_cases = 15
+status = "implemented"

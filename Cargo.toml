@@ -7,6 +7,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/sim",
     "crates/types",
     "xtask",
     "xtask/probes/deterministic",

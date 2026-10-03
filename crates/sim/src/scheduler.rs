@@ -1,0 +1,538 @@
+//! The discrete-event scheduler (PLAN.md §10.2): one thread, one queue, events ordered
+//! by `(virtual_time, seeded_tie_priority, insertion_sequence)`.
+//!
+//! The seeded tie priority varies the order of simultaneous events between seeds, so
+//! runs explore different interleavings; the insertion sequence makes the order total,
+//! so one seed always gives one order. The queue is a `BTreeMap` keyed by that triple:
+//! no hashing and no unordered iteration (§7.14).
+//!
+//! An event's causal parent is the event whose handling scheduled it: the one dispatched
+//! last. The run's initial events have none.
+//!
+//! A run has an event budget (1,000,000 per scenario manifest, §5 limits). Exhausting it
+//! with events still pending makes the run incomplete, which fails (P10); an incomplete
+//! run is never reported as a pass.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+use types::{Incarnation, NodeId};
+
+use crate::entropy::SplitMix64;
+
+/// Simulated time: virtual microseconds since the run started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VirtualTime(u64);
+
+impl VirtualTime {
+    /// The start of every run.
+    pub const ZERO: Self = Self(0);
+
+    /// `micros` virtual microseconds after the start.
+    #[must_use]
+    pub const fn from_micros(micros: u64) -> Self {
+        Self(micros)
+    }
+
+    /// Virtual microseconds since the start.
+    #[must_use]
+    pub const fn as_micros(self) -> u64 {
+        self.0
+    }
+}
+
+/// An event's insertion sequence: unique within a run and increasing in scheduling
+/// order. It names the event in causal-parent links and breaks the last ties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EventSeq(u64);
+
+impl EventSeq {
+    /// The sequence number (the run's first event is 0).
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// A node in one incarnation: the node an event concerns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NodeIncarnation {
+    /// The node.
+    pub node: NodeId,
+    /// Its incarnation when the event was scheduled.
+    pub incarnation: Incarnation,
+}
+
+/// A dispatched event: when it fired, its place in the order, what caused it, the node
+/// incarnation it concerns, and what happens (§10.2 event model).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Event<E> {
+    /// When it fired.
+    pub time: VirtualTime,
+    /// Its seeded tie priority among events at the same time.
+    pub tie: u64,
+    /// Its insertion sequence.
+    pub seq: EventSeq,
+    /// The event whose handling scheduled it; `None` for the run's initial events.
+    pub parent: Option<EventSeq>,
+    /// The node incarnation it concerns, where relevant.
+    pub node: Option<NodeIncarnation>,
+    /// What happens.
+    pub payload: E,
+}
+
+/// How many events a run may dispatch (§5 limits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventBudget(u64);
+
+impl EventBudget {
+    /// The budget per scenario manifest: 1,000,000 events.
+    pub const DEFAULT: Self = Self(1_000_000);
+
+    /// A budget of `events` events.
+    #[must_use]
+    pub const fn new(events: u64) -> Self {
+        Self(events)
+    }
+
+    /// The number of events.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// An event scheduled before the current virtual time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InThePast {
+    /// The scheduler's current time.
+    pub now: VirtualTime,
+    /// The time the event was scheduled for.
+    pub at: VirtualTime,
+}
+
+impl fmt::Display for InThePast {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "an event at {} µs cannot be scheduled at virtual time {} µs",
+            self.at.as_micros(),
+            self.now.as_micros()
+        )
+    }
+}
+
+impl Error for InThePast {}
+
+/// What [`Scheduler::step`] found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step<E> {
+    /// The next event, now dispatched.
+    Event(Event<E>),
+    /// The queue is empty: the run completed within its budget.
+    Complete {
+        /// Events dispatched.
+        events: u64,
+    },
+    /// The budget is spent and events are still pending: the run is incomplete, which
+    /// fails (P10).
+    Incomplete {
+        /// Events dispatched.
+        events: u64,
+        /// Events never dispatched.
+        pending: usize,
+    },
+}
+
+/// The queue order: virtual time, then seeded tie priority, then insertion sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Order {
+    time: VirtualTime,
+    tie: u64,
+    seq: EventSeq,
+}
+
+/// A queued event's record, apart from its order.
+#[derive(Debug)]
+struct Pending<E> {
+    parent: Option<EventSeq>,
+    node: Option<NodeIncarnation>,
+    payload: E,
+}
+
+/// The single-threaded discrete-event scheduler.
+#[derive(Debug)]
+pub struct Scheduler<E> {
+    queue: BTreeMap<Order, Pending<E>>,
+    ties: SplitMix64,
+    budget: EventBudget,
+    now: VirtualTime,
+    next_seq: u64,
+    current: Option<EventSeq>,
+    dispatched: u64,
+}
+
+impl<E> Scheduler<E> {
+    /// An empty scheduler at virtual time zero. Its tie priorities come from `ties`, the
+    /// run's [`Subsystem::Scheduler`](crate::Subsystem::Scheduler) stream.
+    #[must_use]
+    pub const fn new(ties: SplitMix64, budget: EventBudget) -> Self {
+        Self {
+            queue: BTreeMap::new(),
+            ties,
+            budget,
+            now: VirtualTime::ZERO,
+            next_seq: 0,
+            current: None,
+            dispatched: 0,
+        }
+    }
+
+    /// The current virtual time: that of the event dispatched last.
+    #[must_use]
+    pub const fn now(&self) -> VirtualTime {
+        self.now
+    }
+
+    /// Events dispatched so far.
+    #[must_use]
+    pub const fn dispatched(&self) -> u64 {
+        self.dispatched
+    }
+
+    /// Events scheduled but not yet dispatched.
+    #[must_use]
+    pub fn pending(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Schedules `payload` at `at`, concerning `node` if any. Its causal parent is the
+    /// event dispatched last; it draws its tie priority from the scheduler stream.
+    ///
+    /// # Errors
+    ///
+    /// [`InThePast`] if `at` is before [`Self::now`]; nothing is scheduled and no
+    /// randomness is drawn.
+    pub fn schedule(
+        &mut self,
+        at: VirtualTime,
+        node: Option<NodeIncarnation>,
+        payload: E,
+    ) -> Result<EventSeq, InThePast> {
+        if at < self.now {
+            return Err(InThePast { now: self.now, at });
+        }
+        let seq = EventSeq(self.next_seq);
+        self.next_seq += 1;
+        let order = Order {
+            time: at,
+            tie: self.ties.next_u64(),
+            seq,
+        };
+        let pending = Pending {
+            parent: self.current,
+            node,
+            payload,
+        };
+        self.queue.insert(order, pending);
+        Ok(seq)
+    }
+
+    /// Dispatches the next event in order, advancing virtual time to it, or reports that
+    /// the run is complete or has exhausted its budget.
+    #[must_use]
+    pub fn step(&mut self) -> Step<E> {
+        if self.queue.is_empty() {
+            return Step::Complete {
+                events: self.dispatched,
+            };
+        }
+        if self.dispatched >= self.budget.get() {
+            return Step::Incomplete {
+                events: self.dispatched,
+                pending: self.queue.len(),
+            };
+        }
+        let Some((order, pending)) = self.queue.pop_first() else {
+            return Step::Complete {
+                events: self.dispatched,
+            };
+        };
+        self.now = order.time;
+        self.current = Some(order.seq);
+        self.dispatched += 1;
+        Step::Event(Event {
+            time: order.time,
+            tie: order.tie,
+            seq: order.seq,
+            parent: pending.parent,
+            node: pending.node,
+            payload: pending.payload,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // check: SIM-SCHEDULER
+    use super::*;
+    use crate::entropy::{MasterSeed, Subsystem};
+
+    fn scheduler(seed: u64, budget: EventBudget) -> Scheduler<u32> {
+        Scheduler::new(MasterSeed::new(seed).stream(Subsystem::Scheduler), budget)
+    }
+
+    const fn at(micros: u64) -> VirtualTime {
+        VirtualTime::from_micros(micros)
+    }
+
+    fn on(node: u64, incarnation: u64) -> NodeIncarnation {
+        NodeIncarnation {
+            node: NodeId::new(node).unwrap(),
+            incarnation: Incarnation::new(incarnation),
+        }
+    }
+
+    /// Dispatches every event; returns them and the final step.
+    fn drain(scheduler: &mut Scheduler<u32>) -> (Vec<Event<u32>>, Step<u32>) {
+        let mut events = Vec::new();
+        loop {
+            match scheduler.step() {
+                Step::Event(event) => events.push(event),
+                done => return (events, done),
+            }
+        }
+    }
+
+    fn payloads(events: &[Event<u32>]) -> Vec<u32> {
+        events.iter().map(|event| event.payload).collect()
+    }
+
+    #[test]
+    fn events_fire_in_virtual_time_order() {
+        let mut s = scheduler(1, EventBudget::DEFAULT);
+        for (time, payload) in [(30, 3), (10, 1), (20, 2)] {
+            s.schedule(at(time), None, payload).unwrap();
+        }
+        let (events, done) = drain(&mut s);
+        assert_eq!(payloads(&events), [1, 2, 3]);
+        assert_eq!(
+            s.now(),
+            at(30),
+            "rule: time advances to the event dispatched last"
+        );
+        assert_eq!(done, Step::Complete { events: 3 });
+    }
+
+    #[test]
+    fn simultaneous_events_order_by_seeded_priority_and_vary_between_seeds() {
+        let order = |seed| {
+            let mut s = scheduler(seed, EventBudget::DEFAULT);
+            for payload in 0..6 {
+                s.schedule(at(100), None, payload).unwrap();
+            }
+            let (events, _) = drain(&mut s);
+            assert!(
+                events.windows(2).all(|pair| pair[0].tie <= pair[1].tie),
+                "rule: simultaneous events dispatch in tie-priority order"
+            );
+            payloads(&events)
+        };
+        assert_eq!(order(11), order(11), "rule: one seed gives one order");
+        let orders: Vec<Vec<u32>> = (0..16).map(order).collect();
+        assert!(
+            orders.iter().any(|other| *other != orders[0]),
+            "rule: the seeded tie priority varies simultaneous-event order between seeds"
+        );
+    }
+
+    #[test]
+    fn the_insertion_sequence_makes_the_order_total() {
+        let first = Order {
+            time: at(5),
+            tie: 7,
+            seq: EventSeq(1),
+        };
+        let second = Order {
+            time: at(5),
+            tie: 7,
+            seq: EventSeq(2),
+        };
+        assert!(
+            first < second,
+            "rule: equal time and tie fall back to insertion order"
+        );
+        assert!(
+            Order {
+                time: at(4),
+                tie: u64::MAX,
+                seq: EventSeq(9),
+            } < first,
+            "rule: virtual time orders first"
+        );
+        assert!(
+            Order {
+                time: at(5),
+                tie: 6,
+                seq: EventSeq(9),
+            } < first,
+            "rule: then the tie priority"
+        );
+    }
+
+    #[test]
+    fn records_carry_time_sequence_parent_and_incarnation() {
+        let mut s = scheduler(2, EventBudget::DEFAULT);
+        let boot = s.schedule(at(0), Some(on(1, 1)), 10).unwrap();
+        let tick = s.schedule(at(50), Some(on(2, 3)), 20).unwrap();
+        assert!(
+            boot < tick,
+            "rule: insertion sequences grow in scheduling order"
+        );
+        let Step::Event(first) = s.step() else {
+            panic!("expected the boot event");
+        };
+        assert_eq!(
+            (
+                first.time,
+                first.seq,
+                first.parent,
+                first.node,
+                first.payload
+            ),
+            (at(0), boot, None, Some(on(1, 1)), 10),
+            "rule: an initial event has no causal parent"
+        );
+        let child = s.schedule(at(20), None, 30).unwrap();
+        let (events, _) = drain(&mut s);
+        assert_eq!(payloads(&events), [30, 20]);
+        assert_eq!(
+            (events[0].seq, events[0].parent, events[0].node),
+            (child, Some(boot), None),
+            "rule: the causal parent is the event whose handling scheduled it"
+        );
+        assert_eq!(events[1].node, Some(on(2, 3)));
+    }
+
+    #[test]
+    fn scheduling_into_the_past_is_refused() {
+        let mut s = scheduler(3, EventBudget::DEFAULT);
+        s.schedule(at(100), None, 1).unwrap();
+        assert!(matches!(s.step(), Step::Event(_)));
+        assert_eq!(
+            s.schedule(at(99), None, 2),
+            Err(InThePast {
+                now: at(100),
+                at: at(99),
+            })
+        );
+        assert_eq!(s.pending(), 0, "rule: a refused event is not queued");
+        assert!(
+            s.schedule(at(100), None, 3).is_ok(),
+            "rule: the current time is not the past"
+        );
+    }
+
+    #[test]
+    fn exhausting_the_budget_with_events_pending_is_incomplete() {
+        let mut s = scheduler(4, EventBudget::new(3));
+        for payload in 0..5 {
+            s.schedule(at(u64::from(payload)), None, payload).unwrap();
+        }
+        let (events, done) = drain(&mut s);
+        assert_eq!(payloads(&events), [0, 1, 2]);
+        assert_eq!(
+            done,
+            Step::Incomplete {
+                events: 3,
+                pending: 2,
+            },
+            "rule: an exhausted budget with work left is incomplete, never a pass (P10)"
+        );
+        assert_eq!(
+            s.step(),
+            Step::Incomplete {
+                events: 3,
+                pending: 2,
+            },
+            "rule: nothing more is dispatched"
+        );
+        assert_eq!(s.dispatched(), 3);
+    }
+
+    #[test]
+    fn draining_within_the_budget_is_complete() {
+        let mut s = scheduler(5, EventBudget::new(3));
+        for payload in 0..3 {
+            s.schedule(at(1), None, payload).unwrap();
+        }
+        let (events, done) = drain(&mut s);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            done,
+            Step::Complete { events: 3 },
+            "rule: spending the whole budget with nothing pending is complete"
+        );
+    }
+
+    #[test]
+    fn the_default_budget_is_one_million_events() {
+        assert_eq!(EventBudget::DEFAULT.get(), 1_000_000, "rule: §5 limits");
+    }
+
+    #[test]
+    fn inspecting_the_scheduler_draws_no_randomness() {
+        let mut observed = scheduler(6, EventBudget::DEFAULT);
+        let mut untouched = scheduler(6, EventBudget::DEFAULT);
+        for payload in 0..4 {
+            observed.schedule(at(10), None, payload).unwrap();
+            untouched.schedule(at(10), None, payload).unwrap();
+            for _ in 0..100 {
+                let _ = (observed.now(), observed.pending(), observed.dispatched());
+            }
+        }
+        assert_eq!(
+            drain(&mut observed),
+            drain(&mut untouched),
+            "rule: observing a run never consumes randomness (§10.2)"
+        );
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_schedule() {
+        let run = |seed| {
+            let mut s = scheduler(seed, EventBudget::new(200));
+            for payload in 0..4 {
+                s.schedule(at(0), Some(on(u64::from(payload) + 1, 1)), payload)
+                    .unwrap();
+            }
+            let mut trace = Vec::new();
+            while let Step::Event(event) = s.step() {
+                trace.push((
+                    event.time,
+                    event.tie,
+                    event.seq,
+                    event.parent,
+                    event.payload,
+                ));
+                let delay = u64::from(event.payload % 3) * 10;
+                s.schedule(
+                    at(event.time.as_micros() + delay),
+                    event.node,
+                    event.payload + 1,
+                )
+                .unwrap();
+            }
+            trace
+        };
+        let first = run(77);
+        assert_eq!(first.len(), 200);
+        assert_eq!(
+            run(77),
+            first,
+            "rule: the same seed and build give the same schedule (P4)"
+        );
+        assert_ne!(run(78), first);
+    }
+}

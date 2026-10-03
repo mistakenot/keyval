@@ -584,6 +584,22 @@ pub const CATALOGUE: &[CheckDef] = &[
         selector: Selector::Static(StaticCheck::SpikeDeterminism),
         min_cases: 301,
     },
+    CheckDef {
+        id: "SIM-SCHEDULER",
+        summary: "the simulator orders events by virtual time, seeded tie priority and \
+                  insertion sequence; entropy streams split per subsystem and per node \
+                  incarnation never shift each other; an exhausted event budget is \
+                  incomplete (§10.2)",
+        kind: Kind::TestGroup,
+        covers: &["P4", "T-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["entropy::", "scheduler::"],
+        },
+        min_cases: 15,
+    },
 ];
 
 /// Outcome of one requested check.
