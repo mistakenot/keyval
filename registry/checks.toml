@@ -416,3 +416,15 @@ tier = "T0"
 run = "./dev check SIM-SCHEDULER"
 min_cases = 15
 status = "implemented"
+
+[[check]]
+id = "CONFIG-RULES"
+summary = "the config parser refuses each §7.10 inconsistency with a specific error, reads only its strict grammar, and accepts config/local.toml and every config/fixtures file (O-5, D-78, D-79)"
+kind = "test_group"
+covers = ["O-5", "CD-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check CONFIG-RULES"
+min_cases = 35
+status = "implemented"

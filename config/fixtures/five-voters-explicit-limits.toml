@@ -1,0 +1,54 @@
+# Accepted fixture: five voters with every optional §7.11 local limit written out at its
+# largest allowed value, which is also its default (D-79).
+
+cluster_id = "keyval-fixture-five-voters"
+protocol_version = 1
+tick_ms = 50
+heartbeat_ticks = 2
+election_min_ticks = 20
+election_max_ticks_exclusive = 40
+write_deadline_ticks = 100
+cli_deadline_ms = 15000
+max_key_bytes = 256
+max_value_bytes = 65536
+max_live_keys = 10000
+max_live_bytes = 67108864
+max_log_entries = 1000000
+max_history_bytes = 3221225472
+max_journal_bytes = 4294967296
+replication_batch_bytes = 262144
+replication_inflight_batches = 16
+peer_send_queue_messages = 64
+peer_send_queue_bytes = 8388608
+max_uncommitted_bytes = 4194304
+max_committed_bytes_per_ready = 1048576
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7301"
+peer_address = "127.0.0.1:8301"
+data_dir = "nodes/five-voters/1"
+
+[[nodes]]
+id = 2
+client_address = "127.0.0.1:7302"
+peer_address = "127.0.0.1:8302"
+data_dir = "nodes/five-voters/2"
+
+[[nodes]]
+id = 3
+client_address = "127.0.0.1:7303"
+peer_address = "127.0.0.1:8303"
+data_dir = "nodes/five-voters/3"
+
+[[nodes]]
+id = 4
+client_address = "127.0.0.1:7304"
+peer_address = "127.0.0.1:8304"
+data_dir = "nodes/five-voters/4"
+
+[[nodes]]
+id = 5
+client_address = "127.0.0.1:7305"
+peer_address = "127.0.0.1:8305"
+data_dir = "nodes/five-voters/5"

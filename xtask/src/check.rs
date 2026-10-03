@@ -651,6 +651,21 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 15,
     },
+    CheckDef {
+        id: "CONFIG-RULES",
+        summary: "the config parser refuses each §7.10 inconsistency with a specific error, reads only \
+                  its strict grammar, and accepts config/local.toml and every \
+                  config/fixtures file (O-5, D-78, D-79)",
+        kind: Kind::TestGroup,
+        covers: &["O-5", "CD-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["config::tests::"],
+        },
+        min_cases: 35,
+    },
 ];
 
 /// Outcome of one requested check.

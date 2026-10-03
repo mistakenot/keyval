@@ -1,0 +1,52 @@
+# Accepted fixture: the fastest timing the rules allow, each at its boundary:
+# - heartbeat 1 tick, the minimum;
+# - election range [5, 10): the minimum is exactly 5 heartbeats, the maximum exactly 2 × it;
+# - write deadline 10 ticks, exactly the election maximum;
+# - CLI deadline 10 ms, exactly write_deadline_ticks × tick_ms.
+# raft-rs then runs with heartbeat_tick 1 and election_tick 5.
+
+cluster_id = "keyval-fixture-fastest-timing"
+protocol_version = 1
+tick_ms = 1
+heartbeat_ticks = 1
+election_min_ticks = 5
+election_max_ticks_exclusive = 10
+write_deadline_ticks = 10
+cli_deadline_ms = 10
+max_key_bytes = 256
+max_value_bytes = 65536
+max_live_keys = 10000
+max_live_bytes = 67108864
+max_log_entries = 1000000
+max_history_bytes = 3221225472
+max_journal_bytes = 4294967296
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7501"
+peer_address = "127.0.0.1:8501"
+data_dir = "nodes/fastest-timing/1"
+
+[[nodes]]
+id = 2
+client_address = "127.0.0.1:7502"
+peer_address = "127.0.0.1:8502"
+data_dir = "nodes/fastest-timing/2"
+
+[[nodes]]
+id = 3
+client_address = "127.0.0.1:7503"
+peer_address = "127.0.0.1:8503"
+data_dir = "nodes/fastest-timing/3"
+
+[[nodes]]
+id = 4
+client_address = "127.0.0.1:7504"
+peer_address = "127.0.0.1:8504"
+data_dir = "nodes/fastest-timing/4"
+
+[[nodes]]
+id = 5
+client_address = "127.0.0.1:7505"
+peer_address = "127.0.0.1:8505"
+data_dir = "nodes/fastest-timing/5"

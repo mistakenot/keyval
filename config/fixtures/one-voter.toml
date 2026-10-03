@@ -1,0 +1,24 @@
+# Accepted fixture: one voter with the production timing and limits (D-45: 1-voter
+# configurations exist for development, tests, probes and demos).
+
+cluster_id = "keyval-fixture-one-voter"
+protocol_version = 1
+tick_ms = 50
+heartbeat_ticks = 2
+election_min_ticks = 20
+election_max_ticks_exclusive = 40
+write_deadline_ticks = 100
+cli_deadline_ms = 15000
+max_key_bytes = 256
+max_value_bytes = 65536
+max_live_keys = 10000
+max_live_bytes = 67108864
+max_log_entries = 1000000
+max_history_bytes = 3221225472
+max_journal_bytes = 4294967296
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7101"
+peer_address = "127.0.0.1:8101"
+data_dir = "nodes/one-voter/1"

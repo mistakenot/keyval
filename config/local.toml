@@ -1,0 +1,55 @@
+# keyval's local cluster: five voters on loopback (PLAN.md §7.10, D-45, O-9).
+#
+# Parsed once by `types::Config::parse` (CD-3, O-5). Every key below is required. The
+# §7.11 local library limits (replication_batch_bytes, replication_inflight_batches,
+# peer_send_queue_messages, peer_send_queue_bytes, max_uncommitted_bytes,
+# max_committed_bytes_per_ready) are optional and default to their §7.11 values (D-79).
+# An unknown key is refused, never ignored.
+
+cluster_id = "keyval-local-v1"
+protocol_version = 1
+tick_ms = 50
+heartbeat_ticks = 2
+election_min_ticks = 20
+election_max_ticks_exclusive = 40
+write_deadline_ticks = 100
+cli_deadline_ms = 15000
+max_key_bytes = 256
+max_value_bytes = 65536
+max_live_keys = 10000
+max_live_bytes = 67108864
+max_log_entries = 1000000
+max_history_bytes = 3221225472   # semantic: replicated byte admission (DM-7)
+max_journal_bytes = 4294967296   # local hard stop, not fingerprinted (DM-7)
+
+# data_dir is relative to this file's directory (§7.7 step 0), i.e. the repo-root .local/.
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7001"
+peer_address = "127.0.0.1:8001"
+data_dir = "../.local/nodes/1"
+
+[[nodes]]
+id = 2
+client_address = "127.0.0.1:7002"
+peer_address = "127.0.0.1:8002"
+data_dir = "../.local/nodes/2"
+
+[[nodes]]
+id = 3
+client_address = "127.0.0.1:7003"
+peer_address = "127.0.0.1:8003"
+data_dir = "../.local/nodes/3"
+
+[[nodes]]
+id = 4
+client_address = "127.0.0.1:7004"
+peer_address = "127.0.0.1:8004"
+data_dir = "../.local/nodes/4"
+
+[[nodes]]
+id = 5
+client_address = "127.0.0.1:7005"
+peer_address = "127.0.0.1:8005"
+data_dir = "../.local/nodes/5"

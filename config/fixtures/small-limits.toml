@@ -1,0 +1,46 @@
+# Accepted fixture: a capacity-test profile with tiny limits (DM-6, DM-7), each sitting
+# exactly on its rule's boundary:
+# - max_journal_bytes = ⌈1.25 × 4096⌉ + 100 × 64 + 64 MiB = 67120384, the margin
+#   formula's minimum (the same formula applies to small limits, §7.10);
+# - replication_inflight_batches × replication_batch_bytes = peer_send_queue_bytes;
+# - max_uncommitted_bytes = replication_batch_bytes (raft-rs needs >=).
+
+cluster_id = "keyval-fixture-small-limits"
+protocol_version = 1
+tick_ms = 50
+heartbeat_ticks = 2
+election_min_ticks = 20
+election_max_ticks_exclusive = 40
+write_deadline_ticks = 100
+cli_deadline_ms = 15000
+max_key_bytes = 16
+max_value_bytes = 64
+max_live_keys = 8
+max_live_bytes = 1024
+max_log_entries = 100
+max_history_bytes = 4096
+max_journal_bytes = 67120384
+replication_batch_bytes = 1024
+replication_inflight_batches = 1
+peer_send_queue_messages = 1
+peer_send_queue_bytes = 1024
+max_uncommitted_bytes = 1024
+max_committed_bytes_per_ready = 1
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7401"
+peer_address = "127.0.0.1:8401"
+data_dir = "nodes/small-limits/1"
+
+[[nodes]]
+id = 2
+client_address = "127.0.0.1:7402"
+peer_address = "127.0.0.1:8402"
+data_dir = "nodes/small-limits/2"
+
+[[nodes]]
+id = 3
+client_address = "127.0.0.1:7403"
+peer_address = "127.0.0.1:8403"
+data_dir = "nodes/small-limits/3"

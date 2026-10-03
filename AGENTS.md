@@ -317,9 +317,9 @@ output only together with its schema, and bump the version when the change break
   REGISTRY-FIXTURES, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE,
   DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT,
   NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES,
-  SPIKE-DETERMINISM, SIM-SCHEDULER. Unknown IDs, zero-case selections, `#[ignore]`d cases
-  and runs below the check's minimum case count fail (P10). A failure prints its exact
-  re-run command.
+  SPIKE-DETERMINISM, SIM-SCHEDULER, CONFIG-RULES. Unknown IDs, zero-case selections,
+  `#[ignore]`d cases and runs below the check's minimum case count fail (P10). A failure
+  prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
   REGISTRY-FILES fails (rule 12). W05.4 makes `./dev gate fast` run the file's

@@ -38,6 +38,12 @@
 //!   [`Entropy`], [`JournalRead`] and [`DataDir`]; and [`Consensus`] isolates the Raft
 //!   library, so no library type crosses it.
 //!
+//! - **Config** (O-5, CD-3, §7.10): [`Config::parse`] reads the one static config file
+//!   with a strict in-crate reader and refuses every §7.10 inconsistency with a specific
+//!   [`ConfigError`]. Each numeric key's allowed range is declared once, in
+//!   [`ConfigParam`], and [`ConsensusSettings`] carry the consensus library's settings
+//!   in core-owned types.
+//!
 //! This crate also owns [`invariant!`], the project's CD-7 assertion macro and the only
 //! sanctioned panic in first-party production code (CD-8).
 //!
@@ -47,6 +53,7 @@
 //! (checks LINT-TIERS and LINT-PROBES).
 
 mod client;
+mod config;
 mod consensus;
 mod counts;
 mod data;
@@ -65,6 +72,13 @@ mod telemetry;
 pub use client::{
     AttemptId, ClientOp, HistoryLimit, Refusal, Response, ScanItem, ScanPage, ScanRange,
     ScanRangeError, ServedBy,
+};
+pub use config::{
+    AddressProblem, COMMAND_ENVELOPE_BOUND, Config, ConfigError, ConfigParam, ConfigParamClass,
+    ConfigSyntax, ConfigTable, ConfigValueKind, ConsensusSettings, ConsensusViolation,
+    ENTRY_ENVELOPE_BOUND, FRAME_FIELDS, FRAME_OVERHEAD_BYTES, JOURNAL_PROTOCOL_ALLOWANCE,
+    MAX_COMMAND_BYTES, MAX_CONFIG_BYTES, MAX_FRAME_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES,
+    NodeConfig, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION, ReadMode,
 };
 pub use consensus::{
     Consensus, Entry, EntryPayload, HardState, LightReady, OutboundMessage, Progress, ProposeError,

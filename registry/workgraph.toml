@@ -120,7 +120,7 @@ deps = ["W04"]
 reqs = ["O-5", "O-9", "DUR-8", "CD-3", "CD-9"]
 area = ["types", "config"]
 milestone = "m0"
-accept = []
+accept = ["./dev check CONFIG-RULES"]
 bead = "br-w08-config-fingerprint-limits-70m"
 
 [[item]]

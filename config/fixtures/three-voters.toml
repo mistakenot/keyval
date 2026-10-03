@@ -1,0 +1,37 @@
+# Accepted fixture: three voters with the production timing and limits, and node IDs
+# that are neither consecutive nor in file order, up to the largest valid ID (2^53 − 1,
+# D-77).
+
+cluster_id = "keyval-fixture-three-voters"
+protocol_version = 1
+tick_ms = 50
+heartbeat_ticks = 2
+election_min_ticks = 20
+election_max_ticks_exclusive = 40
+write_deadline_ticks = 100
+cli_deadline_ms = 15000
+max_key_bytes = 256
+max_value_bytes = 65536
+max_live_keys = 10000
+max_live_bytes = 67108864
+max_log_entries = 1000000
+max_history_bytes = 3221225472
+max_journal_bytes = 4294967296
+
+[[nodes]]
+id = 9007199254740991
+client_address = "127.0.0.1:7201"
+peer_address = "127.0.0.1:8201"
+data_dir = "nodes/three-voters/a"
+
+[[nodes]]
+id = 7
+client_address = "[::1]:7202"
+peer_address = "[::1]:8202"
+data_dir = "nodes/three-voters/b"
+
+[[nodes]]
+id = 1
+client_address = "127.0.0.1:7203"
+peer_address = "127.0.0.1:8203"
+data_dir = "nodes/three-voters/c"
