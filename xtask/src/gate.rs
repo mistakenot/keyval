@@ -35,6 +35,7 @@ use crate::lint;
 use crate::metadata;
 use crate::output::Report;
 use crate::process::{self, Captured};
+use crate::steplog::{self, StepLog};
 
 /// Schema identifier of the `--json` report.
 pub const SCHEMA: &str = "keyval.dev.gate/v1";
@@ -242,6 +243,19 @@ pub struct Receipt {
     pub budget: Budget,
     /// Every step, in order.
     pub steps: Vec<StepResult>,
+    /// The step-record log (W01.6 standard).
+    pub step_log: StepLogSummary,
+}
+
+/// Where the step records went, and how many the bound dropped (CD-9).
+#[derive(Debug, Serialize)]
+pub struct StepLogSummary {
+    /// Path of `steps.jsonl`.
+    pub path: Option<String>,
+    /// Records written.
+    pub records: usize,
+    /// Records dropped by the bound or by write errors.
+    pub dropped: usize,
 }
 
 /// The `./dev gate` report (`keyval.dev.gate/v1`).
@@ -267,6 +281,8 @@ pub struct Context<'a> {
     pub artifacts: PathBuf,
     /// How cargo builds run.
     pub cargo: Cargo,
+    /// Whether to echo each step's record to stderr as it finishes.
+    pub progress: bool,
 }
 
 /// Determines the tree to judge. With `asserted`, the caller vouches for the ID and git
@@ -368,9 +384,21 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
     let build_inputs = build_inputs(ctx.root)?;
     let build_id = build_id(&ctx.tree.id, &build_inputs);
     let mut ubs_version = None;
+    // Step records (W01.6 standard) go to stderr as progress and to steps.jsonl next to
+    // the step logs. A gate runs every step, so one run reports every failure.
+    let mut steplog = StepLog::new(
+        &format!("gate {}", tier_name(tier)),
+        Some(&log_dir.join("steps.jsonl")),
+        ctx.progress,
+    )
+    .map_err(|err| format!("cannot create the step log in {}: {err}", log_dir.display()))?;
     let results: Vec<StepResult> = steps
         .iter()
-        .map(|&step| run_step(ctx, step, &log_dir, &mut ubs_version))
+        .map(|&step| {
+            let result = run_step(ctx, step, &log_dir, &mut ubs_version);
+            log_step(&mut steplog, step, &result);
+            result
+        })
         .collect();
     let result = if !results.is_empty() && results.iter().all(|r| r.status == Verdict::Passed) {
         Verdict::Passed
@@ -402,6 +430,11 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
             over_alert: elapsed > ALERT,
         },
         steps: results,
+        step_log: StepLogSummary {
+            path: steplog.path().map(|p| p.display().to_string()),
+            records: steplog.written(),
+            dropped: steplog.dropped(),
+        },
     };
     let receipt_path = receipts.join(format!("gate-{run_id}.json"));
     let json = serde_json::to_string_pretty(&receipt)
@@ -414,6 +447,43 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
         receipt_path: receipt_path.display().to_string(),
         receipt,
     })
+}
+
+fn log_step(steplog: &mut StepLog, step: Step, result: &StepResult) {
+    let expected = format!("passes, examining at least one {}", result.unit);
+    let rerun = match step {
+        Step::Static(check) => format!("./dev check {}", check.id()),
+        Step::Fmt | Step::Clippy | Step::Tests | Step::Ubs => {
+            result.command.clone().unwrap_or_default()
+        }
+    };
+    let observed = match result.status {
+        Verdict::Passed => format!("passed: {} {}", result.cases, result.unit),
+        Verdict::Failed => format!(
+            "failed: {}{}",
+            result.detail.as_deref().unwrap_or("no detail"),
+            result
+                .log
+                .as_deref()
+                .map_or_else(String::new, |log| format!(" (log: {log})"))
+        ),
+    };
+    let record_step = steplog::Step {
+        name: step.id(),
+        action: result.command.as_deref().unwrap_or_else(|| step.id()),
+        expected: &expected,
+        rerun: &rerun,
+    };
+    let observed = match result.status {
+        Verdict::Passed => Ok(observed),
+        Verdict::Failed => Err(observed),
+    };
+    // The verdict lives in the receipt; this record is the step's log line.
+    let _ = steplog.record(
+        record_step,
+        observed,
+        Duration::from_millis(result.duration_ms),
+    );
 }
 
 /// The tier's name as typed on the command line.
@@ -878,6 +948,7 @@ mod tests {
             tree: resolve_tree(&root, Some(TREE), vec!["src/lib.rs".to_owned()]).unwrap(),
             artifacts: scratch_dir(&format!("gate-{fixture_name}")),
             cargo: nested_cargo("keyval-gate"),
+            progress: false,
         };
         run(&ctx, GateTier::Fast, steps).unwrap()
     }
@@ -908,6 +979,25 @@ mod tests {
             "receipt={written:#}"
         );
         assert_eq!(step(&report, "tests").cases, 2, "observed={report:#?}");
+        let receipt_path = Path::new(&report.receipt_path);
+        let steps_log = receipt_path.with_extension("").join("steps.jsonl");
+        let records: Vec<serde_json::Value> = fs::read_to_string(&steps_log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            3,
+            "rule: one step record per step (W01.6); records={records:#?}"
+        );
+        assert_eq!(records[2]["step"], "tests");
+        assert_eq!(records[2]["outcome"], "passed");
+        assert_eq!(
+            records[2]["duration_ms"],
+            step(&report, "tests").duration_ms,
+            "rule: the record carries the step's real duration"
+        );
         for s in &report.receipt.steps {
             assert!(s.cases > 0 && s.log.is_some(), "step={s:#?}");
         }

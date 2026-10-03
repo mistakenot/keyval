@@ -705,8 +705,11 @@ mod probes {
 
     use serde_json::Value;
 
+    use std::path::PathBuf;
+
     use crate::process::{self, Captured};
-    use crate::test_support::{nested_cargo, workspace_root};
+    use crate::steplog::{Outcome, Step, StepFailed, StepLog, StepRecord};
+    use crate::test_support::{nested_cargo, scratch_dir, workspace_root};
 
     #[derive(Clone, Copy, Debug)]
     enum Tier {
@@ -793,32 +796,114 @@ mod probes {
             .collect()
     }
 
+    /// Runs one probe as a logged step (W01.6 standard): the record names the clippy
+    /// command, the expected rejection, what clippy actually reported, and the exact
+    /// command that re-runs the probe. It is written to `<target>/keyval-scratch/…`.
+    fn probe_step(
+        tier: Tier,
+        probe: &str,
+        file: &str,
+        expected: &[&str],
+    ) -> (Result<StepRecord, StepFailed>, PathBuf) {
+        let log_path = scratch_dir("lint-probes").join(format!("{probe}.jsonl"));
+        let mut log = StepLog::new("lint probes", Some(&log_path), false).unwrap();
+        let action = format!(
+            "cargo clippy -p {} --all-targets -- -D warnings --cfg keyval_probe=\"{probe}\"",
+            tier.package()
+        );
+        let expectation = format!("rejected by {expected:?} in {file}");
+        let rerun = format!("./dev check LINT-PROBES --case {probe}");
+        let step = Step {
+            name: probe,
+            action: &action,
+            expected: &expectation,
+            rerun: &rerun,
+        };
+        let started = std::time::Instant::now();
+        let observed = (|| {
+            let run = clippy(tier, Some(probe));
+            let errors = errors(&run);
+            let reported: Vec<String> = errors
+                .iter()
+                .map(|d| {
+                    format!(
+                        "{} in {}",
+                        d.code.as_deref().unwrap_or("?"),
+                        d.file.as_deref().unwrap_or("?")
+                    )
+                })
+                .collect();
+            if run.succeeded {
+                return Err(format!(
+                    "clippy passed with no errors; stderr tail: {}",
+                    run.captured
+                        .stderr
+                        .lines()
+                        .rev()
+                        .take(5)
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ));
+            }
+            let all_found = expected.iter().all(|code| {
+                errors.iter().any(|d| {
+                    d.code.as_deref() == Some(*code)
+                        && d.file.as_deref().is_some_and(|f| f.ends_with(file))
+                })
+            });
+            let observed = format!("rejected with {reported:?}");
+            if all_found {
+                Ok(observed)
+            } else {
+                Err(observed)
+            }
+        })();
+        (log.record(step, observed, started.elapsed()), log_path)
+    }
+
     fn assert_rejected(tier: Tier, probe: &str, file: &str, expected: &[&str]) {
-        let run = clippy(tier, Some(probe));
-        let errors = errors(&run);
-        let context = format!(
-            "probe={probe} crate={} rerun=`./dev check LINT-PROBES --case {probe}`\n\
-             errors={errors:#?}\nstderr tail:\n{}",
-            tier.package(),
-            run.captured
-                .stderr
-                .lines()
-                .rev()
-                .take(20)
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        assert!(
-            !run.succeeded,
-            "rule: a probe must be rejected; clippy passed; {context}"
-        );
-        for code in expected {
-            assert!(
-                errors.iter().any(|d| d.code.as_deref() == Some(*code)
-                    && d.file.as_deref().is_some_and(|f| f.ends_with(file))),
-                "rule: probe must be rejected by `{code}` in {file}; {context}"
+        let (outcome, log_path) = probe_step(tier, probe, file, expected);
+        if let Err(failure) = outcome {
+            panic!(
+                "rule: every lint probe is rejected by its lint (§5.2: the probe is the \
+                 proof); {failure}; step log: {}",
+                log_path.display()
             );
         }
+    }
+
+    /// The W01.6 demonstration: a probe whose expectation is wrong fails with a record
+    /// that names the command, the expectation, what clippy really reported, and the
+    /// command that re-runs it.
+    #[test]
+    fn a_failing_probe_yields_a_rerunnable_record() {
+        let (outcome, log_path) = probe_step(
+            Tier::Production,
+            "unwrap_used",
+            "src/unwrap_used.rs",
+            &["clippy::panic"],
+        );
+        let failure = outcome.expect_err("the wrong expectation must fail the step");
+        let record = &failure.record;
+        assert_eq!(record.outcome, Outcome::Failed, "record={record:#?}");
+        assert!(
+            record.action.contains("--cfg keyval_probe=\"unwrap_used\""),
+            "rule: the record names the exact action; record={record:#?}"
+        );
+        assert!(
+            record.expected.contains("clippy::panic")
+                && record.observed.contains("clippy::unwrap_used"),
+            "rule: expected and observed are both recorded; record={record:#?}"
+        );
+        assert_eq!(
+            record.rerun.as_deref(),
+            Some("./dev check LINT-PROBES --case unwrap_used"),
+            "rule: a failure is re-runnable from its log"
+        );
+        let logged = std::fs::read_to_string(&log_path).unwrap();
+        let line: Value = serde_json::from_str(logged.lines().next().unwrap()).unwrap();
+        assert_eq!(line["schema"], "keyval.dev.step/v1", "log={logged}");
+        assert_eq!(line["outcome"], "failed", "log={logged}");
     }
 
     #[test]

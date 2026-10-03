@@ -16,6 +16,7 @@ mod lint;
 mod metadata;
 mod output;
 mod process;
+mod steplog;
 #[cfg(test)]
 mod test_support;
 mod tiers;
@@ -153,6 +154,7 @@ fn run_gate(
         tree,
         artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
         cargo: cargo::Cargo::detect(),
+        progress: true,
     };
     match gate::run(&ctx, tier, gate::BOOTSTRAP_SET) {
         Ok(report) => output::emit(format, &report),

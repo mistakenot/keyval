@@ -202,7 +202,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filter: Some("lint::probes::"),
         },
-        min_cases: 18,
+        min_cases: 19,
     },
     CheckDef {
         id: "LINT-ALLOWS",
@@ -268,6 +268,19 @@ pub const CATALOGUE: &[CheckDef] = &[
             filter: Some("gate::"),
         },
         min_cases: 8,
+    },
+    CheckDef {
+        id: "DEV-STEPLOG",
+        summary: "scripted flows log expected/observed/rerun step records; skips fail",
+        kind: Kind::TestGroup,
+        covers: &["P10", "T-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filter: Some("steplog::"),
+        },
+        min_cases: 6,
     },
     CheckDef {
         id: "INVARIANT",

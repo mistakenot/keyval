@@ -280,8 +280,8 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   clippy, git, br, bv, ntm, ubs, dcg, am), with versions and a real capability probe
   each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES,
-  INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
+  DEV-GATE, DEV-STEPLOG, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER,
+  AGENTS-RULES, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
   check's minimum case count fail (P10). A failure prints its exact re-run command.
   Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
   Every check has exactly one `// check: <ID>` marker in code.
@@ -322,6 +322,52 @@ Policy (see PLAN.md §10 for the full verification architecture):
 - Failpoints and bug-injection variants are test-only builds (rule 17).
 - Do not hand-run heavy suites on the shared machine when a gate tier covers them:
   T0 on commit, T1 hourly, T2 nightly (§10.10). Cite receipts, not vibes (rule 13).
+
+### Test logging & diagnostics standard (W01.6 — binding on every suite)
+
+A failure must be diagnosable from its log alone, and re-runnable from it.
+
+1. **Assertion context.** Every assertion message carries enough state to diagnose
+   without a debugger. The CD-7 `invariant!` style (node, index, invariant ID) extends
+   to all test suites: a failing test names its inputs, the expected value, the observed
+   value and the rule violated, e.g.
+   `assert_eq!(observed, expected, "rule: key length 256 is rejected (DM-1); key={key:?}")`.
+2. **Re-runnability.** A failure's output contains the exact command that re-runs it.
+   `./dev check` prints `./dev check <ID> --case <test>` for every failed case.
+   Property-test failures persist their seed and shrunk case (proptest failure
+   persistence, committed alongside the test), and the failure output names the seed,
+   mirroring the simulator's seed/replay discipline (T-4). A failing test you cannot
+   re-run from its log is a defect.
+3. **Step logging for scripted flows.** Every scripted end-to-end flow — demos in assert
+   mode, the lifecycle smoke, crash probes, the parity scenario, the clean-state
+   rehearsal, the CLI journey, gates, lint probes — logs each step as a structured
+   `keyval.dev.step/v1` record: flow, step, action, expected, observed, outcome,
+   duration, and a re-run command when it did not pass. Records go to stderr **and** to
+   a log file in the run's artifact directory. Use `xtask/src/steplog.rs` (`StepLog`).
+   A flow stops at its first failed step and exits non-zero. A gate instead runs every
+   step, so one receipt reports every failure, and writes `steps.jsonl` next to its
+   receipt and per-step logs.
+4. **No silent skips.** There is no "skipped" outcome. A step or test that cannot run is
+   logged as failed, and a vacuous selection (zero cases, an `#[ignore]`d required case)
+   fails (P10).
+5. **Bounded.** Test logs respect CD-9: oversized fields are truncated and records past
+   the limit are dropped, and both are counted (receipts report the counts). Generated
+   logs live under `artifacts/` or `.local/`, which only `./dev prune` (W46) deletes,
+   under the Q9 retention rule.
+6. **Helpers stay out of production.** Logging and test helpers are tooling (xtask) or
+   test-only modules and dev-dependencies, never compiled into a production build. They
+   never log from deterministic-core production paths: the canonical trace and the
+   Telemetry port own those.
+
+Practicalities:
+
+- A test that runs cargo itself (fixtures, probes, gates) builds into its own target
+  directory via `test_support::nested_cargo`, and writes files under
+  `test_support::scratch_dir` (inside the target directory), never into the source
+  tree or `/tmp`.
+- A test that runs git against a fixture repository clears `GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_CEILING_DIRECTORIES`, so that it still
+  works inside a git-isolated candidate (§11.10 step 4).
 
 ---
 
