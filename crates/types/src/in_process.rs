@@ -1,6 +1,11 @@
 //! In-process ports, called synchronously by the engine because the call is
 //! deterministic given the adapter (PLAN.md §7.2): [`Entropy`], bounded journal reads
-//! ([`JournalRead`]) and the data directory's lock and creation steps ([`DataDir`]).
+//! ([`JournalRead`]) and the data directory's exclusive lock ([`DataDir`]).
+//!
+//! Nothing here mutates stored bytes. Creating the journal file and syncing the data
+//! directory are effects ([`Effect::CreateJournal`], [`Effect::SyncDir`]), like appends
+//! and syncs, so the simulator schedules each as a separate fault point and can crash
+//! between them (§10.2, DUR-7).
 //!
 //! The types are core-owned. Adapters map their own errors (files, simulated disks)
 //! onto [`StorageError`]; no filesystem type reaches the core (CD-1).
@@ -8,6 +13,8 @@
 use core::fmt;
 
 use crate::counts::ByteCount;
+#[cfg(doc)]
+use crate::effects::{Effect, Input};
 
 /// Which consumer draws from the entropy port. Each stream is independent, so one
 /// consumer's draws never shift another's (§10.2).
@@ -65,7 +72,8 @@ pub enum StorageError {
         /// The bytes returned.
         got: u32,
     },
-    /// Any other I/O failure. The node moves to `failed` (§7.11).
+    /// Any other I/O failure. The node moves to `failed` (§7.11). A failed storage
+    /// *effect* is reported as [`Input::StorageFailed`] instead.
     Failed,
 }
 
@@ -94,7 +102,8 @@ pub trait JournalRead {
     fn read_at(&self, offset: ByteCount, len: ReadLen) -> Result<Vec<u8>, StorageError>;
 }
 
-/// The data directory's exclusive lock and creation steps (§7.7 step 0, DUR-7, DUR-8).
+/// The data directory's exclusive lock (§7.7 steps 0 and 1, DUR-8): a precondition taken
+/// once per start, before anything is read or written, and not a crash point.
 pub trait DataDir {
     /// Takes the exclusive lock, refusing if another process holds it.
     ///
@@ -102,20 +111,6 @@ pub trait DataDir {
     ///
     /// [`StorageError::Locked`] if the lock is held; [`StorageError::Failed`] otherwise.
     fn lock(&mut self) -> Result<(), StorageError>;
-
-    /// Creates the empty journal file.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Failed`] if it cannot be created.
-    fn create_journal(&mut self) -> Result<(), StorageError>;
-
-    /// Syncs the directory, so a created file survives a crash (DUR-7).
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::Failed`] if the sync fails.
-    fn sync_dir(&mut self) -> Result<(), StorageError>;
 }
 
 #[cfg(test)]
@@ -151,6 +146,21 @@ mod tests {
                 return Err(StorageError::ShortRead { wanted: len, got });
             }
             Ok(available.iter().take(wanted).copied().collect())
+        }
+    }
+
+    /// A data directory whose lock another process may hold.
+    struct Dir {
+        held_elsewhere: bool,
+    }
+
+    impl DataDir for Dir {
+        fn lock(&mut self) -> Result<(), StorageError> {
+            if self.held_elsewhere {
+                Err(StorageError::Locked)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -192,6 +202,22 @@ mod tests {
             ],
             [1, 2],
             "rule: next_u64(stream) draws from the named stream (§7.2)"
+        );
+        assert_eq!(
+            Dir {
+                held_elsewhere: false
+            }
+            .lock(),
+            Ok(()),
+            "rule: a free data directory is locked (§7.7 step 1)"
+        );
+        assert_eq!(
+            Dir {
+                held_elsewhere: true
+            }
+            .lock(),
+            Err(StorageError::Locked),
+            "rule: a lock held by another process is refused (§7.7 step 1, DUR-8)"
         );
     }
 }

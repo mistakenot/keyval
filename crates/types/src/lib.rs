@@ -34,8 +34,9 @@
 //! refused at or above 2^53 when constructed ([`MAX_SAFE_INTEGER`], D-77).
 //!
 //! - **Ports** (CD-1, §7.2), all in core-owned types: the inbound port [`Inbound::step`]
-//!   turns an [`Input`] into ordered [`Effect`] values; the in-process ports are
-//!   [`Entropy`], [`JournalRead`] and [`DataDir`]; and [`Consensus`] isolates the Raft
+//!   turns an [`Input`] into ordered [`Effect`] values, and every storage effect can be
+//!   reported failed ([`StorageOp`]); the in-process ports are [`Entropy`],
+//!   [`JournalRead`] and the [`DataDir`] lock; and [`Consensus`] isolates the Raft
 //!   library, so no library type crosses it.
 //!
 //! - **Config** (O-5, CD-3, §7.10): [`Config::parse`] reads the one static config file
@@ -90,7 +91,7 @@ pub use consensus::{
 };
 pub use counts::{ByteCount, PageSize, Tick};
 pub use data::{Key, KeyError, Value, ValueError};
-pub use effects::{Effect, Inbound, Incarnation, Input, SyncSeq};
+pub use effects::{Effect, Inbound, Incarnation, Input, StorageOp, SyncSeq};
 pub use error_code::{ErrorCode, Terminality};
 pub use ids::{ClusterId, ClusterIdError, NodeId, RequestId, RequestIdError};
 pub use in_process::{DataDir, Entropy, EntropyStream, JournalRead, ReadLen, StorageError};
