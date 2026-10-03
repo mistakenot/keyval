@@ -72,4 +72,5 @@ disallowed-macros = [
   { path = "std::eprint", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
   { path = "std::dbg", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
   { path = "std::thread_local", reason = "hidden per-thread state, such as a thread-local RNG; state lives in the core's values, randomness in the Entropy port (§7.14)" },
+  { path = "std::matches", reason = "hidden catch-all: its expansion's `_ => false` arm escapes wildcard_enum_match_arm, so a new variant silently answers false; write a match that names every variant (CD-5)" },
 ]

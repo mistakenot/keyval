@@ -241,7 +241,16 @@ impl Refusal {
     /// Whether this attempt submitted a proposal: only an unknown outcome did (A-5).
     #[must_use]
     pub const fn submitted(self) -> bool {
-        matches!(self, Self::UnknownOutcome)
+        // Every variant is named, so a new refusal must decide whether it was submitted
+        // (CD-5); a catch-all here would answer "not submitted" for it and break A-5.
+        match self {
+            Self::UnknownOutcome => true,
+            Self::NotLeader { .. }
+            | Self::Busy
+            | Self::Unavailable
+            | Self::Recovering { .. }
+            | Self::HistoryFull { .. } => false,
+        }
     }
 }
 
@@ -400,7 +409,7 @@ mod tests {
         produced.dedup();
         let mut expected: Vec<ErrorCode> = ErrorCode::ALL
             .into_iter()
-            .filter(|code| !matches!(code, ErrorCode::InvalidRequest | ErrorCode::TooLarge))
+            .filter(|code| ![ErrorCode::InvalidRequest, ErrorCode::TooLarge].contains(code))
             .collect();
         expected.sort();
         assert_eq!(

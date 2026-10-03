@@ -253,7 +253,7 @@ fn every_fixture_config_is_accepted_and_passes_the_consensus_checks() {
 fn one_three_and_five_voters_are_accepted_and_other_counts_refused() {
     for count in 0..=6 {
         let text = with_voters(count);
-        if matches!(count, 1 | 3 | 5) {
+        if [1, 3, 5].contains(&count) {
             let config = accepted(&text, "1, 3 or 5 voters (D-45)");
             assert_eq!(config.voter_count(), usize::try_from(count).unwrap());
         } else {

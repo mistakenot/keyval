@@ -235,8 +235,11 @@ involved. It is the only sanctioned panic in production code, and no `allow` is 
   the test allowances plus `disallowed-methods`, `disallowed-types` and
   `disallowed-macros` covering wall-clock time (`Instant`, `SystemTime`), threads,
   `RandomState`/`HashMap`/`HashSet`, ambient environment (`std::env`), filesystem,
-  network and process I/O, stdio, `println!`-style macros and `thread_local!`. Each
-  entry's `reason` names the port to use instead (§7.2). These bans cover test code
+  network and process I/O, stdio, `println!`-style macros, `thread_local!` and `matches!`.
+  Each entry's `reason` names the port to use instead (§7.2). `matches!` is banned for
+  CD-5: its hidden `_ => false` arm escapes `wildcard_enum_match_arm`, so a new variant
+  would silently answer `false`. Write a `match` that names every variant, or
+  `[..].contains(..)` for plain values. These bans cover test code
   too, because the test allowances exempt only `unwrap`/`expect`/`panic!`. Tests in a
   deterministic crate use the same ports with seeded fakes. A test that needs the real
   environment, clock or filesystem belongs in an adapter or harness crate.

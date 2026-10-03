@@ -7,6 +7,7 @@ use std::time::Duration;
 
 /// Deliberate violations: one call per disallowed method and macro.
 pub fn methods_and_macros() {
+    let _ = matches!(Some(1), Some(_));
     let _ = std::time::Instant::now();
     let _ = std::time::SystemTime::now();
     let _ = std::thread::spawn(|| ());

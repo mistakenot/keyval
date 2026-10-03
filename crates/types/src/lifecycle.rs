@@ -27,24 +27,30 @@ impl Lifecycle {
     /// Every state, in lifecycle order.
     pub const ALL: [Self; 4] = [Self::Starting, Self::Recovering, Self::Ready, Self::Failed];
 
-    /// Whether moving from `self` to `next` is allowed.
+    /// Whether moving from `self` to `next` is allowed. Every pair is spelled out, so a new
+    /// state must decide each of its transitions here (CD-5).
     #[must_use]
     pub const fn can_become(self, next: Self) -> bool {
-        matches!(
-            (self, next),
+        match (self, next) {
             (Self::Starting, Self::Recovering)
-                | (Self::Recovering, Self::Ready)
-                | (
-                    Self::Starting | Self::Recovering | Self::Ready,
-                    Self::Failed
-                )
-        )
+            | (Self::Recovering, Self::Ready)
+            | (Self::Starting | Self::Recovering | Self::Ready, Self::Failed) => true,
+            (Self::Starting, Self::Starting | Self::Ready)
+            | (Self::Recovering, Self::Starting | Self::Recovering)
+            | (Self::Ready, Self::Starting | Self::Recovering | Self::Ready)
+            | (Self::Failed, Self::Starting | Self::Recovering | Self::Ready | Self::Failed) => {
+                false
+            }
+        }
     }
 
     /// Whether the node serves reads and admits writes in this state (A-2).
     #[must_use]
     pub const fn is_ready(self) -> bool {
-        matches!(self, Self::Ready)
+        match self {
+            Self::Ready => true,
+            Self::Starting | Self::Recovering | Self::Failed => false,
+        }
     }
 
     /// The state as the API spells it (`/v1/health/live`, O-1).

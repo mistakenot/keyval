@@ -19,6 +19,15 @@ pub enum ReadMode {
     LeaseBased,
 }
 
+/// Whether `mode` trusts the leader's lease, which is safe only with check-quorum on
+/// (§7.10). Every mode is named, so a new one must answer here (CD-5).
+const fn trusts_lease(mode: ReadMode) -> bool {
+    match mode {
+        ReadMode::LeaseBased => true,
+        ReadMode::Safe => false,
+    }
+}
+
 /// The consensus library's settings for one node.
 ///
 /// Built only from a validated [`Config`](super::Config) by
@@ -110,7 +119,7 @@ impl ConsensusSettings {
             Err(ConsensusViolation::MinElectionNotBelowMax)
         } else if self.max_inflight_msgs == 0 {
             Err(ConsensusViolation::ZeroInflight)
-        } else if matches!(self.read_mode, ReadMode::LeaseBased) && !self.check_quorum {
+        } else if trusts_lease(self.read_mode) && !self.check_quorum {
             Err(ConsensusViolation::LeaseReadsWithoutCheckQuorum)
         } else if self.max_uncommitted_size < self.max_size_per_msg {
             Err(ConsensusViolation::UncommittedBelowMessageSize)

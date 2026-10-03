@@ -514,7 +514,7 @@ fn read_nodes(
     config_dir: &Path,
 ) -> Result<BTreeMap<NodeId, NodeConfig>, ConfigError> {
     let count = document.nodes.len();
-    if !matches!(count, 1 | 3 | 5) {
+    if ![1, 3, 5].contains(&count) {
         return Err(ConfigError::VoterCount { count });
     }
     let mut parsed = Vec::with_capacity(count);

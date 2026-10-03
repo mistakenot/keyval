@@ -1287,6 +1287,29 @@ mod probes {
     }
 
     #[test]
+    fn matches_catch_all() {
+        let (outcome, log_path) = probe_step(
+            Tier::Deterministic,
+            "matches_catch_all",
+            "src/matches_catch_all.rs",
+            &["clippy::disallowed_macros"],
+        );
+        let record = outcome.unwrap_or_else(|failure| {
+            panic!(
+                "rule: `matches!` on a domain enum is rejected in a deterministic crate \
+                 (CD-5); {failure}; step log: {}",
+                log_path.display()
+            )
+        });
+        assert!(
+            !record.observed.contains("clippy::wildcard_enum_match_arm"),
+            "rule: CD-5's own lint does not see the catch-all inside `matches!`, which is why \
+             the deterministic configuration bans the macro; if a toolchain bump changes that, \
+             revisit the ban (br-matches-bypasses-cd5-5i0g); record={record:#?}"
+        );
+    }
+
+    #[test]
     fn missing_docs() {
         assert_rejected(
             Tier::Deterministic,

@@ -34,6 +34,9 @@ pub mod wildcard_arm;
 #[cfg(keyval_probe = "binding_catch_all_arm")]
 pub mod binding_catch_all_arm;
 
+#[cfg(keyval_probe = "matches_catch_all")]
+pub mod matches_catch_all;
+
 #[cfg(keyval_probe = "missing_docs")]
 pub mod missing_docs;
 
