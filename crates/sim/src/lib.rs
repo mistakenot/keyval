@@ -9,14 +9,24 @@
 //!   master seed, per subsystem and per node incarnation.
 //! - [`scheduler`]: the discrete-event queue, ordered by virtual time, seeded tie
 //!   priority and insertion sequence, with the run's event budget.
+//! - [`trace`]: the canonical trace, its hash and the first-difference comparison.
+//! - [`god_view`]: every node's Raft, journal and applied state after every step, and
+//!   the trace records for what changed.
 //!
-//! The canonical trace and god view (W15.2), replay identity (W15.3), the simulated
-//! network (W16) and disk (W12), and the composition of the cores (W17) build on these.
+//! Replay identity (W15.3), the simulated network (W16) and disk (W12), and the
+//! composition of the cores (W17) build on these.
 
 pub mod entropy;
+pub mod god_view;
 pub mod scheduler;
+pub mod trace;
 
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
+pub use god_view::{Changes, GodView, JournalView, NodeView};
 pub use scheduler::{
     Event, EventBudget, EventSeq, InThePast, NodeIncarnation, Scheduler, Step, VirtualTime,
+};
+pub use trace::{
+    Comparison, DiskOp, Endpoint, Name, ObservationBound, Overflow, PacketFate, Record, Trace,
+    TraceHash, compare,
 };

@@ -418,6 +418,18 @@ min_cases = 15
 status = "implemented"
 
 [[check]]
+id = "SIM-TRACE"
+summary = "the canonical trace keeps logical endpoints and bytes in fixed formats, excludes host data, fails closed when required observations overflow their bound, and compares completely; the god view records every node's Raft, journal and applied state (§10.2)"
+kind = "test_group"
+covers = ["T-3", "T-5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check SIM-TRACE"
+min_cases = 17
+status = "implemented"
+
+[[check]]
 id = "CONFIG-RULES"
 summary = "the config parser refuses each §7.10 inconsistency with a specific error, reads only its strict grammar, and accepts config/local.toml and every config/fixtures file (O-5, D-78, D-79)"
 kind = "test_group"

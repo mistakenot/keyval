@@ -652,6 +652,22 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 15,
     },
     CheckDef {
+        id: "SIM-TRACE",
+        summary: "the canonical trace keeps logical endpoints and bytes in fixed formats, \
+                  excludes host data, fails closed when required observations overflow their \
+                  bound, and compares completely; the god view records every node's Raft, \
+                  journal and applied state (§10.2)",
+        kind: Kind::TestGroup,
+        covers: &["T-3", "T-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["trace::", "god_view::"],
+        },
+        min_cases: 17,
+    },
+    CheckDef {
         id: "CONFIG-RULES",
         summary: "the config parser refuses each §7.10 inconsistency with a specific error, reads only \
                   its strict grammar, and accepts config/local.toml and every \
