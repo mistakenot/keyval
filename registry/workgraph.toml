@@ -46,7 +46,7 @@ accept = [
     "./dev check DEV-STEPLOG",
     "./dev check INVARIANT",
 ]
-bead = ""
+bead = "br-w01-bootstrap-dev-gates-4l1"
 
 [[item]]
 id = "W02"
@@ -56,7 +56,7 @@ reqs = ["P4", "T-3", "T-11"]
 area = ["vendor", "spike"]
 milestone = "m0"
 accept = ["./dev check RAFT-VENDOR"]
-bead = ""
+bead = "br-w02-raft-determinism-spike-hta"
 
 [[item]]
 id = "W03"
@@ -66,7 +66,7 @@ reqs = ["F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "
 area = ["api"]
 milestone = "m0"
 accept = ["./dev check SPEC"]
-bead = ""
+bead = "br-w03-openapi-contract-rmj"
 
 [[item]]
 id = "W04"
@@ -76,7 +76,7 @@ reqs = ["CD-1", "CD-2", "CD-3", "CD-4", "CD-5", "CD-11", "DM-1", "DM-2", "DM-4",
 area = ["types"]
 milestone = "m0"
 accept = []
-bead = ""
+bead = "br-w04-domain-types-ports-bv5"
 
 [[item]]
 id = "W05"
@@ -86,7 +86,7 @@ reqs = ["P5", "§10.13"]
 area = ["registry", "xtask"]
 milestone = "m0"
 accept = []
-bead = ""
+bead = "br-w05-verification-registry-52p"
 
 [[item]]
 id = "W06"
@@ -95,8 +95,8 @@ deps = ["W01"]
 reqs = ["G1", "§11.11"]
 area = ["registry", "xtask"]
 milestone = "m0"
-accept = []
-bead = ""
+accept = ["./dev check WORKGRAPH", "./dev check DEV-BEADS"]
+bead = "br-w06-workgraph-bead-import-iuc"
 
 [[item]]
 id = "W07"
@@ -111,7 +111,7 @@ accept = [
     "./dev check DEV-CLOSE",
     "./dev check DEV-GATE",
 ]
-bead = ""
+bead = "br-w07-commit-wrapper-accept-closure-eld"
 
 [[item]]
 id = "W08"
@@ -121,7 +121,7 @@ reqs = ["O-5", "O-9", "DUR-8", "CD-3", "CD-9"]
 area = ["types", "config"]
 milestone = "m0"
 accept = []
-bead = ""
+bead = "br-w08-config-fingerprint-limits-70m"
 
 [[item]]
 id = "W09"
@@ -131,7 +131,7 @@ reqs = ["DM-3", "DM-5", "DM-6", "F-1", "F-2", "F-6", "C-6", "CD-7"]
 area = ["statemachine"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w09-state-machine-core-oxe"
 
 [[item]]
 id = "W10"
@@ -141,7 +141,7 @@ reqs = ["T-7", "T-12", "§10.14"]
 area = ["model"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w10-reference-model-che"
 
 [[item]]
 id = "W11"
@@ -151,7 +151,7 @@ reqs = ["DUR-1", "DUR-4", "DUR-5", "DUR-6", "DUR-8", "DUR-9", "CD-9", "CD-10"]
 area = ["journal"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w11-journal-engine-f37"
 
 [[item]]
 id = "W12"
@@ -161,7 +161,7 @@ reqs = ["DUR-1", "DUR-7", "DUR-9", "T-2"]
 area = ["fs_storage (file adapter)", "sim/disk"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w12-byte-storage-adapters-45u"
 
 [[item]]
 id = "W13"
@@ -171,7 +171,7 @@ reqs = ["C-1", "C-2", "DUR-2"]
 area = ["raft_adapter"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w13-raft-adapter-ready-loop-z9v"
 
 [[item]]
 id = "W14"
@@ -181,7 +181,7 @@ reqs = ["F-7", "A-2", "A-5", "C-3", "C-4"]
 area = ["node"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w14-node-controller-w4z"
 
 [[item]]
 id = "W15"
@@ -191,7 +191,7 @@ reqs = ["T-3", "T-5", "T-11", "P4"]
 area = ["sim"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w15-sim-scheduler-trace-ukp"
 
 [[item]]
 id = "W16"
@@ -201,7 +201,7 @@ reqs = ["§9.1"]
 area = ["sim"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w16-sim-network-dxn"
 
 [[item]]
 id = "W17"
@@ -211,7 +211,7 @@ reqs = ["T-2", "DUR-3", "P3"]
 area = ["sim", "xtask"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w17-sim-composition-root-opj"
 
 [[item]]
 id = "W18"
@@ -221,7 +221,7 @@ reqs = ["F-1", "F-2", "O-1", "O-3", "O-9", "DUR-3", "§7.7 step 0"]
 area = ["server"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w18-server-single-node-x8b"
 
 [[item]]
 id = "W19"
@@ -231,7 +231,7 @@ reqs = ["G1"]
 area = ["xtask (demo)"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w19-m1-owner-demo-ddm"
 
 [[item]]
 id = "W20"
@@ -241,7 +241,7 @@ reqs = ["§11.9"]
 area = ["audit"]
 milestone = "m1"
 accept = []
-bead = ""
+bead = "br-w20-m1-drift-audit-q5i"
 
 [[item]]
 id = "W21"
@@ -251,7 +251,7 @@ reqs = ["F-7", "A-1", "A-3", "O-5"]
 area = ["server"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w21-peer-transport-routing-scj"
 
 [[item]]
 id = "W22"
@@ -261,7 +261,7 @@ reqs = ["O-2", "O-3"]
 area = ["xtask"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w22-cluster-launcher-qnj"
 
 [[item]]
 id = "W23"
@@ -271,7 +271,7 @@ reqs = ["O-7", "O-6"]
 area = ["cli"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w23-cli-doctor-z22"
 
 [[item]]
 id = "W24"
@@ -281,7 +281,7 @@ reqs = ["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"]
 area = ["fs_storage (probe tests)", "xtask"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w24-crash-probes-lifecycle-smoke-c92"
 
 [[item]]
 id = "W25"
@@ -291,7 +291,7 @@ reqs = ["G1"]
 area = ["xtask (demo)"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w25-m2-owner-demo-b76"
 
 [[item]]
 id = "W26"
@@ -301,7 +301,7 @@ reqs = ["§11.9"]
 area = ["audit"]
 milestone = "m2"
 accept = []
-bead = ""
+bead = "br-w26-m2-drift-audit-zkr"
 
 [[item]]
 id = "W27"
@@ -311,7 +311,7 @@ reqs = ["F-3", "F-5", "C-5", "DM-3"]
 area = ["statemachine/apply", "node/write_path"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w27-delete-cas-o1r"
 
 [[item]]
 id = "W28"
@@ -321,7 +321,7 @@ reqs = ["F-4", "C-8", "DM-4"]
 area = ["statemachine/scan", "node/reads"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w28-scan-jxn"
 
 [[item]]
 id = "W29"
@@ -331,7 +331,7 @@ reqs = ["F-6", "F-9", "F-10", "C-6", "A-5", "DM-7"]
 area = ["node/write_path", "node/lifecycle", "statemachine/history"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w29-request-status-retry-lifecycle-8yt"
 
 [[item]]
 id = "W30"
@@ -341,7 +341,7 @@ reqs = ["T-7"]
 area = ["model"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w30-reference-model-server-ysk"
 
 [[item]]
 id = "W31"
@@ -351,7 +351,7 @@ reqs = ["T-12", "§10.8"]
 area = ["conformance"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w31-conformance-suite-lf0"
 
 [[item]]
 id = "W32"
@@ -361,7 +361,7 @@ reqs = ["F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "
 area = ["server"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w32-complete-http-surface-jkm"
 
 [[item]]
 id = "W33"
@@ -371,7 +371,7 @@ reqs = ["O-4", "O-6", "C-6"]
 area = ["cli"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w33-cli-full-3ug"
 
 [[item]]
 id = "W34"
@@ -381,7 +381,7 @@ reqs = ["G1", "G2"]
 area = ["xtask (demo)"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w34-m3-owner-demo-7pd"
 
 [[item]]
 id = "W35"
@@ -391,7 +391,7 @@ reqs = ["§11.9"]
 area = ["audit"]
 milestone = "m3"
 accept = []
-bead = ""
+bead = "br-w35-m3-drift-audit-hes"
 
 [[item]]
 id = "W36"
@@ -401,7 +401,7 @@ reqs = ["§10.3"]
 area = ["sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w36-workload-generator-4i9"
 
 [[item]]
 id = "W37"
@@ -411,7 +411,7 @@ reqs = ["§9.1", "§10.4", "T-10", "A-4"]
 area = ["sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w37-nemesis-swarm-heal-ves"
 
 [[item]]
 id = "W38"
@@ -421,7 +421,7 @@ reqs = ["C-1", "C-2", "C-5", "C-6", "DM-3"]
 area = ["checker"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w38-write-history-checkers-4fq"
 
 [[item]]
 id = "W39"
@@ -431,7 +431,7 @@ reqs = ["C-3", "C-4", "C-8", "A-1", "A-2", "A-3", "A-4"]
 area = ["checker"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w39-read-convergence-liveness-checkers-cvy"
 
 [[item]]
 id = "W40"
@@ -441,7 +441,7 @@ reqs = ["C-1", "C-2", "DUR-2", "A-5"]
 area = ["checker"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w40-raft-persistence-honesty-checkers-efr"
 
 [[item]]
 id = "W41"
@@ -451,7 +451,7 @@ reqs = ["T-13", "P10"]
 area = ["checker", "sim", "registry"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w41-nonvacuity-coverage-verdicts-tzb"
 
 [[item]]
 id = "W42"
@@ -461,7 +461,7 @@ reqs = ["T-4", "T-8", "O-6"]
 area = ["sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w42-sim-commands-crashpacks-corpus-hj8"
 
 [[item]]
 id = "W43"
@@ -471,7 +471,7 @@ reqs = ["§10.3"]
 area = ["sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w43-full-operation-profiles-zui"
 
 [[item]]
 id = "W44"
@@ -481,7 +481,7 @@ reqs = ["T-9"]
 area = ["sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w44-scenario-shrinker-nqe"
 
 [[item]]
 id = "W45"
@@ -503,7 +503,7 @@ area = [
 ]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w45-bug-variants-selftest-l111"
 
 [[item]]
 id = "W46"
@@ -513,7 +513,7 @@ reqs = ["P7", "P10", "§10.10", "§10.11"]
 area = ["xtask"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w46-gate-tiers-scheduler-outbox-m3yp"
 
 [[item]]
 id = "W47"
@@ -523,7 +523,7 @@ reqs = ["§10.12"]
 area = ["sim", "xtask"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w47-measurements-report-5fsh"
 
 [[item]]
 id = "W48"
@@ -533,7 +533,7 @@ reqs = ["P3", "T-2", "§10.18"]
 area = ["xtask", "sim"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w48-parity-check-sty2"
 
 [[item]]
 id = "W49"
@@ -543,7 +543,7 @@ reqs = ["O-8"]
 area = ["xtask"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w49-dev-status-view-4oi6"
 
 [[item]]
 id = "W50"
@@ -553,7 +553,7 @@ reqs = ["§11.9"]
 area = ["audit"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w50-m4-drift-audit-59xe"
 
 [[item]]
 id = "W51"
@@ -563,7 +563,7 @@ reqs = ["§13", "§10.11", "§11.9"]
 area = ["all (defects get their own beads)", "audit"]
 milestone = "m5"
 accept = []
-bead = ""
+bead = "br-w51-final-audit-rehearsal-t3-6r6g"
 
 [[item]]
 id = "W52"
@@ -573,7 +573,7 @@ reqs = ["§13", "§10.15"]
 area = ["registry", "reports"]
 milestone = "m5"
 accept = []
-bead = ""
+bead = "br-w52-dod-reconciliation-evidence-kyc1"
 
 [[item]]
 id = "W53"
@@ -583,4 +583,4 @@ reqs = ["§10.19", "CD-3", "CD-8"]
 area = ["fuzz", "xtask"]
 milestone = "m4"
 accept = []
-bead = ""
+bead = "br-w53-fuzz-targets-code-coverage-h96b"

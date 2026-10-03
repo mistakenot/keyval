@@ -6,6 +6,7 @@
 
 mod accept;
 mod agents;
+mod beads;
 mod candidate;
 mod cargo;
 mod check;
@@ -29,6 +30,7 @@ mod test_support;
 mod tiers;
 mod tracker;
 mod vendor;
+mod workgraph;
 mod workspace;
 
 use std::env;
@@ -137,6 +139,23 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         artifacts: Option<PathBuf>,
     },
+    /// Work graph → beads (§11.11): adopt or create one bead per work item, mirror the
+    /// dependencies between them, and record bead IDs in registry/workgraph.toml.
+    Beads {
+        #[command(subcommand)]
+        action: BeadsAction,
+    },
+}
+
+/// `./dev beads` actions.
+#[derive(Clone, Copy, Debug, Subcommand)]
+enum BeadsAction {
+    /// Import the work graph into the tracker; idempotent.
+    Import {
+        /// Print what would change, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -233,6 +252,7 @@ fn run(cli: Cli) -> Status {
                 }
             }
         }
+        Command::Beads { action } => run_beads(&root, format, action),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
             let report = accept::run(
@@ -244,6 +264,17 @@ fn run(cli: Cli) -> Status {
                 &root.join("artifacts"),
             );
             output::emit(format, &report)
+        }
+    }
+}
+
+fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {
+    match action {
+        BeadsAction::Import { dry_run } => {
+            let graph = beads::LiveBeadGraph {
+                root: root.to_path_buf(),
+            };
+            output::emit(format, &beads::run(root, &graph, dry_run))
         }
     }
 }

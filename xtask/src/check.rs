@@ -88,6 +88,8 @@ pub enum StaticCheck {
     RaftVendor,
     /// `api/openapi.yaml` meets PLAN.md §8, judged with the fixtures in `api/fixtures/` (W03.3).
     Spec,
+    /// registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 and is acyclic (W06).
+    Workgraph,
 }
 
 impl StaticCheck {
@@ -101,6 +103,7 @@ impl StaticCheck {
             Self::AgentsRules => crate::agents::check_agents_rules(root),
             Self::RaftVendor => crate::vendor::check_vendor(root),
             Self::Spec => crate::spec::check_spec(root),
+            Self::Workgraph => crate::workgraph::check_workgraph(root),
         }
     }
 
@@ -114,6 +117,7 @@ impl StaticCheck {
             Self::AgentsRules => "AGENTS-RULES",
             Self::RaftVendor => "RAFT-VENDOR",
             Self::Spec => "SPEC",
+            Self::Workgraph => "WORKGRAPH",
         }
     }
 
@@ -127,6 +131,7 @@ impl StaticCheck {
             Self::AgentsRules => "rule(s)+statement(s)",
             Self::RaftVendor => "file(s)+assertion(s)",
             Self::Spec => "rule(s)+fixture(s)+mutant(s)",
+            Self::Workgraph => "field(s)+edge(s)+rule(s)",
         }
     }
 }
@@ -290,6 +295,31 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::Spec),
         min_cases: 174,
+    },
+    CheckDef {
+        id: "WORKGRAPH",
+        summary: "registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 (id, deps, reqs, area) \
+                  and is acyclic (§10.13 condition 8, plan half)",
+        kind: Kind::Static,
+        covers: &["G1", "P5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::Workgraph),
+        min_cases: 501,
+    },
+    CheckDef {
+        id: "DEV-BEADS",
+        summary: "./dev beads import adopts or creates one bead per work item, mirrors only \
+                  work-item edges, records bead IDs, refuses drift and is idempotent",
+        kind: Kind::TestGroup,
+        covers: &["G1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["beads::", "workgraph::"],
+        },
+        min_cases: 18,
     },
     CheckDef {
         id: "DEV-GATE",
