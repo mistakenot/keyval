@@ -400,6 +400,34 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 3,
     },
+    CheckDef {
+        id: "NEWTYPES",
+        summary: "each kind of quantity has its own type; ranges (D-77, F-4), checked arithmetic \
+                  and explicit conversions hold at their edges",
+        kind: Kind::TestGroup,
+        covers: &["CD-3", "CD-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["counts::", "ids::", "log_index::", "range::"],
+        },
+        min_cases: 13,
+    },
+    CheckDef {
+        id: "KEY-VALUE",
+        summary: "Key::parse and Value::parse enforce DM-1/DM-2 in decoded UTF-8 bytes; keys are \
+                  stored exactly and order byte-wise (DM-4)",
+        kind: Kind::TestGroup,
+        covers: &["DM-1", "DM-2", "DM-4", "CD-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["data::"],
+        },
+        min_cases: 5,
+    },
 ];
 
 /// Outcome of one requested check.
