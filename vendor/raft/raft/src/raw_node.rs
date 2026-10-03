@@ -29,6 +29,7 @@ use slog::Logger;
 use crate::eraftpb::{ConfState, Entry, EntryType, HardState, Message, MessageType, Snapshot};
 use crate::errors::{Error, Result};
 use crate::read_only::ReadState;
+use crate::entropy::Entropy;
 use crate::{config::Config, StateRole};
 use crate::{storage::GetEntriesFor, GetEntriesContext, Raft, SoftState, Status, Storage};
 
@@ -299,9 +300,17 @@ pub struct RawNode<T: Storage> {
 impl<T: Storage> RawNode<T> {
     #[allow(clippy::new_ret_no_self)]
     /// Create a new RawNode given some [`Config`].
-    pub fn new(config: &Config, store: T, logger: &Logger) -> Result<Self> {
+    ///
+    /// keyval (W02.3): `entropy` is mandatory and is the only source of randomness (see
+    /// [`crate::entropy`]).
+    pub fn new(
+        config: &Config,
+        store: T,
+        entropy: impl Entropy + Send + 'static,
+        logger: &Logger,
+    ) -> Result<Self> {
         assert_ne!(config.id, 0, "config.id must not be zero");
-        let r = Raft::new(config, store, logger)?;
+        let r = Raft::new(config, store, entropy, logger)?;
         let mut rn = RawNode {
             raft: r,
             prev_hs: Default::default(),
@@ -325,8 +334,12 @@ impl<T: Storage> RawNode<T> {
     /// The default logger is an `slog` to `log` adapter.
     #[cfg(feature = "default-logger")]
     #[allow(clippy::new_ret_no_self)]
-    pub fn with_default_logger(c: &Config, store: T) -> Result<Self> {
-        Self::new(c, store, &crate::default_logger())
+    pub fn with_default_logger(
+        c: &Config,
+        store: T,
+        entropy: impl Entropy + Send + 'static,
+    ) -> Result<Self> {
+        Self::new(c, store, entropy, &crate::default_logger())
     }
 
     /// Sets priority of node.

@@ -24,7 +24,7 @@ fn new_storage(voters: usize, learners: usize) -> MemStorage {
 fn quick_raft(storage: MemStorage, logger: &slog::Logger) -> Raft<MemStorage> {
     let id = 1;
     let config = Config::new(id);
-    Raft::new(&config, storage, logger).unwrap()
+    Raft::new(&config, storage, raft::SplitMix64::new(id), logger).unwrap()
 }
 
 pub fn bench_raft_new(c: &mut Criterion) {

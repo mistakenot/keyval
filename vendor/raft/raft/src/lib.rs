@@ -19,7 +19,8 @@
 ## Creating a Raft node
 
 You can use [`RawNode::new`] to create the Raft node. To create the Raft node, you need to
-provide a [`Storage`] component, and a [`Config`] to the [`RawNode::new`] function.
+provide a [`Storage`] component, a [`Config`] and an [`Entropy`] source (keyval patch,
+W02.3) to the [`RawNode::new`] function.
 
 ```rust
 use raft::{
@@ -42,7 +43,7 @@ config.validate().unwrap();
 // We'll use the built-in `MemStorage`, but you will likely want your own.
 // Finally, create our Raft node!
 let storage = MemStorage::new_with_conf_state((vec![1], vec![]));
-let mut node = RawNode::new(&config, storage, &logger).unwrap();
+let mut node = RawNode::new(&config, storage, raft::SplitMix64::new(1), &logger).unwrap();
 ```
 
 ## Ticking the Raft node
@@ -57,7 +58,7 @@ channel `recv_timeout` to drive the Raft node at least every 100ms, calling
 # let config = Config { id: 1, ..Default::default() };
 # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
 # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-# let mut node = RawNode::new(&config, store, &logger).unwrap();
+# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
 # node.raft.become_candidate();
 # node.raft.become_leader();
 use std::{sync::mpsc::{channel, RecvTimeoutError}, time::{Instant, Duration}};
@@ -124,7 +125,7 @@ Here is a simple example to use `propose` and `step`:
 # let config = Config { id: 1, ..Default::default() };
 # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
 # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-# let mut node = RawNode::new(&config, store, &logger).unwrap();
+# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
 # node.raft.become_candidate();
 # node.raft.become_leader();
 #
@@ -187,7 +188,7 @@ state:
 # config.validate().unwrap();
 # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
 # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-# let mut node = RawNode::new(&config, store, &logger).unwrap();
+# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
 #
 if !node.has_ready() {
     return;
@@ -211,7 +212,7 @@ other nodes:
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -236,7 +237,7 @@ a Raft snapshot from the leader and we must apply the snapshot:
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -265,7 +266,7 @@ need to update the applied index and resume `apply` later:
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -320,7 +321,7 @@ entries but have not been committed yet, we must append the entries to the Raft 
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -346,7 +347,7 @@ We must persist the changed `HardState`:
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -370,7 +371,7 @@ other nodes after persisting hardstate, entries and snapshot:
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -397,7 +398,7 @@ to advance the applied index inside.
     # config.validate().unwrap();
     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
+    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
     #
     # if !node.has_ready() {
     #   return;
@@ -454,7 +455,7 @@ For example to promote a learner 4 and demote an existing voter 3:
 # let mut config = Config { id: 1, ..Default::default() };
 # let store = MemStorage::new_with_conf_state((vec![1, 2], vec![]));
 # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
-# let mut node = RawNode::new(&mut config, store, &logger).unwrap();
+# let mut node = RawNode::new(&mut config, store, raft::SplitMix64::new(1), &logger).unwrap();
 let steps = vec![
     raft_proto::new_conf_change_single(4, ConfChangeType::AddNode),
     raft_proto::new_conf_change_single(3, ConfChangeType::RemoveNode),
@@ -504,6 +505,7 @@ macro_rules! fatal {
 
 mod confchange;
 mod config;
+pub mod entropy;
 mod errors;
 mod log_unstable;
 mod quorum;
@@ -525,6 +527,7 @@ pub use crate::raft::{
 };
 pub use confchange::{Changer, MapChange};
 pub use config::Config;
+pub use entropy::{Entropy, SplitMix64};
 pub use errors::{Error, Result, StorageError};
 pub use log_unstable::Unstable;
 pub use quorum::joint::Configuration as JointConfig;

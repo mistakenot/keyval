@@ -3,9 +3,15 @@
 # Area `vendor` (Appendix A). raft/ and raft-proto/ are the crates.io 0.7.0 sources,
 # byte for byte, except the files listed under [[crate.modified]], [[crate.added]] and
 # [[crate.omitted]]. [crate.files] records the sha256 of every vendored file. A change to
-# any vendored file updates this manifest in the same commit. The determinism patch
-# (W02.3) is third_party/raft.patch, which build_id hashes; the tree ID covers everything
+# any vendored file updates this manifest in the same commit. The tree ID covers everything
 # here, generated code included.
+#
+# The determinism patch (W02.3, D-57) is applied: third_party/raft.patch takes the W02.1
+# tree to this one, and build_id hashes it. It adds src/entropy.rs (the mandatory `Entropy`
+# trait, and SplitMix64), makes Raft::new and RawNode::new take an `Entropy` source, routes
+# the election-timeout reset through it, and removes the `rand` dependency. Vote,
+# log-matching, quorum and commit rules are untouched. The [[crate.modified]] reasons below
+# say which change touched each file.
 #
 # Consumers are engine crates only (DEP-RULE). They depend on vendor/raft/raft by path with
 # default-features = false and the features below. The default `default-logger` feature
@@ -65,7 +71,46 @@ upstream_commit = "10c6e9db6792b85c81784e44fc278f895d5f0ab0"
 [[crate.modified]]
 path = "Cargo.toml"
 upstream_sha256 = "4bc28fe7635dd753f7804f6398540280398e3709f815056efa0e1e48914e1a51"
-reason = "raft-proto resolves to ../raft-proto by path; prost-codec feature removed"
+reason = "raft-proto resolves to ../raft-proto by path; prost-codec feature removed (W02.1); rand dependency removed (W02.3)"
+
+[[crate.modified]]
+path = "src/raft.rs"
+upstream_sha256 = "a595cc7420eb83f49546253d004ebc9657e255581db467376a13cf02a383a8eb"
+reason = "W02.3 entropy patch: Raft::new takes an Entropy source; the election-timeout reset draws from it instead of rand::thread_rng"
+
+[[crate.modified]]
+path = "src/raw_node.rs"
+upstream_sha256 = "92cbca1fa82288ad8ccecbc74066bb766ea38b5ffce4ed89a0d1e0f174ddb057"
+reason = "W02.3 entropy patch: RawNode::new takes an Entropy source"
+
+[[crate.modified]]
+path = "src/lib.rs"
+upstream_sha256 = "2d46291e5c0e11a575610756abfba97827abadba9e11b985b907d44b75aeca7e"
+reason = "W02.3 entropy patch: entropy module and exports; doc examples pass a seeded source"
+
+[[crate.modified]]
+path = "examples/five_mem_node/main.rs"
+upstream_sha256 = "c2c17c69c6e3ba12cd5120ac70746e1398305cf6e5348cd8aae46aab30342d6f"
+reason = "W02.3 entropy patch: passes a seeded SplitMix64"
+
+[[crate.modified]]
+path = "examples/single_mem_node/main.rs"
+upstream_sha256 = "f46704e55069eb3e8da1478399bf97a35a3a6bdb91de66cfd4f9e3f78eb7a042"
+reason = "W02.3 entropy patch: passes a seeded SplitMix64"
+
+[[crate.modified]]
+path = "benches/suites/raft.rs"
+upstream_sha256 = "e9a98682babf91651529093612b76cbe98d55d8189a232fe44f0cceec926ea26"
+reason = "W02.3 entropy patch: passes a seeded SplitMix64"
+
+[[crate.modified]]
+path = "benches/suites/raw_node.rs"
+upstream_sha256 = "7f4a0aa924a20e631fbe917a088feada9569020c5103685df59abc173a5c2b3b"
+reason = "W02.3 entropy patch: passes a seeded SplitMix64"
+
+[[crate.added]]
+path = "src/entropy.rs"
+reason = "W02.3 entropy patch: the Entropy trait and SplitMix64"
 
 [[crate.omitted]]
 path = ".gitignore"
@@ -85,18 +130,18 @@ reason = "upstream repository ignore rules; it would hide the vendored Cargo.loc
 "CODE_OF_CONDUCT.md" = "5c6719aa354fed31085cf2bc095207e586774e8fc4931a8ef37b777d555d2666"
 "CONTRIBUTING.md" = "b99ae9453142d108c7f941d6f020551916f8f079b802bc807524c0197e03be2a"
 "Cargo.lock" = "2cc0c1bbf8311fc1822ab6474b2bfb58dc5455bc3bed217c421cb146e651f9ba"
-"Cargo.toml" = "21c7f3f1e6c04b0b2fbcc766e82b1608903ae9b9447d229637400a44bbfaea55"
+"Cargo.toml" = "200c0e4436577add3bfec6a3b4025fb0826cb6b5fdb0f13f8c7b7705102baa52"
 "Cargo.toml.orig" = "ed4eb775a345d705a2290b982b1b7d85eb3712dfcf16503e2894e0b347ef4caa"
 "LICENSE" = "c52cf83bf02deb33ef952e2808e3d0b3916d532805d865880ba9bdf8f2c0c93c"
 "README.md" = "e8b6e4346129a972267f767a00a4601f9d76abfb89c07629aa78a95d1078081d"
 "benches/benches.rs" = "c73869f2f1afc875139168fcd855df0163f3c14024e96fe6dbbf150d7337e32b"
 "benches/suites/mod.rs" = "67188923f8682b05b64689fa92e72f07bd16feb457dd01540213ad8ea0dcf860"
 "benches/suites/progress.rs" = "8bee193d05a63516cd97767583a73cc86dae005961add4fd7f1de34d5accfb9f"
-"benches/suites/raft.rs" = "e9a98682babf91651529093612b76cbe98d55d8189a232fe44f0cceec926ea26"
-"benches/suites/raw_node.rs" = "7f4a0aa924a20e631fbe917a088feada9569020c5103685df59abc173a5c2b3b"
+"benches/suites/raft.rs" = "1ebe12df37ec78f5d4dd639ab349e5239417ab89aa56e7fd41aa7aaad786d011"
+"benches/suites/raw_node.rs" = "857e14dbe1cb9a96272d909561bc89b8f6b138e7654999675faec08a61b97ef1"
 "bors.toml" = "863d7ae88bdc68b4bc4f4d73422f846591e4619eecf5049ba987325b2b2f30b7"
-"examples/five_mem_node/main.rs" = "c2c17c69c6e3ba12cd5120ac70746e1398305cf6e5348cd8aae46aab30342d6f"
-"examples/single_mem_node/main.rs" = "f46704e55069eb3e8da1478399bf97a35a3a6bdb91de66cfd4f9e3f78eb7a042"
+"examples/five_mem_node/main.rs" = "8f3fc02907a182c2d3fb1d5f912593a229fecc93fb071f207899ecfcc911aa40"
+"examples/single_mem_node/main.rs" = "9d0e7cfda94642b3081646357d4f8c5d23a70a09bd4760daf6bc7838eb093268"
 "media/the-design-of-raft-rs.png" = "366842538de57d2aa8568c99ae95db32a411cba8718dc8400145d6d3733adaf9"
 "src/confchange.rs" = "fd8b26bdefe1d31f954e9d14896bdbebb63816f75dbe893a6fd43e978a1fe6ef"
 "src/confchange/changer.rs" = "43f232b7758c5346da7417837e46f56b901078eb16fcbbbbed30b16f4b3ef601"
@@ -111,8 +156,9 @@ reason = "upstream repository ignore rules; it would hide the vendored Cargo.loc
 "src/confchange/testdata/simple_safety.txt" = "4b5934ad4fea1c5e3d5746413ded662a7ded9d45c316baf3a69b48e43c6428c1"
 "src/confchange/testdata/zero.txt" = "f3c618a0303a58c9abfd09c22b2229a1196199ba34b25021925155121f7d8a14"
 "src/config.rs" = "4e2448d6b587b0d695011548a476ccf974c8e17c200213812ecb1c5fc0631db9"
+"src/entropy.rs" = "6b3def102c4b216e407fc08867b7ee498413bc983e123db557b9d4cb290e59ed"
 "src/errors.rs" = "ea1206f002e726459a71fa830aa3753bf4aa5335fae9254aabfbfcef2b280c64"
-"src/lib.rs" = "2d46291e5c0e11a575610756abfba97827abadba9e11b985b907d44b75aeca7e"
+"src/lib.rs" = "ecb3681e06ed0c74d6f15b1a68a929d0edcbc2d5653e8e94751c96c05e341fe8"
 "src/log_unstable.rs" = "5e12f90a4a57a48686e45246872703df2d1fa16dd3d1b67f72094d0815037aa0"
 "src/quorum.rs" = "0e73a11ac7b909406ee568b186632af96da7869f38482a6a0c76fd9c379bb27c"
 "src/quorum/datadriven_test.rs" = "d7ebf0f1c750b09e36f36bc57ab20f53dfe541c6e63856f97f235fc693c0e3ae"
@@ -123,9 +169,9 @@ reason = "upstream repository ignore rules; it would hide the vendored Cargo.loc
 "src/quorum/testdata/joint_vote.txt" = "8de53a14d000a38fd051d147727ef651034662dcffd37d785d7ad45acd94a9de"
 "src/quorum/testdata/majority_commit.txt" = "45b32d1f6a70d71418a9a2e23f46b301eaab13519160e527d7042d2f71d773f6"
 "src/quorum/testdata/majority_vote.txt" = "4f3f3e5e4129e1eb79b08bcb01fdace3fb73bf0b1712ed1e5b33c1f3e337f7e3"
-"src/raft.rs" = "a595cc7420eb83f49546253d004ebc9657e255581db467376a13cf02a383a8eb"
+"src/raft.rs" = "8647f442e9f18e4dde124b102b37a6869187027ca30ee7baa28fc7243b8ee253"
 "src/raft_log.rs" = "2de371ef878538c215782e8f8ed987e3ed4b1bda966f0c5f5da91d1cea6c42a4"
-"src/raw_node.rs" = "92cbca1fa82288ad8ccecbc74066bb766ea38b5ffce4ed89a0d1e0f174ddb057"
+"src/raw_node.rs" = "f6025a57c871f8e8b018c2354958dc49b0173ffd30fcebf9c12b0a051b4be801"
 "src/read_only.rs" = "0af28746d1bdb6e8741784a23f5cfa791f27ef3d3978774a6d0a94727fa1ec49"
 "src/status.rs" = "5eef839a9cfd260c7864b68c3a7e8154160e0009a0abe01bee23ab6bc885d50f"
 "src/storage.rs" = "670ebb2944449eab9eee8c1318f0885baaca3ab103f9e82e6c88b451ed63588c"

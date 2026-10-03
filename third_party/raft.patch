@@ -1,0 +1,463 @@
+keyval determinism patch for vendored raft-rs 0.7.0 (W02.3; PLAN.md §7.3, D-57).
+
+Base: vendor/raft/raft as committed in 07e9ec7 (crates.io raft 0.7.0, upstream commit
+10c6e9db, with W02.1's codegen pinning; see vendor/raft/VENDOR.toml). This diff takes that
+tree to the patched one, which is what vendor/raft/raft contains. It applies with
+`git apply` from the repository root. build_id hashes this file.
+
+What it changes, and only this:
+- src/entropy.rs (new): a mandatory `Entropy` trait, and SplitMix64, a seeded generator
+  for tests, examples and benches.
+- Raft::new and RawNode::new (and the feature-gated with_default_logger variants) take an
+  `Entropy` source. reset_randomized_election_timeout draws from it, and asserts the
+  result is in range, instead of rand::thread_rng(). It is the only randomness in the crate
+  (spike/raft-audit.md, E-1).
+- Cargo.toml: the rand dependency is removed, so ambient entropy is unreachable.
+- lib.rs doc examples, examples/ and benches/: pass a seeded SplitMix64.
+Vote, log-matching, quorum and commit rules are untouched.
+
+diff --git a/vendor/raft/raft/Cargo.toml b/vendor/raft/raft/Cargo.toml
+--- a/vendor/raft/raft/Cargo.toml
++++ b/vendor/raft/raft/Cargo.toml
+@@ -13,6 +13,9 @@
+ # published raft-proto, whose build script runs protoc from PATH, can never enter the
+ # build (P4). The prost-codec feature is removed because the vendored raft-proto has no
+ # prost code generation (../VENDOR.toml).
++#
++# keyval (W02.3, PLAN.md §7.3): the `rand` dependency is removed. Election timeouts come only
++# from the mandatory `Entropy` source (src/entropy.rs), so ambient randomness is unreachable.
+ 
+ [package]
+ edition = "2021"
+@@ -69,8 +72,6 @@
+ path = "../raft-proto"
+ default-features = false
+ 
+-[dependencies.rand]
+-version = "0.8"
+ 
+ [dependencies.slog]
+ version = "2.2"
+diff --git a/vendor/raft/raft/benches/suites/raft.rs b/vendor/raft/raft/benches/suites/raft.rs
+--- a/vendor/raft/raft/benches/suites/raft.rs
++++ b/vendor/raft/raft/benches/suites/raft.rs
+@@ -24,7 +24,7 @@
+ fn quick_raft(storage: MemStorage, logger: &slog::Logger) -> Raft<MemStorage> {
+     let id = 1;
+     let config = Config::new(id);
+-    Raft::new(&config, storage, logger).unwrap()
++    Raft::new(&config, storage, raft::SplitMix64::new(id), logger).unwrap()
+ }
+ 
+ pub fn bench_raft_new(c: &mut Criterion) {
+diff --git a/vendor/raft/raft/benches/suites/raw_node.rs b/vendor/raft/raft/benches/suites/raw_node.rs
+--- a/vendor/raft/raft/benches/suites/raw_node.rs
++++ b/vendor/raft/raft/benches/suites/raw_node.rs
+@@ -20,7 +20,7 @@
+     let conf_state = ConfState::from((vec![1], vec![]));
+     let storage = MemStorage::new_with_conf_state(conf_state);
+     let config = Config::new(id);
+-    RawNode::new(&config, storage, logger).unwrap()
++    RawNode::new(&config, storage, raft::SplitMix64::new(id), logger).unwrap()
+ }
+ 
+ pub fn bench_raw_node_new(c: &mut Criterion) {
+diff --git a/vendor/raft/raft/examples/five_mem_node/main.rs b/vendor/raft/raft/examples/five_mem_node/main.rs
+--- a/vendor/raft/raft/examples/five_mem_node/main.rs
++++ b/vendor/raft/raft/examples/five_mem_node/main.rs
+@@ -186,7 +186,8 @@
+         s.mut_metadata().mut_conf_state().voters = vec![1];
+         let storage = MemStorage::new();
+         storage.wl().apply_snapshot(s).unwrap();
+-        let raft_group = Some(RawNode::new(&cfg, storage, &logger).unwrap());
++        // keyval (W02.3): a seeded entropy source per node.
++        let raft_group = Some(RawNode::new(&cfg, storage, raft::SplitMix64::new(cfg.id), &logger).unwrap());
+         Node {
+             raft_group,
+             my_mailbox,
+@@ -217,7 +218,7 @@
+         cfg.id = msg.to;
+         let logger = logger.new(o!("tag" => format!("peer_{}", msg.to)));
+         let storage = MemStorage::new();
+-        self.raft_group = Some(RawNode::new(&cfg, storage, &logger).unwrap());
++        self.raft_group = Some(RawNode::new(&cfg, storage, raft::SplitMix64::new(cfg.id), &logger).unwrap());
+     }
+ 
+     // Step a raft message, initialize the raft if need.
+diff --git a/vendor/raft/raft/examples/single_mem_node/main.rs b/vendor/raft/raft/examples/single_mem_node/main.rs
+--- a/vendor/raft/raft/examples/single_mem_node/main.rs
++++ b/vendor/raft/raft/examples/single_mem_node/main.rs
+@@ -63,7 +63,8 @@
+     };
+ 
+     // Create the Raft node.
+-    let mut r = RawNode::new(&cfg, storage, &logger).unwrap();
++    // keyval (W02.3): a seeded entropy source.
++    let mut r = RawNode::new(&cfg, storage, raft::SplitMix64::new(1), &logger).unwrap();
+ 
+     let (sender, receiver) = mpsc::channel();
+ 
+diff --git a/vendor/raft/raft/src/entropy.rs b/vendor/raft/raft/src/entropy.rs
+new file mode 100644
+--- /dev/null
++++ b/vendor/raft/raft/src/entropy.rs
+@@ -0,0 +1,88 @@
++// keyval (W02.3, PLAN.md §7.3, D-57): the determinism patch. Not part of upstream raft-rs.
++
++//! Randomness for the randomized election timeout, supplied by the embedding application.
++//!
++//! Upstream raft-rs 0.7.0 draws every election timeout from `rand::thread_rng()`, which is
++//! seeded by the operating system and so differs on every run. This crate instead takes a
++//! mandatory [`Entropy`] source in [`Raft::new`](crate::Raft::new) and
++//! [`RawNode::new`](crate::RawNode::new), and draws from nothing else. There is no ambient
++//! default: an embedding that wants reproducible runs supplies a seeded source, and one
++//! that wants operating-system randomness wraps it in this trait itself.
++//!
++//! The source is consulted only by `reset_randomized_election_timeout`, at construction and
++//! on every `reset` (each change of role or term). It never influences vote,
++//! log-matching, quorum or commit rules.
++
++/// A source of randomness for Raft's randomized election timeout.
++pub trait Entropy {
++    /// Returns a value in `low..high`, ideally uniformly distributed. `Config::validate`
++    /// guarantees `low < high`; a value outside the range is a broken source and panics.
++    fn gen_range(&mut self, low: usize, high: usize) -> usize;
++}
++
++impl<E: Entropy + ?Sized> Entropy for Box<E> {
++    fn gen_range(&mut self, low: usize, high: usize) -> usize {
++        (**self).gen_range(low, high)
++    }
++}
++
++/// A small seeded generator (SplitMix64) for tests, examples and benches.
++///
++/// The same seed always yields the same sequence, in every process and on every platform.
++/// It is not cryptographic. Its modulo reduction has a bias of at most
++/// `(high - low) / 2^64`, which is negligible for election timeouts.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct SplitMix64 {
++    state: u64,
++}
++
++impl SplitMix64 {
++    /// A generator starting from `seed`.
++    pub fn new(seed: u64) -> SplitMix64 {
++        SplitMix64 { state: seed }
++    }
++
++    /// The next 64 pseudo-random bits.
++    pub fn next_u64(&mut self) -> u64 {
++        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
++        let mut z = self.state;
++        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
++        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
++        z ^ (z >> 31)
++    }
++}
++
++impl Entropy for SplitMix64 {
++    fn gen_range(&mut self, low: usize, high: usize) -> usize {
++        assert!(low < high, "empty range {}..{}", low, high);
++        let span = (high - low) as u64;
++        low + (self.next_u64() % span) as usize
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn the_same_seed_gives_the_same_sequence() {
++        let mut a = SplitMix64::new(7);
++        let mut b = SplitMix64::new(7);
++        let xs: Vec<usize> = (0..64).map(|_| a.gen_range(10, 20)).collect();
++        let ys: Vec<usize> = (0..64).map(|_| b.gen_range(10, 20)).collect();
++        assert_eq!(xs, ys);
++        assert!(xs.iter().all(|x| (10..20).contains(x)), "{:?}", xs);
++        let mut c = SplitMix64::new(8);
++        let zs: Vec<usize> = (0..64).map(|_| c.gen_range(10, 20)).collect();
++        assert_ne!(xs, zs, "different seeds give different sequences");
++    }
++
++    #[test]
++    fn the_reference_vector_is_stable() {
++        // SplitMix64 from seed 0 (Steele, Lea and Flood 2014; Vigna's reference code).
++        let mut g = SplitMix64::new(0);
++        assert_eq!(g.next_u64(), 0xE220_A839_7B1D_CDAF);
++        assert_eq!(g.next_u64(), 0x6E78_9E6A_A1B9_65F4);
++        assert_eq!(g.next_u64(), 0x06C4_5D18_8009_454F);
++    }
++}
+diff --git a/vendor/raft/raft/src/lib.rs b/vendor/raft/raft/src/lib.rs
+--- a/vendor/raft/raft/src/lib.rs
++++ b/vendor/raft/raft/src/lib.rs
+@@ -19,7 +19,8 @@
+ ## Creating a Raft node
+ 
+ You can use [`RawNode::new`] to create the Raft node. To create the Raft node, you need to
+-provide a [`Storage`] component, and a [`Config`] to the [`RawNode::new`] function.
++provide a [`Storage`] component, a [`Config`] and an [`Entropy`] source (keyval patch,
++W02.3) to the [`RawNode::new`] function.
+ 
+ ```rust
+ use raft::{
+@@ -42,7 +43,7 @@
+ // We'll use the built-in `MemStorage`, but you will likely want your own.
+ // Finally, create our Raft node!
+ let storage = MemStorage::new_with_conf_state((vec![1], vec![]));
+-let mut node = RawNode::new(&config, storage, &logger).unwrap();
++let mut node = RawNode::new(&config, storage, raft::SplitMix64::new(1), &logger).unwrap();
+ ```
+ 
+ ## Ticking the Raft node
+@@ -57,7 +58,7 @@
+ # let config = Config { id: 1, ..Default::default() };
+ # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+ # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-# let mut node = RawNode::new(&config, store, &logger).unwrap();
++# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+ # node.raft.become_candidate();
+ # node.raft.become_leader();
+ use std::{sync::mpsc::{channel, RecvTimeoutError}, time::{Instant, Duration}};
+@@ -124,7 +125,7 @@
+ # let config = Config { id: 1, ..Default::default() };
+ # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+ # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-# let mut node = RawNode::new(&config, store, &logger).unwrap();
++# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+ # node.raft.become_candidate();
+ # node.raft.become_leader();
+ #
+@@ -187,7 +188,7 @@
+ # config.validate().unwrap();
+ # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+ # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-# let mut node = RawNode::new(&config, store, &logger).unwrap();
++# let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+ #
+ if !node.has_ready() {
+     return;
+@@ -211,7 +212,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -236,7 +237,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -265,7 +266,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -320,7 +321,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -346,7 +347,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -370,7 +371,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -397,7 +398,7 @@
+     # config.validate().unwrap();
+     # let store = MemStorage::new_with_conf_state((vec![1], vec![]));
+     # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-    # let mut node = RawNode::new(&config, store, &logger).unwrap();
++    # let mut node = RawNode::new(&config, store, raft::SplitMix64::new(1), &logger).unwrap();
+     #
+     # if !node.has_ready() {
+     #   return;
+@@ -454,7 +455,7 @@
+ # let mut config = Config { id: 1, ..Default::default() };
+ # let store = MemStorage::new_with_conf_state((vec![1, 2], vec![]));
+ # let logger = slog::Logger::root(slog_stdlog::StdLog.fuse(), o!());
+-# let mut node = RawNode::new(&mut config, store, &logger).unwrap();
++# let mut node = RawNode::new(&mut config, store, raft::SplitMix64::new(1), &logger).unwrap();
+ let steps = vec![
+     raft_proto::new_conf_change_single(4, ConfChangeType::AddNode),
+     raft_proto::new_conf_change_single(3, ConfChangeType::RemoveNode),
+@@ -504,6 +505,7 @@
+ 
+ mod confchange;
+ mod config;
++pub mod entropy;
+ mod errors;
+ mod log_unstable;
+ mod quorum;
+@@ -525,6 +527,7 @@
+ };
+ pub use confchange::{Changer, MapChange};
+ pub use config::Config;
++pub use entropy::{Entropy, SplitMix64};
+ pub use errors::{Error, Result, StorageError};
+ pub use log_unstable::Unstable;
+ pub use quorum::joint::Configuration as JointConfig;
+diff --git a/vendor/raft/raft/src/raft.rs b/vendor/raft/raft/src/raft.rs
+--- a/vendor/raft/raft/src/raft.rs
++++ b/vendor/raft/raft/src/raft.rs
+@@ -24,7 +24,6 @@
+ };
+ use protobuf::Message as _;
+ use raft_proto::ConfChangeI;
+-use rand::{self, Rng};
+ use slog::{self, Logger};
+ 
+ #[cfg(feature = "failpoints")]
+@@ -38,6 +37,7 @@
+ use super::storage::{GetEntriesContext, GetEntriesFor, Storage};
+ use super::Config;
+ use crate::confchange::Changer;
++use crate::entropy::Entropy;
+ use crate::quorum::VoteResult;
+ use crate::util;
+ use crate::util::NO_LIMIT;
+@@ -261,6 +261,9 @@
+ 
+     /// Max size per committed entries in a `Read`.
+     pub(crate) max_committed_size_per_ready: u64,
++
++    /// keyval (W02.3): the only source of randomness, for the randomized election timeout.
++    entropy: Box<dyn Entropy + Send>,
+ }
+ 
+ /// A struct that represents the raft consensus itself. Stores details concerning the current
+@@ -324,7 +327,15 @@
+ impl<T: Storage> Raft<T> {
+     /// Creates a new raft for use on the node.
+     #[allow(clippy::new_ret_no_self)]
+-    pub fn new(c: &Config, store: T, logger: &Logger) -> Result<Self> {
++    ///
++    /// keyval (W02.3): `entropy` is mandatory and is the only source of randomness. It is
++    /// drawn from at construction and on every reset (see [`crate::entropy`]).
++    pub fn new(
++        c: &Config,
++        store: T,
++        entropy: impl Entropy + Send + 'static,
++        logger: &Logger,
++    ) -> Result<Self> {
+         c.validate()?;
+         let logger = logger.new(o!("raft_id" => c.id));
+         let raft_state = store.initial_state()?;
+@@ -369,6 +380,7 @@
+                     last_log_tail_index: 0,
+                 },
+                 max_committed_size_per_ready: c.max_committed_size_per_ready,
++                entropy: Box::new(entropy),
+             },
+         };
+         confchange::restore(&mut r.prs, r.r.raft_log.last_index(), conf_state)?;
+@@ -413,8 +425,12 @@
+     /// The default logger is an `slog` to `log` adapter.
+     #[allow(clippy::new_ret_no_self)]
+     #[cfg(feature = "default-logger")]
+-    pub fn with_default_logger(c: &Config, store: T) -> Result<Self> {
+-        Self::new(c, store, &crate::default_logger())
++    pub fn with_default_logger(
++        c: &Config,
++        store: T,
++        entropy: impl Entropy + Send + 'static,
++    ) -> Result<Self> {
++        Self::new(c, store, entropy, &crate::default_logger())
+     }
+ 
+     /// Grabs an immutable reference to the store.
+@@ -2806,8 +2822,16 @@
+     /// Regenerates and stores the election timeout.
+     pub fn reset_randomized_election_timeout(&mut self) {
+         let prev_timeout = self.randomized_election_timeout;
+-        let timeout =
+-            rand::thread_rng().gen_range(self.min_election_timeout..self.max_election_timeout);
++        let (low, high) = (self.min_election_timeout, self.max_election_timeout);
++        // keyval (W02.3): drawn from the supplied entropy source, never from the ambient RNG.
++        let timeout = self.r.entropy.gen_range(low, high);
++        assert!(
++            low <= timeout && timeout < high,
++            "entropy source returned {} outside {}..{}",
++            timeout,
++            low,
++            high
++        );
+         debug!(
+             self.logger,
+             "reset election timeout {prev_timeout} -> {timeout} at {election_elapsed}",
+diff --git a/vendor/raft/raft/src/raw_node.rs b/vendor/raft/raft/src/raw_node.rs
+--- a/vendor/raft/raft/src/raw_node.rs
++++ b/vendor/raft/raft/src/raw_node.rs
+@@ -29,6 +29,7 @@
+ use crate::eraftpb::{ConfState, Entry, EntryType, HardState, Message, MessageType, Snapshot};
+ use crate::errors::{Error, Result};
+ use crate::read_only::ReadState;
++use crate::entropy::Entropy;
+ use crate::{config::Config, StateRole};
+ use crate::{storage::GetEntriesFor, GetEntriesContext, Raft, SoftState, Status, Storage};
+ 
+@@ -299,9 +300,17 @@
+ impl<T: Storage> RawNode<T> {
+     #[allow(clippy::new_ret_no_self)]
+     /// Create a new RawNode given some [`Config`].
+-    pub fn new(config: &Config, store: T, logger: &Logger) -> Result<Self> {
++    ///
++    /// keyval (W02.3): `entropy` is mandatory and is the only source of randomness (see
++    /// [`crate::entropy`]).
++    pub fn new(
++        config: &Config,
++        store: T,
++        entropy: impl Entropy + Send + 'static,
++        logger: &Logger,
++    ) -> Result<Self> {
+         assert_ne!(config.id, 0, "config.id must not be zero");
+-        let r = Raft::new(config, store, logger)?;
++        let r = Raft::new(config, store, entropy, logger)?;
+         let mut rn = RawNode {
+             raft: r,
+             prev_hs: Default::default(),
+@@ -325,8 +334,12 @@
+     /// The default logger is an `slog` to `log` adapter.
+     #[cfg(feature = "default-logger")]
+     #[allow(clippy::new_ret_no_self)]
+-    pub fn with_default_logger(c: &Config, store: T) -> Result<Self> {
+-        Self::new(c, store, &crate::default_logger())
++    pub fn with_default_logger(
++        c: &Config,
++        store: T,
++        entropy: impl Entropy + Send + 'static,
++    ) -> Result<Self> {
++        Self::new(c, store, entropy, &crate::default_logger())
+     }
+ 
+     /// Sets priority of node.

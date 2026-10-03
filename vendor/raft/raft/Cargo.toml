@@ -13,6 +13,9 @@
 # published raft-proto, whose build script runs protoc from PATH, can never enter the
 # build (P4). The prost-codec feature is removed because the vendored raft-proto has no
 # prost code generation (../VENDOR.toml).
+#
+# keyval (W02.3, PLAN.md §7.3): the `rand` dependency is removed. Election timeouts come only
+# from the mandatory `Entropy` source (src/entropy.rs), so ambient randomness is unreachable.
 
 [package]
 edition = "2021"
@@ -69,8 +72,6 @@ version = "0.7.0"
 path = "../raft-proto"
 default-features = false
 
-[dependencies.rand]
-version = "0.8"
 
 [dependencies.slog]
 version = "2.2"

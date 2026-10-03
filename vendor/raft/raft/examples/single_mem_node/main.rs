@@ -63,7 +63,8 @@ fn main() {
     };
 
     // Create the Raft node.
-    let mut r = RawNode::new(&cfg, storage, &logger).unwrap();
+    // keyval (W02.3): a seeded entropy source.
+    let mut r = RawNode::new(&cfg, storage, raft::SplitMix64::new(1), &logger).unwrap();
 
     let (sender, receiver) = mpsc::channel();
 

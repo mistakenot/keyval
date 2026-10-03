@@ -24,7 +24,6 @@ use crate::eraftpb::{
 };
 use protobuf::Message as _;
 use raft_proto::ConfChangeI;
-use rand::{self, Rng};
 use slog::{self, Logger};
 
 #[cfg(feature = "failpoints")]
@@ -38,6 +37,7 @@ use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
 use super::storage::{GetEntriesContext, GetEntriesFor, Storage};
 use super::Config;
 use crate::confchange::Changer;
+use crate::entropy::Entropy;
 use crate::quorum::VoteResult;
 use crate::util;
 use crate::util::NO_LIMIT;
@@ -261,6 +261,9 @@ pub struct RaftCore<T: Storage> {
 
     /// Max size per committed entries in a `Read`.
     pub(crate) max_committed_size_per_ready: u64,
+
+    /// keyval (W02.3): the only source of randomness, for the randomized election timeout.
+    entropy: Box<dyn Entropy + Send>,
 }
 
 /// A struct that represents the raft consensus itself. Stores details concerning the current
@@ -324,7 +327,15 @@ pub fn vote_resp_msg_type(t: MessageType) -> MessageType {
 impl<T: Storage> Raft<T> {
     /// Creates a new raft for use on the node.
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(c: &Config, store: T, logger: &Logger) -> Result<Self> {
+    ///
+    /// keyval (W02.3): `entropy` is mandatory and is the only source of randomness. It is
+    /// drawn from at construction and on every reset (see [`crate::entropy`]).
+    pub fn new(
+        c: &Config,
+        store: T,
+        entropy: impl Entropy + Send + 'static,
+        logger: &Logger,
+    ) -> Result<Self> {
         c.validate()?;
         let logger = logger.new(o!("raft_id" => c.id));
         let raft_state = store.initial_state()?;
@@ -369,6 +380,7 @@ impl<T: Storage> Raft<T> {
                     last_log_tail_index: 0,
                 },
                 max_committed_size_per_ready: c.max_committed_size_per_ready,
+                entropy: Box::new(entropy),
             },
         };
         confchange::restore(&mut r.prs, r.r.raft_log.last_index(), conf_state)?;
@@ -413,8 +425,12 @@ impl<T: Storage> Raft<T> {
     /// The default logger is an `slog` to `log` adapter.
     #[allow(clippy::new_ret_no_self)]
     #[cfg(feature = "default-logger")]
-    pub fn with_default_logger(c: &Config, store: T) -> Result<Self> {
-        Self::new(c, store, &crate::default_logger())
+    pub fn with_default_logger(
+        c: &Config,
+        store: T,
+        entropy: impl Entropy + Send + 'static,
+    ) -> Result<Self> {
+        Self::new(c, store, entropy, &crate::default_logger())
     }
 
     /// Grabs an immutable reference to the store.
@@ -2806,8 +2822,16 @@ impl<T: Storage> Raft<T> {
     /// Regenerates and stores the election timeout.
     pub fn reset_randomized_election_timeout(&mut self) {
         let prev_timeout = self.randomized_election_timeout;
-        let timeout =
-            rand::thread_rng().gen_range(self.min_election_timeout..self.max_election_timeout);
+        let (low, high) = (self.min_election_timeout, self.max_election_timeout);
+        // keyval (W02.3): drawn from the supplied entropy source, never from the ambient RNG.
+        let timeout = self.r.entropy.gen_range(low, high);
+        assert!(
+            low <= timeout && timeout < high,
+            "entropy source returned {} outside {}..{}",
+            timeout,
+            low,
+            high
+        );
         debug!(
             self.logger,
             "reset election timeout {prev_timeout} -> {timeout} at {election_elapsed}",
