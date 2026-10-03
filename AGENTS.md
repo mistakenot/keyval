@@ -230,7 +230,10 @@ involved. It is the only sanctioned panic in production code, and no `allow` is 
   `disallowed-macros` covering wall-clock time (`Instant`, `SystemTime`), threads,
   `RandomState`/`HashMap`/`HashSet`, ambient environment (`std::env`), filesystem,
   network and process I/O, stdio, `println!`-style macros and `thread_local!`. Each
-  entry's `reason` names the port to use instead (§7.2).
+  entry's `reason` names the port to use instead (§7.2). These bans cover test code
+  too, because the test allowances exempt only `unwrap`/`expect`/`panic!`. Tests in a
+  deterministic crate use the same ports with seeded fakes. A test that needs the real
+  environment, clock or filesystem belongs in an adapter or harness crate.
 
 Escape-hatch policy:
 
@@ -298,8 +301,8 @@ The `./dev` surface that exists today (PLAN.md §11.13; every command takes `--j
 exit 0 = ok, 1 = failed, 2 = usage error):
 
 - `./dev doctor` — the pinned toolchain and every required tool (rustc, cargo, rustfmt,
-  clippy, git, br, bv, ntm, ubs, dcg, am), with versions and a real capability probe
-  each; fails on anything missing or broken.
+  clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
+  capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
   DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, LINT-PROBES, LINT-ALLOWS,
   LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
