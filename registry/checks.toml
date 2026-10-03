@@ -452,3 +452,15 @@ tier = "T0"
 run = "./dev check CONFIG-RULES"
 min_cases = 35
 status = "implemented"
+
+[[check]]
+id = "CONFIG-FINGERPRINT"
+summary = "the semantic-config fingerprint covers exactly the semantic limits, the command format, the SCAN caps and the sorted voter set, and its in-crate SHA-256 matches FIPS 180-4 (DUR-8, D-75)"
+kind = "test_group"
+covers = ["DUR-8"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check CONFIG-FINGERPRINT"
+min_cases = 8
+status = "implemented"

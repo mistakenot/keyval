@@ -42,7 +42,9 @@
 //!   with a strict in-crate reader and refuses every §7.10 inconsistency with a specific
 //!   [`ConfigError`]. Each numeric key's allowed range is declared once, in
 //!   [`ConfigParam`], and [`ConsensusSettings`] carry the consensus library's settings
-//!   in core-owned types.
+//!   in core-owned types. [`Config::semantic_fingerprint`] digests every value that can
+//!   change a result, plus the voter set (DUR-8).
+//! - **SHA-256** ([`Sha256`], D-75): in-crate, for the fingerprint and command digests.
 //!
 //! This crate also owns [`invariant!`], the project's CD-7 assertion macro and the only
 //! sanctioned panic in first-party production code (CD-8).
@@ -67,6 +69,7 @@ mod log_index;
 mod mutation;
 mod outcome;
 mod range;
+mod sha256;
 mod telemetry;
 
 pub use client::{
@@ -74,11 +77,12 @@ pub use client::{
     ScanRangeError, ServedBy,
 };
 pub use config::{
-    AddressProblem, COMMAND_ENVELOPE_BOUND, Config, ConfigError, ConfigParam, ConfigParamClass,
-    ConfigSyntax, ConfigTable, ConfigValueKind, ConsensusSettings, ConsensusViolation,
-    ENTRY_ENVELOPE_BOUND, FRAME_FIELDS, FRAME_OVERHEAD_BYTES, JOURNAL_PROTOCOL_ALLOWANCE,
-    MAX_COMMAND_BYTES, MAX_CONFIG_BYTES, MAX_FRAME_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES,
-    NodeConfig, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION, ReadMode,
+    AddressProblem, COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, Config, ConfigError,
+    ConfigParam, ConfigParamClass, ConfigSyntax, ConfigTable, ConfigValueKind, ConsensusSettings,
+    ConsensusViolation, ENTRY_ENVELOPE_BOUND, FRAME_FIELDS, FRAME_OVERHEAD_BYTES,
+    JOURNAL_PROTOCOL_ALLOWANCE, MAX_COMMAND_BYTES, MAX_CONFIG_BYTES, MAX_FRAME_PAYLOAD_BYTES,
+    MAX_REQUEST_BODY_BYTES, MAX_SCAN_PAGE_BYTES, NodeConfig, PER_ENTRY_OVERHEAD_BOUND,
+    PROTOCOL_VERSION, ReadMode, SEMANTIC_ENCODING, SemanticFingerprint,
 };
 pub use consensus::{
     Consensus, Entry, EntryPayload, HardState, LightReady, OutboundMessage, Progress, ProposeError,
@@ -95,4 +99,5 @@ pub use log_index::{LogIndex, Term, Version};
 pub use mutation::{ExpectedVersion, Mutation};
 pub use outcome::{Attempt, AttemptOutcome, Decision, LiveStateLimit, TerminalResult};
 pub use range::{MAX_SAFE_INTEGER, OutOfRange, Quantity};
+pub use sha256::Sha256;
 pub use telemetry::{DroppedInput, LogEvent, LogLevel, Observation};

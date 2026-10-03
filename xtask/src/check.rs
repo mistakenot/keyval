@@ -696,6 +696,21 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 35,
     },
+    CheckDef {
+        id: "CONFIG-FINGERPRINT",
+        summary: "the semantic-config fingerprint covers exactly the semantic limits, the command format, \
+                  the SCAN caps and the sorted voter set, and its in-crate SHA-256 matches \
+                  FIPS 180-4 (DUR-8, D-75)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["config::fingerprint::tests::", "sha256::tests::"],
+        },
+        min_cases: 8,
+    },
 ];
 
 /// Outcome of one requested check.

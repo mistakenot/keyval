@@ -29,6 +29,7 @@
 
 mod consensus;
 mod error;
+mod fingerprint;
 mod params;
 mod reader;
 mod rules;
@@ -41,10 +42,12 @@ use std::path::{Component, Path, PathBuf};
 
 pub use consensus::{ConsensusSettings, ConsensusViolation, ReadMode};
 pub use error::{AddressProblem, ConfigError, ConfigSyntax, ConfigTable, ConfigValueKind};
+pub use fingerprint::{SEMANTIC_ENCODING, SemanticFingerprint};
 pub use params::{
-    COMMAND_ENVELOPE_BOUND, ConfigParam, ConfigParamClass, ENTRY_ENVELOPE_BOUND, FRAME_FIELDS,
-    FRAME_OVERHEAD_BYTES, JOURNAL_PROTOCOL_ALLOWANCE, MAX_COMMAND_BYTES, MAX_CONFIG_BYTES,
-    MAX_FRAME_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION,
+    COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, ConfigParam, ConfigParamClass,
+    ENTRY_ENVELOPE_BOUND, FRAME_FIELDS, FRAME_OVERHEAD_BYTES, JOURNAL_PROTOCOL_ALLOWANCE,
+    MAX_COMMAND_BYTES, MAX_CONFIG_BYTES, MAX_FRAME_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES,
+    MAX_SCAN_PAGE_BYTES, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION,
 };
 
 use crate::{ByteCount, ClusterId, NodeId, Tick};

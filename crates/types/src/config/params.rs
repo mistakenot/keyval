@@ -21,6 +21,15 @@ const GIB: u64 = 1024 * MIB;
 /// is refused.
 pub const PROTOCOL_VERSION: u64 = 1;
 
+/// The canonical command encoding's version (§7.5). The command codec (W09) writes it,
+/// and the semantic-config fingerprint covers it (§7.10, DUR-8).
+pub const COMMAND_FORMAT_VERSION: u64 = 1;
+
+/// The SCAN page's cap on decoded key and value bytes (1 MiB, §7.11): a fixed semantic
+/// constant, covered by the semantic-config fingerprint. The item cap is
+/// [`PageSize::MAX`](crate::PageSize::MAX).
+pub const MAX_SCAN_PAGE_BYTES: u64 = MIB;
+
 /// The largest config file, in bytes (CD-9). A five-node file is under 2 KiB, so this bounds
 /// every allocation the reader makes without constraining any real configuration.
 pub const MAX_CONFIG_BYTES: u64 = 64 * KIB;
