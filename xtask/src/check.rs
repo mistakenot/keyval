@@ -470,6 +470,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 3,
     },
+    CheckDef {
+        id: "PORTS",
+        summary: "the ports are core-owned types: inbound step -> ordered effects, stale \
+                  completions recognisable, bounded in-process reads, a library-neutral \
+                  Consensus port (§7.2, §7.3)",
+        kind: Kind::TestGroup,
+        covers: &["CD-1", "T-1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &[
+                "client::",
+                "consensus::",
+                "effects::",
+                "in_process::",
+                "telemetry::",
+            ],
+        },
+        min_cases: 11,
+    },
 ];
 
 /// Outcome of one requested check.
