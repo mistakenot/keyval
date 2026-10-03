@@ -1,3 +1,287 @@
+# AGENTS.md — keyval
+
+> Rules for AI coding agents working on **keyval**: a strongly consistent key-value store in
+> Rust — one five-voter Raft group, HTTP/JSON API, deterministic simulation testing.
+> Read `PLAN.md` before doing anything else.
+
+---
+
+## RULE 0 — PLAN.md IS THE SOURCE OF TRUTH
+
+`PLAN.md` is owner-owned and authoritative. This file restates the plan's agent rules
+(§11.5) plus the Rust baseline that enforces them; where the two disagree, **`PLAN.md`
+wins** and the disagreement is a defect to report, not to resolve silently.
+
+Precedence when any two sources disagree (PLAN.md §0.4), higher wins:
+
+1. Explicit owner instruction (chat, or a bead comment written by the owner)
+2. `PLAN.md` (and `registry/workgraph.toml`, which mirrors §12.2 exactly)
+3. `api/openapi.yaml`
+4. Checkers, invariants, the reference model and the verification registry
+5. Tests
+6. Beads (task descriptions)
+7. Code
+
+File a bead labelled `conflict` citing both locations; never quietly pick the
+convenient side.
+
+This repo inherits the suite-wide ACFS rules in `/data/projects/AGENTS.md` (no file
+deletion without permission, no destructive git, `ubs` before commit) with one explicit
+replacement, stated next.
+
+---
+
+## Git Discipline — REPLACES the ACFS "Landing the Plane" checklist
+
+**This section overrides any tool-generated git instructions elsewhere in this file**
+(e.g. raw `git add`/`git commit`/`git push` in the appended tool blurbs below).
+
+The ACFS landing-the-plane git workflow does **not** apply in this repo:
+
+- Commits happen **only** through `./dev commit` (the exact-candidate wrapper, §11.10).
+- Never raw `git add` / `git commit`; never `git add -A` in the shared checkout.
+- Never `git pull --rebase` in the shared checkout — it can disturb other agents'
+  uncommitted work.
+- Never create branches or worktrees (including `ntm --worktrees`).
+- Any push is performed by the wrapper under the commit lock once the owner has created
+  a remote. That is an explicit owner action; **no remote exists yet** (§17).
+- Until W01 lands `./dev`, a single coordinator agent stages, runs the bootstrap gate on
+  a frozen candidate copy, and commits (§12.4). Everyone else does not touch git.
+
+---
+
+## Agent Rules (PLAN.md §11.5 — normative; W01's gate checks this list is present)
+
+1. **Owner override.** Explicit owner instructions win (§0.4).
+2. **Precedence.** Follow §0.4. Report conflicts as `conflict` beads; never silently
+   pick a side.
+3. **Oracles are sacred (P9).** Never weaken, skip, delete or loosen a checker,
+   invariant, test, fixture, bug-injection variant or corpus seed to make something
+   pass. A genuine checker or model bug is fixed in a dedicated bead labelled
+   `conflict` **and** `needs-owner` (one bead, both labels — §0.4 files it as a
+   conflict, and §13 item 10 counts `conflict` beads), with an independent
+   counterexample, and the bug-injection self-test must still pass.
+4. **Determinism (P4).** In deterministic crates: no wall clock, no unseeded or
+   thread-local RNG, no threads/async, no randomly hashed maps or behaviour-affecting
+   unordered iteration, no direct I/O. Do not silence the determinism lint.
+5. **Hexagonal core (P3, CD-1).** Domain and engine logic live only in deterministic
+   crates. Adapters only translate. Deterministic crates never import adapter crates,
+   HTTP, filesystem or async-runtime types, and no Raft-library type crosses the
+   Consensus port. No logic that runs only in simulation, or only in production,
+   inside the core.
+6. **Real slices only (P6).** No placeholder crates, no fake implementations presented
+   as real, no `todo!()` on a path a test exercises, no simulated slice presented as a
+   real server.
+7. **Plan is owner-owned.** Do not change the meaning of normative sections of
+   `PLAN.md`; propose via a `plan-change` bead. `api/openapi.yaml` may be edited only
+   to match `PLAN.md` §8.
+8. **Stay in your area.** Edit only files within your bead's reserved area. Shared
+   surfaces (§11.7) need a short explicit reservation. If you need more, reserve it,
+   or file a dependency bead.
+9. **Seeds.** Every failing case you fix goes into `sim/corpus/` in the same commit
+   (shrunk scenario if available).
+10. **Robot mode.** Use `bv --robot-*` and `br … --json`. Never launch interactive TUIs.
+11. **Code design (§5.2).** Follow CD-2 to CD-12. In particular: model state so invalid
+    combinations cannot be built (CD-2); parse input into domain types at the boundary
+    (CD-3); use the dedicated ID/index types, never bare integers (CD-4); no wildcard
+    match arms on domain enums (CD-5); assert invariants where state changes (CD-7);
+    give every new queue, map or cache a registered bound (CD-9); add every new
+    dependency to `DEPENDENCIES.md` with its purpose, version and licence (CD-12).
+    **Do not disable or `allow` any lint that enforces a CD principle.**
+12. **Registry (§10.13).** Register every new check in `registry/checks.toml` with its
+    code marker, executable selector, minimum case count, covered requirements and
+    claim class. **Never edit a requirement's status by hand:** activation is derived
+    by `./dev commit --close` when the last listing bead closes (§10.13), and the
+    registry gate rejects hand-edited statuses. Never delete registry rows, golden
+    files, corpus entries or bug variants to make a gate pass.
+13. **Claims (§10.15).** In bead closures, commit messages and reports, state claims in
+    their class. "N seeds passed" is simulation evidence, never proof.
+14. **Robot output (O-6).** Consume tool output via `--json`, never by scraping text.
+    If you change a JSON output, update its schema and version.
+15. **Commits (§11.10).** Commit only through `./dev commit`. Never `git add -A` in the
+    shared checkout. Never create branches or worktrees (including `ntm --worktrees`).
+16. **Evidence.** Close a bead only with a passing acceptance receipt for the current
+    tree. Never mark a check `passed` by hand; statuses come from receipts.
+17. **Test-only code.** Failpoints and bug variants live behind test-only builds and
+    are never enabled in a production build.
+18. **Node data.** Manage nodes only through `./dev cluster …`. Never kill processes by
+    port or with broad patterns, and never delete or rewrite a node's data directory.
+
+---
+
+## Toolchain: Rust & Cargo
+
+Cargo only — never any other build or package tool.
+
+- **Toolchain:** pinned **stable** via `rust-toolchain.toml` (W01 pins the exact
+  version; bumping it is a deliberate change — a bump can strengthen lint groups
+  underneath us, so re-run the full lint gate and record the bump in its own bead).
+- **Edition:** 2024.
+- **Workspace:** virtual manifest at the root; crates live under `crates/` per
+  PLAN.md Appendix A. Crates are created by the first bead that needs them (P6:
+  no empty crates).
+- **Determinism note (T-3):** "same build" covers toolchain, target, lockfile,
+  vendored-library patch, configuration, scenario version and PRNG implementation.
+  `Cargo.lock` is committed; toolchain and lockfile changes invalidate trace
+  comparisons.
+
+### Crate tiers (Appendix A — the tier decides which rules bind)
+
+| Tier | Crates | Extra rules |
+|---|---|---|
+| Deterministic — domain (pure) | `types`, `statemachine` | Rules 4 & 5; std + vendored Raft + approved pure libs only; missing docs on public items denied (CD-11) |
+| Deterministic — engine (no ambient I/O) | `node`, `journal`, `raft_adapter` | Same as domain |
+| Adapters + composition roots | `fs_storage`, `server`, `sim` | Translate only; no domain logic (CD-1) |
+| Oracles (no production deps) | `model`, `checker` | Depend on **no** production crate |
+| Tools | `cli`, `xtask` (`./dev`), `conformance/` (separate package, HTTP only) | — |
+
+One crate (or noted leaf module) = one **area** for file reservations. Shared surfaces
+(workspace `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, `DEPENDENCIES.md`,
+`api/openapi.yaml`, `registry/*`, `.beads/`, module export facades) are edited only
+under a short, explicit reservation (§11.7).
+
+---
+
+## Lint Policy (strict — this is a greenfield project; no legacy allowances)
+
+Lints are configured in W01 (workspace policy + probe tests) and W04 (determinism
+lint), pinned to the project toolchain, and **tested**: a probe file that violates a
+denied lint must be rejected by the gate (W01 acceptance). Documentation of a lint is
+never assumed to match its behaviour — the probe is the proof.
+
+Baseline, in `[workspace.lints]` of the root `Cargo.toml`:
+
+```toml
+[workspace.lints.rust]
+unsafe_code = "forbid"          # CD-8 — includes our patch to the vendored Raft library
+
+[workspace.lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery  = { level = "deny", priority = -1 }
+# CD-8: expected failures are values; broken invariants use CD-7 assertions.
+unwrap_used   = "deny"
+expect_used   = "deny"
+panic         = "deny"
+todo          = "deny"
+unimplemented = "deny"
+dbg_macro     = "deny"
+```
+
+With, in `clippy.toml` (tests may use these — CD-8):
+
+```toml
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+```
+
+Additionally, in deterministic crates:
+
+- **Wildcard enum match arms denied** (CD-5), plus an AST check for catch-all
+  identifier arms (`_x => …` spelled as a binding).
+- **Missing docs on public items denied** (CD-11): every public domain type documents
+  its invariants.
+- **Determinism lint (W04):** `disallowed-methods` / `disallowed-types` covering at
+  least `std::time::Instant::now`, `std::time::SystemTime::now`, `std::thread::spawn`,
+  unseeded/thread-local RNG, default-hashed `HashMap`/`HashSet`, and direct
+  filesystem/network I/O — each entry's `reason` names the port to use instead.
+
+Escape-hatch policy:
+
+- **Never** `allow` a lint that enforces a CD principle, and never silence the
+  determinism lint (rules 4 and 11). No exceptions.
+- Any other `allow` is narrow (one site, or one documented group), carries a comment
+  stating what fired, why it is acceptable here, and the bead ID that decided it —
+  the lint configuration doubles as a decision log. Undocumented allows are defects.
+- `#[allow]` never appears in a commit just to get a gate green. Fix the code or file
+  the bead.
+
+Invariant style (CD-6/CD-7): expected failures are typed results (error enums, no
+string errors). Broken invariants use `assert!` — not `debug_assert!` — because
+invariants are checked **in all builds** (performance is not a v1 concern). Assertion
+messages carry node, index and invariant ID.
+
+---
+
+## Dependencies (CD-12)
+
+- Deterministic crates start from **the standard library plus the vendored Raft
+  library** (`vendor/raft/`, pinned 0.7.0 with recorded checksums). Anything else in a
+  deterministic crate needs a `DEPENDENCIES.md` entry establishing that it is pure
+  (no ambient time, entropy, threads or I/O).
+- Every direct dependency anywhere in the workspace is listed in `DEPENDENCIES.md`
+  with purpose, scope, version, licence and source, in the same commit that adds it.
+  The T0 gate checks direct dependencies ⊆ `DEPENDENCIES.md`.
+- Never add: an async runtime, an HTTP stack, RNG, or clock access to a deterministic
+  crate — that is what adapters and ports are for (rules 4–5). A crate that pulls in
+  its own RNG or clock transitively threatens determinism (P4): check features and
+  transitive deps before proposing it.
+- `Cargo.lock` is committed. Version bumps are their own beads, not riders.
+
+---
+
+## Compiler Checks & Gates (CRITICAL)
+
+After any substantive change, before handing off or closing a bead:
+
+```bash
+rch exec -- cargo check --all-targets
+rch exec -- cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --check
+```
+
+- Offload builds through `rch exec --` so one agent does not starve the machine.
+- Enumerate whole-tree breakage in one pass (collect all errors, then fix), rather
+  than one error at a time.
+- `ubs <changed-files>` before every commit (suite rule).
+- Once W01 lands: `./dev gate fast` is the T0 gate (fmt, clippy, dependency rule,
+  banned imports, registry checks); `./dev doctor` verifies the environment;
+  `./dev check <ID>` runs one registered check. Gate receipts — not your say-so —
+  are what close beads (rule 16).
+
+---
+
+## Testing
+
+Policy (see PLAN.md §10 for the full verification architecture):
+
+- **Unit tests** live inline (`#[cfg(test)]`) in the crate they test and cover the
+  happy path, edge cases (empty, max, boundary — e.g. key length 255/256/257,
+  multibyte UTF-8) and error conditions. Tests may use `unwrap`/`expect`/`panic!`.
+- **Integration tests** live in the owning crate's `tests/` directory. Never add tests
+  to a workspace-root `tests/` directory: the root manifest is virtual, so Cargo
+  silently never compiles them.
+- **Property tests** for stated invariants (e.g. version = execution index; replay
+  returns the original result; bounded collections at N−1/N/N+1).
+- **Compile-fail fixtures** prove CD-2 ("invalid states unrepresentable") claims.
+- **Golden vectors** (journal frames, §7.6) and **corrupt-state fixtures** that must
+  fire CD-7 assertions.
+- **Simulation** is the primary correctness instrument (§10.2–10.9): seeds are
+  deterministic, failing seeds become crash packs, and every fixed failure lands its
+  seed in `sim/corpus/` in the same commit (rule 9).
+- **Conformance** (`conformance/`) talks HTTP only and is checked against
+  `api/openapi.yaml` and the reference model — never against our internals.
+- Failpoints and bug-injection variants are test-only builds (rule 17).
+- Do not hand-run heavy suites on the shared machine when a gate tier covers them:
+  T0 on commit, T1 hourly, T2 nightly (§10.10). Cite receipts, not vibes (rule 13).
+
+---
+
+## Multi-Agent Workflow (this repo's conventions)
+
+- Register with Agent Mail using this repo's absolute path as `project_key`; reserve
+  your bead's **area** before editing, with the bead ID in `reason`.
+- Bead ID = Mail `thread_id`; subjects start `[br-…]`; announce start and completion
+  in-thread. Check your inbox at natural pause points; acknowledge what you read.
+- Work selection: `bv --robot-triage` → claim in `br` → reserve → work → gate →
+  `./dev commit --bead <id>` → release reservations → close with the receipt.
+- The tool-managed sections below (Agent Mail, Beads, bv, ee) are appended by those
+  tools; edit them only via the owning tool (`am docs`, `br agents`, `bv --agents-*`,
+  `ee export agentsmd`).
+
+---
+
 <!-- am:blurb -->
 ## MCP Agent Mail: coordination for multi-agent workflows
 
