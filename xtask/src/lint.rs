@@ -1470,5 +1470,25 @@ mod probes {
         fn ready_and_failed() {
             refused("ready_and_failed", "E0559");
         }
+
+        #[test]
+        fn forge_entry_index() {
+            refused("forge_entry_index", "E0423");
+        }
+
+        #[test]
+        fn recovering_while_ready() {
+            refused("recovering_while_ready", "E0599");
+        }
+
+        #[test]
+        fn forge_ready() {
+            refused("forge_ready", "E0451");
+        }
+
+        #[test]
+        fn forge_scan_page() {
+            refused("forge_scan_page", "E0451");
+        }
     }
 }

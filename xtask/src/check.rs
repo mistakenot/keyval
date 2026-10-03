@@ -621,7 +621,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["lint::probes::compile_fail::"],
         },
-        min_cases: 10,
+        min_cases: 14,
     },
     CheckDef {
         id: "DEP-RULE-FIXTURES",

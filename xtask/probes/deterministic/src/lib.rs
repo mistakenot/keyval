@@ -75,5 +75,13 @@ pub mod version_vs_index;
 #[cfg(keyval_probe = "submitted_with_result")]
 pub mod submitted_with_result;
 
+#[cfg(keyval_probe = "forge_entry_index")]
+pub mod forge_entry_index;
+#[cfg(keyval_probe = "forge_ready")]
+pub mod forge_ready;
+#[cfg(keyval_probe = "forge_scan_page")]
+pub mod forge_scan_page;
 #[cfg(keyval_probe = "ready_and_failed")]
 pub mod ready_and_failed;
+#[cfg(keyval_probe = "recovering_while_ready")]
+pub mod recovering_while_ready;

@@ -1,4 +1,5 @@
-//! Raft positions and key versions: [`Term`], [`LogIndex`] and [`Version`] (CD-4).
+//! Raft positions and key versions: [`Term`], [`LogIndex`], [`EntryIndex`] and
+//! [`Version`] (CD-4).
 //!
 //! A [`Version`] is the log index at which the write that set it executed (DM-3). It is
 //! still a separate type: comparing one with a [`LogIndex`] needs an explicit conversion.
@@ -104,6 +105,58 @@ impl LogIndex {
 }
 
 impl fmt::Display for LogIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// The index of an entry that exists: a [`LogIndex`] of at least 1 (the API spec's
+/// `EntryIndex`, §8.1).
+///
+/// Index 0 holds no entry, so an entry, or a request's first execution
+/// (`original_index`, F-6), can never be at 0.
+///
+/// Invariant: 1 to [`MAX_SAFE_INTEGER`](crate::MAX_SAFE_INTEGER) (D-77).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EntryIndex(u64);
+
+impl EntryIndex {
+    /// Parses a raw entry index.
+    ///
+    /// # Errors
+    ///
+    /// [`OutOfRange`] if `raw` is 0 or above [`MAX_SAFE_INTEGER`](crate::MAX_SAFE_INTEGER).
+    pub const fn new(raw: u64) -> Result<Self, OutOfRange> {
+        match Quantity::EntryIndex.check(raw) {
+            Ok(value) => Ok(Self(value)),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// The entry index at log position `index`, or `None` for index 0, which holds no
+    /// entry.
+    #[must_use]
+    pub const fn at(index: LogIndex) -> Option<Self> {
+        match Self::new(index.0) {
+            Ok(entry) => Some(entry),
+            Err(_) => None,
+        }
+    }
+
+    /// The same position as a [`LogIndex`].
+    #[must_use]
+    pub const fn index(self) -> LogIndex {
+        LogIndex(self.0)
+    }
+
+    /// The raw index.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for EntryIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -261,5 +314,37 @@ mod tests {
             "rule: version == index of the executing write (DM-3)"
         );
         assert_eq!(version.index(), index, "rule: the conversion back is exact");
+    }
+
+    #[test]
+    fn entry_indices_are_1_to_2_pow_53_minus_1() {
+        for raw in [1, 2, MAX_SAFE_INTEGER] {
+            assert_eq!(
+                EntryIndex::new(raw).map(EntryIndex::get),
+                Ok(raw),
+                "rule: an existing entry's index is 1..=2^53-1 (§8.1 EntryIndex); raw={raw}"
+            );
+        }
+        for raw in [0, MAX_SAFE_INTEGER + 1, u64::MAX] {
+            assert_eq!(
+                EntryIndex::new(raw),
+                Err(OutOfRange {
+                    quantity: Quantity::EntryIndex,
+                    value: raw
+                }),
+                "rule: index 0 holds no entry, and 2^53 is out of range (D-77); raw={raw}"
+            );
+        }
+        assert_eq!(
+            EntryIndex::at(LogIndex::ZERO),
+            None,
+            "rule: log position 0 is no entry's index"
+        );
+        let index = LogIndex::new(7).unwrap();
+        assert_eq!(
+            EntryIndex::at(index).map(EntryIndex::index),
+            Some(index),
+            "rule: the conversion to and from LogIndex is exact"
+        );
     }
 }

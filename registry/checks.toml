@@ -390,7 +390,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check COMPILE-FAIL"
-min_cases = 10
+min_cases = 14
 status = "implemented"
 
 [[check]]

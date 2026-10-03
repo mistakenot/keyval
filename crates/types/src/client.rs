@@ -5,12 +5,13 @@
 //! [`Response`] as the spec's body. Boundary-only errors (`invalid_request`,
 //! `too_large`) never reach the core, so no [`Response`] carries them.
 
+use crate::config::MAX_SCAN_PAGE_BYTES;
 use crate::counts::PageSize;
 use crate::data::{Key, Value};
 use crate::error_code::ErrorCode;
 use crate::ids::{NodeId, RequestId};
-use crate::lifecycle::Lifecycle;
-use crate::log_index::{LogIndex, Version};
+use crate::lifecycle::NotReadyLifecycle;
+use crate::log_index::{EntryIndex, LogIndex, Version};
 use crate::mutation::Mutation;
 use crate::outcome::TerminalResult;
 
@@ -161,19 +162,112 @@ pub struct ScanItem {
 
 /// One SCAN page, copied from a single applied prefix (C-8).
 ///
-/// Invariants: items are unique, in ascending key order and inside the range; there are
-/// at most the range's limit and at most 1 MiB of decoded key+value bytes (§7.11, the
-/// core asserts both). `continuation` is `Some(last returned key)` exactly when another
-/// key in range existed beyond the page in that view, which makes the API's
-/// `has_more`/`next_after` pair consistent by construction.
+/// Invariants, asserted by [`ScanPage::new`], its one constructor (CD-7):
+/// - items are unique, in ascending key order and inside the range;
+/// - there are at most the range's limit, and at most [`MAX_SCAN_PAGE_BYTES`] of decoded
+///   key and value bytes (§7.11);
+/// - `continuation`, when present, is the last returned key, so the API's
+///   `has_more`/`next_after` pair is consistent by construction. The scan sets it
+///   exactly when another key in range existed beyond the page in that view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanPage {
     /// The page's items.
-    pub items: Vec<ScanItem>,
+    items: Vec<ScanItem>,
     /// Where the next page starts (`next_after`), if more keys remain.
-    pub continuation: Option<Key>,
+    continuation: Option<Key>,
     /// The serving node and its applied prefix.
-    pub served_by: ServedBy,
+    served_by: ServedBy,
+}
+
+impl ScanPage {
+    /// A page of `items` read from one applied prefix for `range` (§8.5).
+    ///
+    /// # Panics
+    ///
+    /// On a scan bug (CD-7): items not strictly ascending (invariant `SCAN-PAGE-ORDER`);
+    /// an item outside `range` (`SCAN-PAGE-RANGE`); more items than `range`'s limit
+    /// (`SCAN-PAGE-LIMIT`); more than [`MAX_SCAN_PAGE_BYTES`] decoded bytes
+    /// (`SCAN-PAGE-BYTES`); a continuation that is not the last returned key
+    /// (`SCAN-PAGE-CONTINUATION`).
+    #[must_use]
+    pub fn new(
+        range: &ScanRange,
+        items: Vec<ScanItem>,
+        continuation: Option<Key>,
+        served_by: ServedBy,
+    ) -> Self {
+        for (earlier, later) in items.iter().zip(items.iter().skip(1)) {
+            crate::invariant!(
+                earlier.key < later.key,
+                "SCAN-PAGE-ORDER",
+                "key {:?} is not before {:?}",
+                earlier.key.as_str(),
+                later.key.as_str()
+            );
+        }
+        for item in &items {
+            crate::invariant!(
+                range.contains(&item.key),
+                "SCAN-PAGE-RANGE",
+                "key {:?} is outside the range {range:?}",
+                item.key.as_str()
+            );
+        }
+        let count = u64::try_from(items.len()).unwrap_or(u64::MAX);
+        crate::invariant!(
+            count <= range.limit().get(),
+            "SCAN-PAGE-LIMIT",
+            "{count} items exceed the limit {}",
+            range.limit()
+        );
+        let bytes = items.iter().fold(0_u64, |total, item| {
+            let item_bytes = item.key.byte_len().saturating_add(item.value.byte_len());
+            total.saturating_add(u64::try_from(item_bytes).unwrap_or(u64::MAX))
+        });
+        crate::invariant!(
+            bytes <= MAX_SCAN_PAGE_BYTES,
+            "SCAN-PAGE-BYTES",
+            "{bytes} decoded bytes in {count} items exceed {MAX_SCAN_PAGE_BYTES}"
+        );
+        if let Some(next) = &continuation {
+            let last = items.last().map(|item| item.key.as_str());
+            crate::invariant!(
+                last == Some(next.as_str()),
+                "SCAN-PAGE-CONTINUATION",
+                "continuation {:?} is not the last returned key {last:?}",
+                next.as_str()
+            );
+        }
+        Self {
+            items,
+            continuation,
+            served_by,
+        }
+    }
+
+    /// The page's items, in ascending key order.
+    #[must_use]
+    pub fn items(&self) -> &[ScanItem] {
+        &self.items
+    }
+
+    /// Where the next page starts (`next_after`), if more keys remain.
+    #[must_use]
+    pub const fn continuation(&self) -> Option<&Key> {
+        self.continuation.as_ref()
+    }
+
+    /// The serving node and its applied prefix.
+    #[must_use]
+    pub const fn served_by(&self) -> ServedBy {
+        self.served_by
+    }
+
+    /// The page's parts, by value: items, continuation and serving node.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<ScanItem>, Option<Key>, ServedBy) {
+        (self.items, self.continuation, self.served_by)
+    }
 }
 
 /// Which history capacity refused a write before proposal (DM-7).
@@ -212,8 +306,8 @@ pub enum Refusal {
     Unavailable,
     /// `503`: the node is not ready. Not submitted.
     Recovering {
-        /// The node's state; never `Ready`.
-        lifecycle: Lifecycle,
+        /// The node's state: never `ready`, by its type.
+        lifecycle: NotReadyLifecycle,
     },
     /// `504`: submitted, but the commit was not observed. Unresolved.
     UnknownOutcome,
@@ -271,8 +365,9 @@ pub enum Response {
     /// `409 request_id_conflict`: the ID was first used, with a different command, at
     /// `original_index`. Nothing changed.
     Conflict {
-        /// The original execution's log index.
-        original_index: LogIndex,
+        /// The original execution's log index: an entry, so at least 1 (the spec's
+        /// `EntryIndex`).
+        original_index: EntryIndex,
     },
     /// GET found the key.
     Found {
@@ -322,6 +417,142 @@ mod tests {
 
     use super::*;
     use crate::outcome::{Decision, LiveStateLimit};
+
+    /// A SCAN range over [`start`, `end`) with page size `limit`.
+    fn scan_range(start: &str, end: &str, limit: u64) -> ScanRange {
+        ScanRange::new(
+            Some(Key::parse(start.to_owned()).unwrap()),
+            Some(Key::parse(end.to_owned()).unwrap()),
+            None,
+            PageSize::new(limit).unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// A scan item with `value_bytes` bytes of value, at version 1.
+    fn scan_item(key: &str, value_bytes: usize) -> ScanItem {
+        ScanItem {
+            key: Key::parse(key.to_owned()).unwrap(),
+            value: Value::parse("v".repeat(value_bytes)).unwrap(),
+            version: Version::new(1).unwrap(),
+        }
+    }
+
+    /// A serving node at applied index 9.
+    fn served() -> ServedBy {
+        ServedBy {
+            node: NodeId::new(1).unwrap(),
+            applied: LogIndex::new(9).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_scan_page_keeps_its_items_continuation_and_server() {
+        let range = scan_range("a", "z", 3);
+        let items = vec![scan_item("b", 1), scan_item("c", 1), scan_item("d", 1)];
+        let continuation = Some(Key::parse("d".to_owned()).unwrap());
+        let page = ScanPage::new(&range, items.clone(), continuation.clone(), served());
+        assert_eq!(
+            page.items(),
+            items.as_slice(),
+            "rule: items are kept in order (§8.5)"
+        );
+        assert_eq!(page.continuation(), continuation.as_ref());
+        assert_eq!(page.served_by(), served());
+        assert_eq!(page.into_parts(), (items, continuation, served()));
+        let empty = ScanPage::new(&range, Vec::new(), None, served());
+        assert!(
+            empty.items().is_empty(),
+            "rule: an empty page with no continuation is valid"
+        );
+    }
+
+    #[test]
+    fn a_scan_page_may_hold_exactly_one_mebibyte() {
+        // 16 items of a 1-byte key and 65,535 value bytes: exactly 1 MiB (§7.11).
+        let range = scan_range("a", "z", 128);
+        let items: Vec<ScanItem> = ('b'..='q')
+            .map(|key| scan_item(&key.to_string(), 65_535))
+            .collect();
+        let page = ScanPage::new(&range, items, None, served());
+        assert_eq!(page.items().len(), 16, "rule: the 1 MiB cap is inclusive");
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-ORDER violated")]
+    fn a_scan_page_out_of_order_is_an_invariant_failure() {
+        let range = scan_range("a", "z", 3);
+        let _ = ScanPage::new(
+            &range,
+            vec![scan_item("c", 1), scan_item("b", 1)],
+            None,
+            served(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-ORDER violated")]
+    fn a_scan_page_with_a_repeated_key_is_an_invariant_failure() {
+        let range = scan_range("a", "z", 3);
+        let _ = ScanPage::new(
+            &range,
+            vec![scan_item("b", 1), scan_item("b", 2)],
+            None,
+            served(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-RANGE violated")]
+    fn a_scan_page_item_outside_the_range_is_an_invariant_failure() {
+        let range = scan_range("b", "d", 3);
+        let _ = ScanPage::new(
+            &range,
+            vec![scan_item("b", 1), scan_item("d", 1)],
+            None,
+            served(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-LIMIT violated")]
+    fn a_scan_page_over_its_limit_is_an_invariant_failure() {
+        let range = scan_range("a", "z", 2);
+        let items = vec![scan_item("b", 1), scan_item("c", 1), scan_item("d", 1)];
+        let _ = ScanPage::new(&range, items, None, served());
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-BYTES violated")]
+    fn a_scan_page_over_one_mebibyte_is_an_invariant_failure() {
+        // 16 items of a 1-byte key and 65,536 value bytes: 16 bytes over 1 MiB.
+        let range = scan_range("a", "z", 128);
+        let items: Vec<ScanItem> = ('b'..='q')
+            .map(|key| scan_item(&key.to_string(), 65_536))
+            .collect();
+        let _ = ScanPage::new(&range, items, None, served());
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-CONTINUATION violated")]
+    fn a_continuation_other_than_the_last_key_is_an_invariant_failure() {
+        let range = scan_range("a", "z", 3);
+        let continuation = Some(Key::parse("b".to_owned()).unwrap());
+        let _ = ScanPage::new(
+            &range,
+            vec![scan_item("b", 1), scan_item("c", 1)],
+            continuation,
+            served(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant SCAN-PAGE-CONTINUATION violated")]
+    fn a_continuation_on_an_empty_page_is_an_invariant_failure() {
+        let range = scan_range("a", "z", 3);
+        let continuation = Some(Key::parse("b".to_owned()).unwrap());
+        let _ = ScanPage::new(&range, Vec::new(), continuation, served());
+    }
 
     fn key(text: &str) -> Key {
         Key::parse(text.to_owned()).unwrap()
@@ -383,7 +614,7 @@ mod tests {
                 served_by,
             },
             Response::Conflict {
-                original_index: LogIndex::new(3).unwrap(),
+                original_index: EntryIndex::new(3).unwrap(),
             },
             Response::NotFound { served_by },
             Response::Status {
@@ -396,7 +627,7 @@ mod tests {
             Response::Refused(Refusal::Busy),
             Response::Refused(Refusal::Unavailable),
             Response::Refused(Refusal::Recovering {
-                lifecycle: Lifecycle::Recovering,
+                lifecycle: NotReadyLifecycle::Recovering,
             }),
             Response::Refused(Refusal::UnknownOutcome),
             Response::Refused(Refusal::HistoryFull {
@@ -427,7 +658,7 @@ mod tests {
             Refusal::Busy,
             Refusal::Unavailable,
             Refusal::Recovering {
-                lifecycle: Lifecycle::Starting,
+                lifecycle: NotReadyLifecycle::Starting,
             },
             Refusal::UnknownOutcome,
             Refusal::HistoryFull {

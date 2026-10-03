@@ -3,7 +3,7 @@
 use core::fmt;
 
 use crate::error_code::ErrorCode;
-use crate::log_index::{LogIndex, Version};
+use crate::log_index::{EntryIndex, LogIndex, Version};
 
 /// Which live-state quota refused an executed write (DM-6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,8 +114,9 @@ pub enum AttemptOutcome {
     /// The request ID was already used for a different command: nothing changed
     /// (`request_id_conflict`, F-6).
     Conflict {
-        /// The log index at which the ID was first executed.
-        original_index: LogIndex,
+        /// The log index at which the ID was first executed: an entry, so at least 1
+        /// (the spec's `EntryIndex`).
+        original_index: EntryIndex,
     },
 }
 
@@ -242,7 +243,7 @@ mod tests {
             TerminalResult::new(index(9), Decision::Set).unwrap(),
         ));
         let conflict = Attempt::Terminal(AttemptOutcome::Conflict {
-            original_index: index(3),
+            original_index: EntryIndex::new(3).unwrap(),
         });
         let cases = [
             (Attempt::NotSubmitted, Some("not_submitted")),

@@ -7,7 +7,7 @@
 //! change anything on this side of the port.
 
 use crate::ids::NodeId;
-use crate::log_index::{LogIndex, Term};
+use crate::log_index::{EntryIndex, LogIndex, Term};
 
 /// A node's Raft role (O-1, `/v1/cluster`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,11 +46,11 @@ pub enum EntryPayload {
 
 /// One Raft log entry.
 ///
-/// Invariant: `index` is at least 1 (index 0 holds no entry).
+/// Invariant: `index` is at least 1, by its type (index 0 holds no entry).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     /// The entry's log index.
-    pub index: LogIndex,
+    pub index: EntryIndex,
     /// The term it was proposed in.
     pub term: Term,
     /// What it carries.
@@ -83,21 +83,109 @@ pub struct OutboundMessage {
 
 /// One batch of work from the library (§7.4 step 2).
 ///
-/// Invariants: never a snapshot (v1 never compacts; the adapter asserts it); at most one
-/// is outstanding; its messages are released only after its frame syncs (step 4).
+/// Invariants:
+/// - never a snapshot (v1 never compacts; the adapter asserts it), at most one is
+///   outstanding, and its messages are released only after its frame syncs (step 4);
+/// - new entries always need a sync: a Ready that skipped the frame would release append
+///   acknowledgements over unsynced entries (§7.4: never on unsynced state);
+/// - a sync always has something to persist: entries, or a hard state.
+///
+/// [`Ready::new`] asserts both of the last two (CD-7); the fields are private.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ready {
     /// New entries to append, in index order.
-    pub entries: Vec<Entry>,
+    entries: Vec<Entry>,
     /// Hard state to persist, if it changed.
-    pub hard_state: Option<HardState>,
-    /// Whether anything here must be persisted before step 4. When false, no frame is
-    /// written: the commit index alone is never worth a frame (§7.4 step 3).
-    pub must_sync: bool,
+    hard_state: Option<HardState>,
+    /// Whether anything here must be persisted before step 4.
+    must_sync: bool,
     /// Outgoing messages, released in this order after the sync.
-    pub messages: Vec<OutboundMessage>,
+    messages: Vec<OutboundMessage>,
     /// Newly committed entries to apply, in index order (§7.4 step 5).
-    pub committed: Vec<Entry>,
+    committed: Vec<Entry>,
+}
+
+impl Ready {
+    /// A Ready from the library's output. When `must_sync` is false no frame is written:
+    /// the commit index alone is never worth a frame (§7.4 step 3).
+    ///
+    /// # Panics
+    ///
+    /// On a broken library promise (CD-7): new entries without `must_sync` (invariant
+    /// `READY-ENTRIES-SYNC`), or `must_sync` with neither entries nor a hard state
+    /// (`READY-SYNC-STATE`).
+    #[must_use]
+    pub fn new(
+        entries: Vec<Entry>,
+        hard_state: Option<HardState>,
+        must_sync: bool,
+        messages: Vec<OutboundMessage>,
+        committed: Vec<Entry>,
+    ) -> Self {
+        crate::invariant!(
+            must_sync || entries.is_empty(),
+            "READY-ENTRIES-SYNC",
+            "{} new entries but must_sync is false (first index {:?})",
+            entries.len(),
+            entries.first().map(|entry| entry.index)
+        );
+        crate::invariant!(
+            !must_sync || !entries.is_empty() || hard_state.is_some(),
+            "READY-SYNC-STATE",
+            "must_sync with no entries and no hard state"
+        );
+        Self {
+            entries,
+            hard_state,
+            must_sync,
+            messages,
+            committed,
+        }
+    }
+
+    /// New entries to append, in index order.
+    #[must_use]
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    /// Hard state to persist, if it changed.
+    #[must_use]
+    pub const fn hard_state(&self) -> Option<HardState> {
+        self.hard_state
+    }
+
+    /// Whether anything here must be persisted before step 4.
+    #[must_use]
+    pub const fn must_sync(&self) -> bool {
+        self.must_sync
+    }
+
+    /// Outgoing messages, released in this order after the sync.
+    #[must_use]
+    pub fn messages(&self) -> &[OutboundMessage] {
+        &self.messages
+    }
+
+    /// Newly committed entries to apply, in index order.
+    #[must_use]
+    pub fn committed(&self) -> &[Entry] {
+        &self.committed
+    }
+
+    /// The Ready's parts, by value: new entries, hard state, messages and committed
+    /// entries. Read [`must_sync`](Self::must_sync) first.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<Entry>,
+        Option<HardState>,
+        Vec<OutboundMessage>,
+        Vec<Entry>,
+    ) {
+        (self.entries, self.hard_state, self.messages, self.committed)
+    }
 }
 
 /// What advancing past a Ready returns (§7.4 step 6).
@@ -196,6 +284,65 @@ pub trait Consensus {
 mod tests {
     use super::*;
 
+    /// An entry at `index` in term 1.
+    fn entry_at(index: u64) -> Entry {
+        Entry {
+            index: EntryIndex::new(index).unwrap(),
+            term: Term::new(1).unwrap(),
+            payload: EntryPayload::Empty,
+        }
+    }
+
+    /// A hard state in term 1 with no vote and commit 0.
+    fn hard_state() -> HardState {
+        HardState {
+            term: Term::new(1).unwrap(),
+            vote: None,
+            commit: LogIndex::ZERO,
+        }
+    }
+
+    #[test]
+    fn a_ready_is_valid_with_entries_with_hard_state_or_with_neither_unsynced() {
+        let cases = [
+            ("entries, synced", vec![entry_at(1)], None, true),
+            (
+                "a term or vote change, synced",
+                Vec::new(),
+                Some(hard_state()),
+                true,
+            ),
+            (
+                "a commit-only change, not synced",
+                Vec::new(),
+                Some(hard_state()),
+                false,
+            ),
+            ("nothing to persist, not synced", Vec::new(), None, false),
+        ];
+        for (case, entries, state, must_sync) in cases {
+            let ready = Ready::new(entries.clone(), state, must_sync, Vec::new(), Vec::new());
+            assert_eq!(
+                (ready.entries(), ready.hard_state(), ready.must_sync()),
+                (entries.as_slice(), state, must_sync),
+                "rule: a valid Ready keeps what it was given (§7.4); case={case}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant READY-ENTRIES-SYNC violated")]
+    fn new_entries_without_a_sync_are_an_invariant_failure() {
+        // The core would write no frame and release append acks over unsynced entries.
+        let _ = Ready::new(vec![entry_at(1)], None, false, Vec::new(), Vec::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant READY-SYNC-STATE violated")]
+    fn a_sync_with_nothing_to_persist_is_an_invariant_failure() {
+        let _ = Ready::new(Vec::new(), None, true, Vec::new(), Vec::new());
+    }
+
     #[test]
     fn roles_are_spelt_as_the_api() {
         let roles = [
@@ -220,7 +367,7 @@ mod tests {
 
     impl Consensus for Solo {
         fn propose(&mut self, command: Vec<u8>) -> Result<(), ProposeError> {
-            let index = LogIndex::new(u64::try_from(self.log.len()).unwrap() + 1).unwrap();
+            let index = EntryIndex::new(u64::try_from(self.log.len()).unwrap() + 1).unwrap();
             self.log.push(Entry {
                 index,
                 term: Term::new(1).unwrap(),
@@ -240,13 +387,13 @@ mod tests {
                 return None;
             }
             self.outstanding = true;
-            Some(Ready {
-                entries: self.log.clone(),
-                hard_state: None,
-                must_sync: true,
-                messages: Vec::new(),
-                committed: self.log.clone(),
-            })
+            Some(Ready::new(
+                self.log.clone(),
+                None,
+                true,
+                Vec::new(),
+                self.log.clone(),
+            ))
         }
 
         fn advance(&mut self) -> LightReady {
@@ -283,12 +430,12 @@ mod tests {
         solo.propose(b"put".to_vec()).unwrap();
         let ready = solo.ready().unwrap();
         assert_eq!(
-            ready.entries.len(),
+            ready.entries().len(),
             1,
             "rule: the proposal is in the Ready (§7.4 step 2)"
         );
         assert!(
-            ready.must_sync,
+            ready.must_sync(),
             "rule: new entries must be persisted (§7.4 step 3)"
         );
         assert_eq!(

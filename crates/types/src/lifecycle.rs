@@ -23,6 +23,52 @@ pub enum Lifecycle {
     Failed,
 }
 
+/// A lifecycle state in which the node is not ready: the `lifecycle` of a
+/// `503 recovering` refusal (the API spec's `NotReadyLifecycle`, O-1).
+///
+/// Invariant: never `ready`, by its type: it has no such variant, so a refusal can never
+/// claim the node is ready (CD-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotReadyLifecycle {
+    /// The process is up but has not begun recovery.
+    Starting,
+    /// Replaying the journal.
+    Recovering,
+    /// The node stopped appending.
+    Failed,
+}
+
+impl NotReadyLifecycle {
+    /// The same state as a [`Lifecycle`].
+    #[must_use]
+    pub const fn lifecycle(self) -> Lifecycle {
+        match self {
+            Self::Starting => Lifecycle::Starting,
+            Self::Recovering => Lifecycle::Recovering,
+            Self::Failed => Lifecycle::Failed,
+        }
+    }
+
+    /// The state as the API spells it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.lifecycle().as_str()
+    }
+}
+
+impl Lifecycle {
+    /// The state as a [`NotReadyLifecycle`], or `None` when `Ready`.
+    #[must_use]
+    pub const fn not_ready(self) -> Option<NotReadyLifecycle> {
+        match self {
+            Self::Starting => Some(NotReadyLifecycle::Starting),
+            Self::Recovering => Some(NotReadyLifecycle::Recovering),
+            Self::Ready => None,
+            Self::Failed => Some(NotReadyLifecycle::Failed),
+        }
+    }
+}
+
 impl Lifecycle {
     /// Every state, in lifecycle order.
     pub const ALL: [Self; 4] = [Self::Starting, Self::Recovering, Self::Ready, Self::Failed];
@@ -76,6 +122,33 @@ mod tests {
     // check: DOMAIN-ENUMS
 
     use super::*;
+
+    #[test]
+    fn a_not_ready_lifecycle_is_every_state_but_ready() {
+        let observed: Vec<(Lifecycle, Option<&str>)> = Lifecycle::ALL
+            .into_iter()
+            .map(|state| (state, state.not_ready().map(NotReadyLifecycle::as_str)))
+            .collect();
+        assert_eq!(
+            observed,
+            [
+                (Lifecycle::Starting, Some("starting")),
+                (Lifecycle::Recovering, Some("recovering")),
+                (Lifecycle::Ready, None),
+                (Lifecycle::Failed, Some("failed")),
+            ],
+            "rule: NotReadyLifecycle is [starting, recovering, failed] (api/openapi.yaml)"
+        );
+        for state in Lifecycle::ALL {
+            if let Some(not_ready) = state.not_ready() {
+                assert_eq!(
+                    not_ready.lifecycle(),
+                    state,
+                    "rule: the conversion is exact"
+                );
+            }
+        }
+    }
 
     #[test]
     fn transitions_only_move_forward_and_failed_is_final() {

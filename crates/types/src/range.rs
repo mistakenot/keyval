@@ -21,6 +21,8 @@ pub enum Quantity {
     LogIndex,
     /// [`Version`](crate::Version): 1 to [`MAX_SAFE_INTEGER`].
     Version,
+    /// [`EntryIndex`](crate::EntryIndex): 1 to [`MAX_SAFE_INTEGER`].
+    EntryIndex,
     /// [`PageSize`](crate::PageSize): 1 to 128 (F-4).
     PageSize,
 }
@@ -30,7 +32,7 @@ impl Quantity {
     #[must_use]
     pub const fn min(self) -> u64 {
         match self {
-            Self::NodeId | Self::Version | Self::PageSize => 1,
+            Self::NodeId | Self::Version | Self::EntryIndex | Self::PageSize => 1,
             Self::Term | Self::LogIndex => 0,
         }
     }
@@ -39,7 +41,9 @@ impl Quantity {
     #[must_use]
     pub const fn max(self) -> u64 {
         match self {
-            Self::NodeId | Self::Term | Self::LogIndex | Self::Version => MAX_SAFE_INTEGER,
+            Self::NodeId | Self::Term | Self::LogIndex | Self::Version | Self::EntryIndex => {
+                MAX_SAFE_INTEGER
+            }
             Self::PageSize => crate::PageSize::MAX,
         }
     }
@@ -64,6 +68,7 @@ impl fmt::Display for Quantity {
             Self::Term => "term",
             Self::LogIndex => "log index",
             Self::Version => "version",
+            Self::EntryIndex => "entry index",
             Self::PageSize => "page size",
         })
     }
@@ -123,6 +128,7 @@ mod tests {
             Quantity::Term,
             Quantity::LogIndex,
             Quantity::Version,
+            Quantity::EntryIndex,
             Quantity::PageSize,
         ]
         .iter()
@@ -134,6 +140,7 @@ mod tests {
                 (1, MAX_SAFE_INTEGER),
                 (0, MAX_SAFE_INTEGER),
                 (0, MAX_SAFE_INTEGER),
+                (1, MAX_SAFE_INTEGER),
                 (1, MAX_SAFE_INTEGER),
                 (1, 128)
             ],

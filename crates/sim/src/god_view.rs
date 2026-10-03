@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use types::EntryIndex;
 use types::{Entry, HardState, LogIndex, NodeId, Role, Term};
 
 use crate::scheduler::NodeIncarnation;
@@ -94,7 +96,7 @@ impl Summary {
                 .log
                 .last()
                 .map_or((LogIndex::ZERO, Term::ZERO), |entry| {
-                    (entry.index, entry.term)
+                    (entry.index.index(), entry.term)
                 }),
             commit: view.hard.commit,
             applied: view.applied,
@@ -196,7 +198,7 @@ mod tests {
 
     fn entry(at: u64, in_term: u64) -> Entry {
         Entry {
-            index: index(at),
+            index: EntryIndex::new(at).unwrap(),
             term: term(in_term),
             payload: EntryPayload::Command(vec![u8::try_from(at).unwrap()]),
         }
