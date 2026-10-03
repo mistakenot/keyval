@@ -48,12 +48,25 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
   2026-10-03 (`origin` = github.com/mistakenot/keyval, private; bead
   `br-owner-create-remote-push-trjy`). Pushes go to `origin main` and are mirrored to
   `origin main:master` (suite convention).
-- **Until W07 lands `./dev commit`, a single coordinator agent commits (§11.2 step 2).**
-  The coordinator stages only named paths, materialises the staged tree into a frozen,
-  git-isolated candidate copy, runs `./dev gate fast --tree <id> --changed <path>…`
-  there, commits exactly that tree and pushes. Everyone else does not touch git: keep
-  your files unstaged and ask the coordinator in your bead's Agent Mail thread, listing
-  the exact paths. (Coordinator since 2026-10-03: GoldenHorizon.)
+- **A single coordinator agent commits for everyone until the owner launches the
+  self-serve swarm** (§11.2 step 2; §17 step 6: after W04, W06 and W07 land).
+  Coordinator since 2026-10-03: GoldenHorizon.
+  - Everyone else does not touch git. Keep your files unstaged, and ask in your bead's
+    Agent Mail thread, giving the exact paths, the parent and the expected tree ID.
+  - The coordinator re-gates exactly that tree on a frozen, git-isolated candidate
+    and commits it. The tracker export (`.beads/`) goes in separate beads-only
+    commits.
+- **W07 has landed the wrapper:**
+  - `./dev commit --bead <id> <path>…` (§11.10) takes the commit lock and checks that
+    HEAD is on `main`, that the bead is `in_progress`, and that every path is inside
+    your live Agent Mail reservation. It refuses foreign staging. It stages only your
+    paths and refreshes the fixed `.local/candidate/` from the staged tree, verified
+    against its manifest. It runs `./dev gate fast --tree` there, git-isolated, and
+    re-runs if HEAD or the index moved. It commits exactly the gated tree, compare-and-
+    swapping `main` from its parent (trailer `Bead: <id>`), pushes, and writes a
+    receipt.
+  - When self-serve starts, set `AGENT_NAME` (or pass `--agent`) to your Agent Mail
+    name.
 
 ---
 
@@ -280,11 +293,32 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   clippy, git, br, bv, ntm, ubs, dcg, am), with versions and a real capability probe
   each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER,
-  AGENTS-RULES, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
+  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, LINT-PROBES, LINT-ALLOWS,
+  LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
   check's minimum case count fail (P10). A failure prints its exact re-run command.
   Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
   Every check has exactly one `// check: <ID>` marker in code.
+- `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit
+  wrapper (see Git Discipline). `./dev commit --close <id> -m MSG` closes a bead (§11.3
+  step 7):
+  - it needs the newest passing accept receipt to name the tree of the newest `main`
+    commit carrying `Bead: <id>`;
+  - then it runs `br close` and `br sync --flush-only`, and recomputes requirement
+    activation (only a canonical item's §6 requirements, once every listing item is
+    closed);
+  - it commits `.beads/` plus any `registry/requirements.toml` flips as one closure
+    commit (`Closes: <id>`).
+
+  `--close <id> --failed --evidence <PATH>` records a failed spike. The bead is
+  labelled `failed` + `needs-owner` and stays open, so its dependants stay blocked; the
+  evidence file is committed (`Failed: <id>`).
+- `./dev accept <id> --tree <tree-id>` — runs the bead's acceptance selectors on a
+  committed tree, materialised in `.local/accept/<tree-id>/`, git-isolated, with its
+  own cargo target dir, and writes a `keyval.dev.accept/v1` receipt naming that tree.
+  - Selectors: `registry/workgraph.toml` `accept` for canonical `plan:W` beads;
+    `accept:<CHECK-ID>` labels for subtasks and discovered work. An empty selection
+    fails.
+  - Each new accept tree is a cold build: about 1 minute and about 470 MB of target dir.
 - `./dev gate fast` — the T0 gate in its fixed bootstrap form (§10.10): fmt, clippy with
   denied warnings, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests,
   and UBS on the exact changed files (all first-party sources if no source changed).
@@ -292,7 +326,10 @@ exit 0 = ok, 1 = failed, 2 = usage error):
   hashes and per-step case counts. **It judges exact trees only (P11):** in a checkout
   it refuses unless the working tree is clean, and judges `HEAD^{tree}`. A commit
   wrapper passes `--tree <id> --changed <path>…` from the materialised candidate, and
-  then the gate never calls git. Other tiers report "not implemented" (W46).
+  then the gate never calls git. It refuses to run if git can see any repository from
+  the candidate. Run it with `GIT_DIR=/nonexistent/keyval-candidate-git` and
+  `GIT_CEILING_DIRECTORIES=<candidate>:<candidate's parent>`, which is what
+  `candidate::git_isolation` sets. Other tiers report "not implemented" (W46).
 
 Gate receipts — not your say-so — are what close beads (rule 16).
 
@@ -377,10 +414,10 @@ Practicalities:
   your bead's **area** before editing, with the bead ID in `reason`.
 - Bead ID = Mail `thread_id`; subjects start `[br-…]`; announce start and completion
   in-thread. Check your inbox at natural pause points; acknowledge what you read.
-- Work selection: `bv --robot-triage` → claim in `br` → reserve → work → gate →
-  commit → release reservations → close with the receipt. The commit is
-  `./dev commit --bead <id>` once W07 lands; until then, hand your paths to the
-  coordinator (Git Discipline, above).
+- Work selection: `bv --robot-triage` → claim in `br` → reserve → work → commit →
+  `./dev accept <id> --tree <tree of the work commit>` → `./dev commit --close <id>` →
+  release reservations. Until the owner launches self-serve, the coordinator runs the
+  git steps for you (Git Discipline, above).
 - The tool-managed sections below (Agent Mail, Beads, bv, ee) are appended by those
   tools; edit them only via the owning tool (`am docs`, `br agents`, `bv --agents-*`,
   `ee export agentsmd`).

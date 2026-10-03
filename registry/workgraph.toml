@@ -105,7 +105,12 @@ deps = ["W01"]
 reqs = ["P11", "§11.10", "§11.3"]
 area = ["xtask"]
 milestone = "m0"
-accept = ["./dev check DEV-COMMIT"]
+accept = [
+    "./dev check DEV-COMMIT",
+    "./dev check DEV-ACCEPT",
+    "./dev check DEV-CLOSE",
+    "./dev check DEV-GATE",
+]
 bead = ""
 
 [[item]]
