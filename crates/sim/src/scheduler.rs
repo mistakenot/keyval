@@ -12,6 +12,11 @@
 //! A run has an event budget (1,000,000 per scenario manifest, §5 limits). Exhausting it
 //! with events still pending makes the run incomplete, which fails (P10); an incomplete
 //! run is never reported as a pass.
+//!
+//! The same budget bounds the pending queue (CD-9): it never holds more events than the
+//! run may dispatch. Scheduling past that bound is a typed refusal, and the run is
+//! incomplete from then on, so a fan-out bug ends in `Incomplete` instead of exhausting
+//! memory.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -103,27 +108,52 @@ impl EventBudget {
     }
 }
 
-/// An event scheduled before the current virtual time.
+/// Why an event could not be scheduled. Nothing is scheduled and no randomness is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InThePast {
-    /// The scheduler's current time.
-    pub now: VirtualTime,
-    /// The time the event was scheduled for.
-    pub at: VirtualTime,
+pub enum ScheduleError {
+    /// It would fire before the current virtual time.
+    InThePast {
+        /// The scheduler's current time.
+        now: VirtualTime,
+        /// The time the event was scheduled for.
+        at: VirtualTime,
+    },
+    /// The pending queue already holds as many events as the run's budget, its bound
+    /// (CD-9). The run is incomplete from then on (P10).
+    QueueFull {
+        /// The bound: the run's event budget.
+        bound: EventBudget,
+    },
 }
 
-impl fmt::Display for InThePast {
+impl fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "an event at {} µs cannot be scheduled at virtual time {} µs",
-            self.at.as_micros(),
-            self.now.as_micros()
-        )
+        match self {
+            Self::InThePast { now, at } => write!(
+                f,
+                "an event at {} µs cannot be scheduled at virtual time {} µs",
+                at.as_micros(),
+                now.as_micros()
+            ),
+            Self::QueueFull { bound } => write!(
+                f,
+                "the pending queue is at its bound of {} events; the run is incomplete",
+                bound.get()
+            ),
+        }
     }
 }
 
-impl Error for InThePast {}
+impl Error for ScheduleError {}
+
+/// Why a run is incomplete (P10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shortfall {
+    /// The event budget was spent with events still pending.
+    BudgetExhausted,
+    /// An event was refused because the pending queue was at its bound.
+    QueueFull,
+}
 
 /// What [`Scheduler::step`] found.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,13 +165,14 @@ pub enum Step<E> {
         /// Events dispatched.
         events: u64,
     },
-    /// The budget is spent and events are still pending: the run is incomplete, which
-    /// fails (P10).
+    /// The run cannot finish within its bounds: it is incomplete, which fails (P10).
     Incomplete {
         /// Events dispatched.
         events: u64,
-        /// Events never dispatched.
+        /// Events still queued, never to be dispatched.
         pending: usize,
+        /// Which bound it hit.
+        reason: Shortfall,
     },
 }
 
@@ -171,6 +202,7 @@ pub struct Scheduler<E> {
     next_seq: u64,
     current: Option<EventSeq>,
     dispatched: u64,
+    refused: bool,
 }
 
 impl<E> Scheduler<E> {
@@ -186,6 +218,7 @@ impl<E> Scheduler<E> {
             next_seq: 0,
             current: None,
             dispatched: 0,
+            refused: false,
         }
     }
 
@@ -212,16 +245,23 @@ impl<E> Scheduler<E> {
     ///
     /// # Errors
     ///
-    /// [`InThePast`] if `at` is before [`Self::now`]; nothing is scheduled and no
-    /// randomness is drawn.
+    /// Nothing is scheduled and no randomness is drawn on:
+    /// - [`ScheduleError::InThePast`] if `at` is before [`Self::now`];
+    /// - [`ScheduleError::QueueFull`] if the pending queue is at its bound, the run's
+    ///   event budget. The run is then incomplete: every later [`Self::step`] reports
+    ///   [`Shortfall::QueueFull`].
     pub fn schedule(
         &mut self,
         at: VirtualTime,
         node: Option<NodeIncarnation>,
         payload: E,
-    ) -> Result<EventSeq, InThePast> {
+    ) -> Result<EventSeq, ScheduleError> {
         if at < self.now {
-            return Err(InThePast { now: self.now, at });
+            return Err(ScheduleError::InThePast { now: self.now, at });
+        }
+        if u64::try_from(self.queue.len()).unwrap_or(u64::MAX) >= self.budget.get() {
+            self.refused = true;
+            return Err(ScheduleError::QueueFull { bound: self.budget });
         }
         let seq = EventSeq(self.next_seq);
         self.next_seq += 1;
@@ -240,9 +280,17 @@ impl<E> Scheduler<E> {
     }
 
     /// Dispatches the next event in order, advancing virtual time to it, or reports that
-    /// the run is complete or has exhausted its budget.
+    /// the run is complete or incomplete. Once an event has been refused for a full
+    /// queue, the run is incomplete and nothing more is dispatched.
     #[must_use]
     pub fn step(&mut self) -> Step<E> {
+        if self.refused {
+            return Step::Incomplete {
+                events: self.dispatched,
+                pending: self.queue.len(),
+                reason: Shortfall::QueueFull,
+            };
+        }
         if self.queue.is_empty() {
             return Step::Complete {
                 events: self.dispatched,
@@ -252,6 +300,7 @@ impl<E> Scheduler<E> {
             return Step::Incomplete {
                 events: self.dispatched,
                 pending: self.queue.len(),
+                reason: Shortfall::BudgetExhausted,
             };
         }
         let Some((order, pending)) = self.queue.pop_first() else {
@@ -422,7 +471,7 @@ mod tests {
         assert!(matches!(s.step(), Step::Event(_)));
         assert_eq!(
             s.schedule(at(99), None, 2),
-            Err(InThePast {
+            Err(ScheduleError::InThePast {
                 now: at(100),
                 at: at(99),
             })
@@ -437,28 +486,81 @@ mod tests {
     #[test]
     fn exhausting_the_budget_with_events_pending_is_incomplete() {
         let mut s = scheduler(4, EventBudget::new(3));
-        for payload in 0..5 {
+        for payload in 0..2 {
             s.schedule(at(u64::from(payload)), None, payload).unwrap();
         }
-        let (events, done) = drain(&mut s);
-        assert_eq!(payloads(&events), [0, 1, 2]);
+        let mut events = Vec::new();
+        let done = loop {
+            match s.step() {
+                Step::Event(event) => {
+                    // Each event schedules a follow-up, so work outlasts the budget.
+                    s.schedule(at(event.time.as_micros() + 10), None, event.payload + 10)
+                        .unwrap();
+                    events.push(event);
+                }
+                done => break done,
+            }
+        };
+        assert_eq!(payloads(&events), [0, 1, 10]);
+        let incomplete = Step::Incomplete {
+            events: 3,
+            pending: 2,
+            reason: Shortfall::BudgetExhausted,
+        };
         assert_eq!(
-            done,
-            Step::Incomplete {
-                events: 3,
-                pending: 2,
-            },
+            done, incomplete,
             "rule: an exhausted budget with work left is incomplete, never a pass (P10)"
         );
+        assert_eq!(s.step(), incomplete, "rule: nothing more is dispatched");
+        assert_eq!(s.dispatched(), 3);
+    }
+
+    #[test]
+    fn the_pending_queue_is_bounded_by_the_event_budget() {
+        let bound = EventBudget::new(4);
+        let mut s = scheduler(8, bound);
+        for payload in 0..3 {
+            s.schedule(at(5), None, payload).unwrap();
+        }
+        assert_eq!(s.pending(), 3, "rule: N-1 pending events fit");
+        assert!(
+            s.schedule(at(5), None, 3).is_ok(),
+            "rule: N pending events fit"
+        );
+        assert_eq!(
+            s.schedule(at(5), None, 4),
+            Err(ScheduleError::QueueFull { bound }),
+            "rule: the (N+1)th pending event is a typed refusal, not silent growth (CD-9)"
+        );
+        assert_eq!(s.pending(), 4, "rule: a refused event is not queued");
+        let incomplete = Step::Incomplete {
+            events: 0,
+            pending: 4,
+            reason: Shortfall::QueueFull,
+        };
         assert_eq!(
             s.step(),
-            Step::Incomplete {
-                events: 3,
-                pending: 2,
-            },
-            "rule: nothing more is dispatched"
+            incomplete,
+            "rule: after a refusal the run is incomplete, even if the caller ignores the error"
         );
-        assert_eq!(s.dispatched(), 3);
+        assert_eq!(s.step(), incomplete, "rule: it never turns complete");
+        assert_eq!(s.dispatched(), 0);
+    }
+
+    #[test]
+    fn dispatching_frees_room_in_the_pending_queue() {
+        let mut s = scheduler(9, EventBudget::new(2));
+        s.schedule(at(1), None, 1).unwrap();
+        s.schedule(at(2), None, 2).unwrap();
+        assert!(matches!(s.step(), Step::Event(_)));
+        assert!(
+            s.schedule(at(3), None, 3).is_ok(),
+            "rule: the bound counts pending events, not events ever scheduled"
+        );
+        assert!(matches!(
+            s.schedule(at(4), None, 4),
+            Err(ScheduleError::QueueFull { .. })
+        ));
     }
 
     #[test]

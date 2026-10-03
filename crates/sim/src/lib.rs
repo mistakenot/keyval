@@ -24,7 +24,8 @@ pub mod trace;
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};
 pub use scheduler::{
-    Event, EventBudget, EventSeq, InThePast, NodeIncarnation, Scheduler, Step, VirtualTime,
+    Event, EventBudget, EventSeq, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step,
+    VirtualTime,
 };
 pub use trace::{
     Comparison, DiskOp, Endpoint, Name, ObservationBound, Overflow, PacketFate, Record, Trace,
