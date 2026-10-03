@@ -661,10 +661,14 @@ impl Report for CheckReport {
             let _ = match check.status {
                 CheckStatus::Passed => writeln!(
                     out,
-                    "check {}: passed ({} case(s), min {}) in {seconds:.1}s",
+                    "check {}: passed ({} case(s), {}) in {seconds:.1}s",
                     check.id,
                     check.passed,
-                    check.min_cases.unwrap_or(0)
+                    // A --case selection needs one case, not the full-run floor.
+                    self.case.as_ref().map_or_else(
+                        || format!("min {}", check.min_cases.unwrap_or(0)),
+                        |case| format!("--case {case:?}")
+                    )
                 ),
                 CheckStatus::Failed | CheckStatus::Unknown | CheckStatus::NotRun => writeln!(
                     out,
