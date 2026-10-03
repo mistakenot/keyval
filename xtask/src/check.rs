@@ -58,12 +58,13 @@ pub enum Tier {
 /// How a check's cases are selected and executed.
 #[derive(Clone, Copy, Debug)]
 pub enum Selector {
-    /// The libtest cases of `package` whose names contain `filter` (all if `None`).
+    /// The libtest cases of `package` whose names contain any of `filters` (all cases
+    /// if `filters` is empty).
     CargoTest {
         /// Cargo package that owns the tests.
         package: &'static str,
-        /// Substring every selected case name contains.
-        filter: Option<&'static str>,
+        /// Substrings; a case is selected if its name contains one of them.
+        filters: &'static [&'static str],
     },
     /// An in-process static check over the workspace; it runs no tests.
     Static(StaticCheck),
@@ -161,7 +162,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: None,
+            filters: &[],
         },
         min_cases: 40,
     },
@@ -174,7 +175,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: Some("doctor::"),
+            filters: &["doctor::"],
         },
         min_cases: 10,
     },
@@ -187,7 +188,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: Some("check::"),
+            filters: &["check::"],
         },
         min_cases: 6,
     },
@@ -200,7 +201,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: Some("lint::probes::"),
+            filters: &["lint::probes::"],
         },
         min_cases: 19,
     },
@@ -265,7 +266,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: Some("gate::"),
+            filters: &["gate::"],
         },
         min_cases: 8,
     },
@@ -278,9 +279,22 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "xtask",
-            filter: Some("steplog::"),
+            filters: &["steplog::"],
         },
         min_cases: 6,
+    },
+    CheckDef {
+        id: "DEV-COMMIT",
+        summary: "./dev commit gates and commits exactly the staged tree of the named paths",
+        kind: Kind::TestGroup,
+        covers: &["P11"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["commit::", "candidate::", "git::"],
+        },
+        min_cases: 14,
     },
     CheckDef {
         id: "INVARIANT",
@@ -291,7 +305,7 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "types",
-            filter: Some("invariant"),
+            filters: &["invariant"],
         },
         min_cases: 3,
     },
@@ -446,8 +460,8 @@ pub fn run_one(root: &Path, def: &CheckDef, case: Option<&str>, cargo: &Cargo) -
     let started = Instant::now();
     let mut result = CheckResult::new(def.id, Some(def), CheckStatus::Failed);
     match def.selector {
-        Selector::CargoTest { package, filter } => {
-            run_cargo_test(&mut result, root, def, package, filter, case, cargo);
+        Selector::CargoTest { package, filters } => {
+            run_cargo_test(&mut result, root, def, package, filters, case, cargo);
         }
         Selector::Static(check) => run_static(&mut result, root, def, check, case),
     }
@@ -463,7 +477,7 @@ fn run_cargo_test(
     root: &Path,
     def: &CheckDef,
     package: &str,
-    filter: Option<&str>,
+    filters: &[&str],
     case: Option<&str>,
     cargo: &Cargo,
 ) {
@@ -487,13 +501,13 @@ fn run_cargo_test(
     };
     let selected: Vec<String> = libtest::parse_list(&listed.stdout)
         .into_iter()
-        .filter(|name| filter.is_none_or(|f| name.contains(f)))
+        .filter(|name| filters.is_empty() || filters.iter().any(|f| name.contains(f)))
         .filter(|name| case.is_none_or(|c| name.contains(c)))
         .collect();
     result.selected = count(selected.len());
     if selected.is_empty() {
         return result.fail(format!(
-            "the selection matched zero cases (filter {filter:?}, case {case:?}); \
+            "the selection matched zero cases (filters {filters:?}, case {case:?}); \
              a zero-case selection is a failure, never a pass (P10)"
         ));
     }
@@ -835,7 +849,7 @@ mod tests {
         crate::test_support::nested_cargo("keyval-nested")
     }
 
-    fn fixture_check(filter: &'static str, min_cases: u32) -> CheckDef {
+    fn fixture_check(filter: &'static [&'static str], min_cases: u32) -> CheckDef {
         CheckDef {
             id: "FIXTURE",
             summary: "fixture",
@@ -845,20 +859,24 @@ mod tests {
             tier: Tier::T0,
             selector: Selector::CargoTest {
                 package: FIXTURE_PACKAGE,
-                filter: Some(filter),
+                filters: filter,
             },
             min_cases,
         }
     }
 
-    fn run_fixture(filter: &'static str, case: Option<&str>, min_cases: u32) -> CheckResult {
+    fn run_fixture(
+        filter: &'static [&'static str],
+        case: Option<&str>,
+        min_cases: u32,
+    ) -> CheckResult {
         let def = fixture_check(filter, min_cases);
         run_one(&fixture_root(), &def, case, &nested_cargo())
     }
 
     #[test]
     fn fixture_passing_selection_passes_with_exact_counts() {
-        let result = run_fixture("passes_", None, 2);
+        let result = run_fixture(&["passes_"], None, 2);
         assert_eq!(result.status, CheckStatus::Passed, "observed={result:#?}");
         assert_eq!(
             (result.selected, result.passed),
@@ -869,7 +887,7 @@ mod tests {
 
     #[test]
     fn fixture_zero_case_selection_fails_without_running() {
-        let result = run_fixture("passes_", Some("no_such_case"), 1);
+        let result = run_fixture(&["passes_"], Some("no_such_case"), 1);
         assert_eq!(result.status, CheckStatus::Failed, "observed={result:#?}");
         assert_eq!(result.selected, 0);
         assert_eq!(
@@ -882,7 +900,7 @@ mod tests {
 
     #[test]
     fn fixture_failing_case_fails_and_names_a_rerun_command() {
-        let result = run_fixture("fails_", None, 1);
+        let result = run_fixture(&["fails_"], None, 1);
         assert_eq!(result.status, CheckStatus::Failed, "observed={result:#?}");
         assert_eq!(
             result.failures,
@@ -899,14 +917,14 @@ mod tests {
 
     #[test]
     fn fixture_ignored_case_fails() {
-        let result = run_fixture("ignored_", None, 1);
+        let result = run_fixture(&["ignored_"], None, 1);
         assert_eq!(result.status, CheckStatus::Failed, "observed={result:#?}");
         assert_eq!(result.ignored, 1, "observed={result:#?}");
     }
 
     #[test]
     fn fixture_selection_below_min_cases_fails() {
-        let result = run_fixture("passes_", None, 3);
+        let result = run_fixture(&["passes_"], None, 3);
         assert_eq!(result.status, CheckStatus::Failed, "observed={result:#?}");
         assert!(
             result

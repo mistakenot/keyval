@@ -5,11 +5,14 @@
 // check: XTASK
 
 mod agents;
+mod candidate;
 mod cargo;
 mod check;
 mod clock;
+mod commit;
 mod doctor;
 mod gate;
+mod git;
 mod ledger;
 mod libtest;
 mod lint;
@@ -64,6 +67,22 @@ enum Command {
         /// Run only the selected cases whose names contain NAME.
         #[arg(long, value_name = "NAME")]
         case: Option<String>,
+    },
+    /// Commit the named paths: gate the exact staged tree, then commit it (§11.10).
+    Commit {
+        /// The in-progress bead this work belongs to.
+        #[arg(long, value_name = "BEAD")]
+        bead: String,
+        /// Your Agent Mail name, whose live reservations must cover the paths
+        /// (default: `$AGENT_NAME`).
+        #[arg(long, value_name = "NAME")]
+        agent: Option<String>,
+        /// The commit message.
+        #[arg(long, short, value_name = "TEXT")]
+        message: String,
+        /// Files or directories to commit, relative to the workspace root.
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<String>,
     },
     /// Run a gate tier on an exact tree and write a receipt (§10.10).
     Gate {
@@ -126,6 +145,30 @@ fn run(cli: Cli) -> Status {
             changed,
             artifacts,
         } => run_gate(&root, format, tier, tree.as_deref(), changed, artifacts),
+        Command::Commit {
+            bead,
+            agent,
+            message,
+            paths,
+        } => {
+            let Some(agent) = agent.or_else(|| env::var("AGENT_NAME").ok()) else {
+                let message = "name your Agent Mail identity with --agent or $AGENT_NAME";
+                return output::report_error(format, ErrorKind::Usage, message, message);
+            };
+            let request = commit::Request {
+                bead,
+                agent,
+                message,
+                paths,
+            };
+            let artifacts = root.join("artifacts");
+            let ports = commit::LivePorts {
+                root: root.clone(),
+                artifacts: artifacts.clone(),
+            };
+            let report = commit::run(&git::Git::new(&root), &request, &ports, &artifacts);
+            output::emit(format, &report)
+        }
     }
 }
 
