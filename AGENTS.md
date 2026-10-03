@@ -459,6 +459,14 @@ Practicalities:
 - **Closing** needs a passing acceptance receipt for the current tree (rule 16), quoted
   in a bead comment. A failed spike is never closed: it stays open with `failed` +
   `needs-owner` (§11.4).
+- **Split-off beads** (owner decision, `br-njik`). When part of a bead's work moves to a
+  split-off bead, for example because its files were reserved, every commit of the
+  split-off bead also names the parent. Its commit message carries a line
+  `Bead: <parent-id>`, and the wrapper adds `Bead: <split-off-id>` itself.
+  `./dev commit --close` takes a bead's work tree from the newest `main` commit with a
+  `Bead: <id>` line anywhere in its message. So the parent's work tree is then the one
+  that contains the acceptance check the split-off landed, and both beads close through
+  the wrapper. Never amend or rewrite an earlier commit to add a trailer.
 
 ---
 
