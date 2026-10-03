@@ -4,6 +4,7 @@
 
 // check: XTASK
 
+mod agents;
 mod cargo;
 mod check;
 mod clock;

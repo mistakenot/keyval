@@ -44,68 +44,55 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
   uncommitted work.
 - Never create branches or worktrees (including `ntm --worktrees`).
 - Any push is performed by the wrapper under the commit lock once the owner has created
-  a remote. That is an explicit owner action; **no remote exists yet** (§17).
-- Until W01 lands `./dev`, a single coordinator agent stages, runs the bootstrap gate on
-  a frozen candidate copy, and commits (§12.4). Everyone else does not touch git.
+  a remote. That is an explicit owner action (§17 step 2). The owner created it on
+  2026-10-03 (`origin` = github.com/mistakenot/keyval, private; bead
+  `br-owner-create-remote-push-trjy`). Pushes go to `origin main` and are mirrored to
+  `origin main:master` (suite convention).
+- **Until W07 lands `./dev commit`, a single coordinator agent commits (§11.2 step 2).**
+  The coordinator stages only named paths, materialises the staged tree into a frozen,
+  git-isolated candidate copy, runs `./dev gate fast --tree <id> --changed <path>…`
+  there, commits exactly that tree and pushes. Everyone else does not touch git: keep
+  your files unstaged and ask the coordinator in your bead's Agent Mail thread, listing
+  the exact paths. (Coordinator since 2026-10-03: GoldenHorizon.)
 
 ---
 
 ## Agent Rules (PLAN.md §11.5 — normative; W01's gate checks this list is present)
 
+Kept **verbatim** with PLAN.md §11.5: the AGENTS-RULES check (`./dev check AGENTS-RULES`,
+run in every gate's xtask tests) fails on any difference in wording, numbering or order.
+Change the plan first, then copy it here.
+
 1. **Owner override.** Explicit owner instructions win (§0.4).
-2. **Precedence.** Follow §0.4. Report conflicts as `conflict` beads; never silently
-   pick a side.
-3. **Oracles are sacred (P9).** Never weaken, skip, delete or loosen a checker,
-   invariant, test, fixture, bug-injection variant or corpus seed to make something
-   pass. A genuine checker or model bug is fixed in a dedicated bead labelled
-   `conflict` **and** `needs-owner` (one bead, both labels — §0.4 files it as a
-   conflict, and §13 item 10 counts `conflict` beads), with an independent
-   counterexample, and the bug-injection self-test must still pass.
-4. **Determinism (P4).** In deterministic crates: no wall clock, no unseeded or
-   thread-local RNG, no threads/async, no randomly hashed maps or behaviour-affecting
-   unordered iteration, no direct I/O. Do not silence the determinism lint.
-5. **Hexagonal core (P3, CD-1).** Domain and engine logic live only in deterministic
-   crates. Adapters only translate. Deterministic crates never import adapter crates,
-   HTTP, filesystem or async-runtime types, and no Raft-library type crosses the
-   Consensus port. No logic that runs only in simulation, or only in production,
-   inside the core.
-6. **Real slices only (P6).** No placeholder crates, no fake implementations presented
-   as real, no `todo!()` on a path a test exercises, no simulated slice presented as a
-   real server.
-7. **Plan is owner-owned.** Do not change the meaning of normative sections of
-   `PLAN.md`; propose via a `plan-change` bead. `api/openapi.yaml` may be edited only
-   to match `PLAN.md` §8.
-8. **Stay in your area.** Edit only files within your bead's reserved area. Shared
-   surfaces (§11.7) need a short explicit reservation. If you need more, reserve it,
-   or file a dependency bead.
-9. **Seeds.** Every failing case you fix goes into `sim/corpus/` in the same commit
-   (shrunk scenario if available).
+2. **Precedence.** Follow §0.4. Report conflicts as `conflict` beads; never silently pick a side.
+3. **Oracles are sacred (P9).**
+   - Never weaken, skip, delete or loosen a checker, invariant, test, fixture, bug-injection variant or corpus seed to make something pass.
+   - A genuine checker or model bug is fixed in a dedicated bead labelled `conflict` **and** `needs-owner` (one bead, both labels — §0.4 files it as a conflict, and §13 item 10 counts `conflict` beads), with an independent counterexample, and the bug-injection self-test MUST still pass.
+4. **Determinism (P4).**
+   - In deterministic crates: no wall clock, no unseeded or thread-local RNG, no threads/async, no randomly hashed maps or behaviour-affecting unordered iteration, no direct I/O.
+   - Do not silence the determinism lint.
+5. **Hexagonal core (P3, CD-1).** Domain and engine logic live only in deterministic crates. Adapters only translate. Deterministic crates never import adapter crates, HTTP, filesystem or async-runtime types, and no Raft-library type crosses the Consensus port. No logic that runs only in simulation, or only in production, inside the core.
+6. **Real slices only (P6).** No placeholder crates, no fake implementations presented as real, no `todo!()` on a path a test exercises, no simulated slice presented as a real server.
+7. **Plan is owner-owned.** Do not change the meaning of normative sections of `PLAN.md`; propose via `plan-change`. `api/openapi.yaml` may be edited only to match `PLAN.md` §8.
+8. **Stay in your area.** Edit only files within your bead's reserved area. Shared surfaces (§11.7) need a short explicit reservation. If you need more, reserve it, or file a dependency bead.
+9. **Seeds.** Every failing case you fix goes into `sim/corpus/` in the same commit (shrunk scenario if available).
 10. **Robot mode.** Use `bv --robot-*` and `br … --json`. Never launch interactive TUIs.
-11. **Code design (§5.2).** Follow CD-2 to CD-12. In particular: model state so invalid
-    combinations cannot be built (CD-2); parse input into domain types at the boundary
-    (CD-3); use the dedicated ID/index types, never bare integers (CD-4); no wildcard
-    match arms on domain enums (CD-5); assert invariants where state changes (CD-7);
-    give every new queue, map or cache a registered bound (CD-9); add every new
-    dependency to `DEPENDENCIES.md` with its purpose, version and licence (CD-12).
-    **Do not disable or `allow` any lint that enforces a CD principle.**
-12. **Registry (§10.13).** Register every new check in `registry/checks.toml` with its
-    code marker, executable selector, minimum case count, covered requirements and
-    claim class. **Never edit a requirement's status by hand:** activation is derived
-    by `./dev commit --close` when the last listing bead closes (§10.13), and the
-    registry gate rejects hand-edited statuses. Never delete registry rows, golden
-    files, corpus entries or bug variants to make a gate pass.
-13. **Claims (§10.15).** In bead closures, commit messages and reports, state claims in
-    their class. "N seeds passed" is simulation evidence, never proof.
-14. **Robot output (O-6).** Consume tool output via `--json`, never by scraping text.
-    If you change a JSON output, update its schema and version.
-15. **Commits (§11.10).** Commit only through `./dev commit`. Never `git add -A` in the
-    shared checkout. Never create branches or worktrees (including `ntm --worktrees`).
-16. **Evidence.** Close a bead only with a passing acceptance receipt for the current
-    tree. Never mark a check `passed` by hand; statuses come from receipts.
-17. **Test-only code.** Failpoints and bug variants live behind test-only builds and
-    are never enabled in a production build.
-18. **Node data.** Manage nodes only through `./dev cluster …`. Never kill processes by
-    port or with broad patterns, and never delete or rewrite a node's data directory.
+11. **Code design (§5.2).** Follow CD-2 to CD-12. In particular:
+    - model state so invalid combinations cannot be built (CD-2);
+    - parse input into domain types at the boundary (CD-3);
+    - use the dedicated ID/index types, never bare integers (CD-4);
+    - no wildcard match arms on domain enums (CD-5);
+    - assert invariants where state changes (CD-7);
+    - give every new queue, map or cache a registered bound (CD-9);
+    - add every new dependency to `DEPENDENCIES.md` with its purpose, version and licence (CD-12).
+    Do not disable or `allow` any lint that enforces a CD principle.
+12. **Registry (§10.13).** Register every new check in `registry/checks.toml` with its code marker, executable selector, minimum case count, covered requirements and claim class. **Never edit a requirement's status by hand:** activation is derived by `./dev commit --close` when the last listing bead closes (§10.13), and the registry gate rejects hand-edited statuses. Never delete registry rows, golden files, corpus entries or bug variants to make a gate pass.
+13. **Claims (§10.15).** In bead closures, commit messages and reports, state claims in their class. "N seeds passed" is simulation evidence, never proof.
+14. **Robot output (O-6).** Consume tool output via `--json`, never by scraping text. If you change a JSON output, update its schema and version.
+15. **Commits (§11.10).** Commit only through `./dev commit`. Never `git add -A` in the shared checkout. Never create branches or worktrees (including `ntm --worktrees`).
+16. **Evidence.** Close a bead only with a passing acceptance receipt for the current tree. Never mark a check `passed` by hand; statuses come from receipts.
+17. **Test-only code.** Failpoints and bug variants live behind test-only builds and are never enabled in a production build.
+18. **Node data.** Manage nodes only through `./dev cluster …`. Never kill processes by port or with broad patterns, and never delete or rewrite a node's data directory.
 
 ---
 
@@ -113,27 +100,44 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
 
 Cargo only — never any other build or package tool.
 
-- **Toolchain:** pinned **stable** via `rust-toolchain.toml` (W01 pins the exact
-  version; bumping it is a deliberate change — a bump can strengthen lint groups
-  underneath us, so re-run the full lint gate and record the bump in its own bead).
-- **Edition:** 2024.
+- **Toolchain:** pinned **stable 1.99.0** via `rust-toolchain.toml` (with clippy and
+  rustfmt). Bumping it is a deliberate change: a bump can strengthen lint groups
+  underneath us, so re-run the full lint gate and the lint probes, and record the bump
+  in its own bead. `./dev doctor` fails if the active toolchain is not the pin.
+- **Edition:** 2024; resolver 3.
 - **Workspace:** virtual manifest at the root; crates live under `crates/` per
   PLAN.md Appendix A. Crates are created by the first bead that needs them (P6:
   no empty crates).
+- **Builds:** run cargo as `rch exec -- cargo …` so builds offload to remote workers
+  once any exist (with none, rch builds locally). `./dev` does this itself; set
+  `KEYVAL_NO_RCH=1` to force plain cargo.
 - **Determinism note (T-3):** "same build" covers toolchain, target, lockfile,
   vendored-library patch, configuration, scenario version and PRNG implementation.
   `Cargo.lock` is committed; toolchain and lockfile changes invalidate trace
-  comparisons.
+  comparisons. Gate receipts record a build ID hashing these inputs.
 
 ### Crate tiers (Appendix A — the tier decides which rules bind)
 
+A crate's tier follows from its **directory**, which Appendix A fixes. DEP-RULE
+classifies every workspace member this way, and a crate in an unlisted directory fails.
+
 | Tier | Crates | Extra rules |
 |---|---|---|
-| Deterministic — domain (pure) | `types`, `statemachine` | Rules 4 & 5; std + vendored Raft + approved pure libs only; missing docs on public items denied (CD-11) |
-| Deterministic — engine (no ambient I/O) | `node`, `journal`, `raft_adapter` | Same as domain |
-| Adapters + composition roots | `fs_storage`, `server`, `sim` | Translate only; no domain logic (CD-1) |
-| Oracles (no production deps) | `model`, `checker` | Depend on **no** production crate |
-| Tools | `cli`, `xtask` (`./dev`), `conformance/` (separate package, HTTP only) | — |
+| Deterministic — domain (pure) | `crates/types`, `crates/statemachine` | Rules 4 & 5; std + approved pure libs only; deterministic lint block + clippy config (below) |
+| Deterministic — engine (no ambient I/O) | `crates/node`, `crates/journal`, `crates/raft_adapter` | Same as domain; may also use the vendored Raft library |
+| Adapter | `crates/fs_storage` | Translate only; no domain logic (CD-1) |
+| Composition roots | `crates/server` (production), `crates/sim` (simulation) | Translate only; the server never depends on `sim` or oracles |
+| Oracles (no production deps) | `crates/model`, `crates/checker` | Depend on **no** production crate (T-12) |
+| Tools | `crates/cli`, `xtask` (`./dev`), `fuzz/`, `conformance/` (separate package, HTTP only) | — |
+| Lint probes (fixtures) | `xtask/probes/*` | Deliberate violations behind `cfg(keyval_probe)`; never real code |
+
+Dependencies point inward only (DEP-RULE): domain → domain; engine → domain, engine,
+vendored Raft; adapter and CLI → domain, engine, adapter; server → domain, engine,
+adapter; sim → domain, engine, adapter, oracle; oracle → oracle; conformance → nothing
+first-party. The rule covers dev-dependencies too.
+
+`crates/types` exists from W01 and holds `types::invariant!` (below); W04 adds the domain
+types, newtypes, ports and errors.
 
 One crate (or noted leaf module) = one **area** for file reservations. Shared surfaces
 (workspace `Cargo.toml`, `Cargo.lock`, `AGENTS.md`, `DEPENDENCIES.md`,
@@ -144,12 +148,14 @@ under a short, explicit reservation (§11.7).
 
 ## Lint Policy (strict — this is a greenfield project; no legacy allowances)
 
-Lints are configured in W01 (workspace policy + probe tests) and W04 (determinism
-lint), pinned to the project toolchain, and **tested**: a probe file that violates a
-denied lint must be rejected by the gate (W01 acceptance). Documentation of a lint is
-never assumed to match its behaviour — the probe is the proof.
+Lints are configured in W01 (workspace policy, deterministic-crate configuration, probe
+tests) and W04 (the determinism lint applied to real crates), pinned to the project
+toolchain, and **tested**: every denied lint has a probe file that the gate must reject
+(check LINT-PROBES). Documentation of a lint is never assumed to match its behaviour —
+the probe is the proof.
 
-Baseline, in `[workspace.lints]` of the root `Cargo.toml`:
+Baseline, in `[workspace.lints]` of the root `Cargo.toml` (every crate has
+`[lints] workspace = true` and nothing else under `[lints]`; LINT-TIERS checks it):
 
 ```toml
 [workspace.lints.rust]
@@ -165,8 +171,12 @@ expect_used   = "deny"
 panic         = "deny"
 todo          = "deny"
 unimplemented = "deny"
+unreachable   = "deny"          # invariant! is the only sanctioned panic
 dbg_macro     = "deny"
 ```
+
+These are `deny`, not `forbid`, only because clap's derive emits
+`#[allow(clippy::restriction)]`; LINT-ALLOWS closes the gap (below).
 
 With, in `clippy.toml` (tests may use these — CD-8):
 
@@ -176,29 +186,47 @@ allow-expect-in-tests = true
 allow-panic-in-tests  = true
 ```
 
-Additionally, in deterministic crates:
+Clippy counts as test code only `#[test]` functions and `#[cfg(test)]` items. **Start
+every integration-test file (`tests/*.rs`) with `#![cfg(test)]`**, or its helper
+functions are linted as production code (a probe proves this).
 
-- **Wildcard enum match arms denied** (CD-5), plus an AST check for catch-all
-  identifier arms (`_x => …` spelled as a binding).
-- **Missing docs on public items denied** (CD-11): every public domain type documents
-  its invariants.
-- **Determinism lint (W04):** `disallowed-methods` / `disallowed-types` covering at
-  least `std::time::Instant::now`, `std::time::SystemTime::now`, `std::thread::spawn`,
-  unseeded/thread-local RNG, default-hashed `HashMap`/`HashSet`, and direct
-  filesystem/network I/O — each entry's `reason` names the port to use instead.
+**Invariants (CD-7/CD-8).** Use `types::invariant!(condition, "INVARIANT-ID", "format",
+args…)`. It expands to `assert!` (checked in all builds) and panics with
+`invariant <ID> violated: <context>`; the context names the node, index and values
+involved. It is the only sanctioned panic in production code, and no `allow` is needed.
+
+**Deterministic crates** additionally carry the canonical configuration in `xtask/lint/`
+(LINT-TIERS checks both copies byte for byte):
+
+- `lib.rs` starts with the exact block in `xtask/lint/deterministic-lints.rs`: a
+  `#![forbid(...)]` of `unsafe_code`, `missing_docs` (CD-11: every public item, and every
+  public domain type documents its invariants), the CD-8 lints,
+  `clippy::wildcard_enum_match_arm` (CD-5: catches `_ =>` **and** catch-all bindings
+  such as `other =>`), and the determinism lints. `forbid` means no `allow` can override
+  any of them.
+- The crate's own `clippy.toml` is a copy of `xtask/lint/deterministic.clippy.toml`:
+  the test allowances plus `disallowed-methods`, `disallowed-types` and
+  `disallowed-macros` covering wall-clock time (`Instant`, `SystemTime`), threads,
+  `RandomState`/`HashMap`/`HashSet`, ambient environment (`std::env`), filesystem,
+  network and process I/O, stdio, `println!`-style macros and `thread_local!`. Each
+  entry's `reason` names the port to use instead (§7.2).
 
 Escape-hatch policy:
 
-- **Never** `allow` a lint that enforces a CD principle, and never silence the
-  determinism lint (rules 4 and 11). No exceptions.
-- Any other `allow` is narrow (one site, or one documented group), carries a comment
-  stating what fired, why it is acceptable here, and the bead ID that decided it —
-  the lint configuration doubles as a decision log. Undocumented allows are defects.
+- **Never** `allow` (or `expect`) a lint that enforces a CD principle, or a group that
+  contains one (`warnings`, `clippy::all`, `clippy::style`, `clippy::restriction`), and
+  never silence the determinism lint (rules 4 and 11). No exceptions. LINT-ALLOWS
+  rejects them anywhere in first-party code, including inside `cfg_attr`.
+- Any other `allow` is narrow (one site, or one documented group), and carries a comment
+  stating what fired, why it is acceptable here, and the bead ID that decided it. The
+  comment must sit within the 3 lines above the attribute, or the bead ID can be in the
+  attribute's `reason = "…"`. The lint configuration doubles as a decision log.
+  Undocumented allows are defects, and LINT-ALLOWS rejects them.
 - `#[allow]` never appears in a commit just to get a gate green. Fix the code or file
   the bead.
 
 Invariant style (CD-6/CD-7): expected failures are typed results (error enums, no
-string errors). Broken invariants use `assert!` — not `debug_assert!` — because
+string errors). Broken invariants use `invariant!` — never `debug_assert!` — because
 invariants are checked **in all builds** (performance is not a v1 concern). Assertion
 messages carry node, index and invariant ID.
 
@@ -207,12 +235,17 @@ messages carry node, index and invariant ID.
 ## Dependencies (CD-12)
 
 - Deterministic crates start from **the standard library plus the vendored Raft
-  library** (`vendor/raft/`, pinned 0.7.0 with recorded checksums). Anything else in a
-  deterministic crate needs a `DEPENDENCIES.md` entry establishing that it is pure
-  (no ambient time, entropy, threads or I/O).
-- Every direct dependency anywhere in the workspace is listed in `DEPENDENCIES.md`
-  with purpose, scope, version, licence and source, in the same commit that adds it.
-  The T0 gate checks direct dependencies ⊆ `DEPENDENCIES.md`.
+  library** (`vendor/raft/`, pinned 0.7.0 with recorded checksums; engine crates only).
+  Anything else in a deterministic crate needs a `DEPENDENCIES.md` row with scope
+  `deterministic`, whose Determinism cell shows it is pure (no ambient time, entropy,
+  threads or I/O). DEP-RULE rejects any other third-party crate there, dev-dependencies
+  included.
+- Every direct dependency anywhere in the workspace (normal, dev or build) is listed in
+  `DEPENDENCIES.md` in the same commit that adds it, with columns Crate, Version (the
+  **locked** version), Scope (`deterministic` | `adapter` | `oracle` | `tools` | `dev`),
+  Used by, Purpose, Licence, Source and Determinism. DEP-LEDGER (in the T0 gate) fails
+  on an unlisted dependency, a wrong Used by, a version that differs from `Cargo.lock`,
+  or a stale row. Declare the version once under `[workspace.dependencies]`.
 - Never add: an async runtime, an HTTP stack, RNG, or clock access to a deterministic
   crate — that is what adapters and ports are for (rules 4–5). A crate that pulls in
   its own RNG or clock transitively threatens determinism (P4): check features and
@@ -223,22 +256,45 @@ messages carry node, index and invariant ID.
 
 ## Compiler Checks & Gates (CRITICAL)
 
-After any substantive change, before handing off or closing a bead:
+While iterating:
 
 ```bash
 rch exec -- cargo check --all-targets
-rch exec -- cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --check
+rch exec -- cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all --check
+./dev check <ID>...          # one or more registered checks, e.g. LINT-PROBES DEP-RULE
 ```
 
 - Offload builds through `rch exec --` so one agent does not starve the machine.
 - Enumerate whole-tree breakage in one pass (collect all errors, then fix), rather
   than one error at a time.
-- `ubs <changed-files>` before every commit (suite rule).
-- Once W01 lands: `./dev gate fast` is the T0 gate (fmt, clippy, dependency rule,
-  banned imports, registry checks); `./dev doctor` verifies the environment;
-  `./dev check <ID>` runs one registered check. Gate receipts — not your say-so —
-  are what close beads (rule 16).
+- `ubs <changed-files>` before every commit (suite rule; the gate runs it for you).
+- Tests that run cargo themselves must build into their own target directory
+  (`CARGO_TARGET_DIR`): the outer `cargo test` keeps its build directory locked while
+  tests run, so a nested build there waits forever.
+
+The `./dev` surface that exists today (PLAN.md §11.13; every command takes `--json`;
+exit 0 = ok, 1 = failed, 2 = usage error):
+
+- `./dev doctor` — the pinned toolchain and every required tool (rustc, cargo, rustfmt,
+  clippy, git, br, bv, ntm, ubs, dcg, am), with versions and a real capability probe
+  each; fails on anything missing or broken.
+- `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
+  DEV-GATE, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES,
+  INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
+  check's minimum case count fail (P10). A failure prints its exact re-run command.
+  Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
+  Every check has exactly one `// check: <ID>` marker in code.
+- `./dev gate fast` — the T0 gate in its fixed bootstrap form (§10.10): fmt, clippy with
+  denied warnings, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests,
+  and UBS on the exact changed files (all first-party sources if no source changed).
+  It writes a receipt to `artifacts/receipts/` with the tree ID, build ID, policy
+  hashes and per-step case counts. **It judges exact trees only (P11):** in a checkout
+  it refuses unless the working tree is clean, and judges `HEAD^{tree}`. A commit
+  wrapper passes `--tree <id> --changed <path>…` from the materialised candidate, and
+  then the gate never calls git. Other tiers report "not implemented" (W46).
+
+Gate receipts — not your say-so — are what close beads (rule 16).
 
 ---
 
@@ -249,9 +305,10 @@ Policy (see PLAN.md §10 for the full verification architecture):
 - **Unit tests** live inline (`#[cfg(test)]`) in the crate they test and cover the
   happy path, edge cases (empty, max, boundary — e.g. key length 255/256/257,
   multibyte UTF-8) and error conditions. Tests may use `unwrap`/`expect`/`panic!`.
-- **Integration tests** live in the owning crate's `tests/` directory. Never add tests
-  to a workspace-root `tests/` directory: the root manifest is virtual, so Cargo
-  silently never compiles them.
+- **Integration tests** live in the owning crate's `tests/` directory, and each file
+  starts with `#![cfg(test)]` (see Lint Policy). Never add tests to a workspace-root
+  `tests/` directory: the root manifest is virtual, so Cargo silently never compiles
+  them.
 - **Property tests** for stated invariants (e.g. version = execution index; replay
   returns the original result; bounded collections at N−1/N/N+1).
 - **Compile-fail fixtures** prove CD-2 ("invalid states unrepresentable") claims.
@@ -275,10 +332,34 @@ Policy (see PLAN.md §10 for the full verification architecture):
 - Bead ID = Mail `thread_id`; subjects start `[br-…]`; announce start and completion
   in-thread. Check your inbox at natural pause points; acknowledge what you read.
 - Work selection: `bv --robot-triage` → claim in `br` → reserve → work → gate →
-  `./dev commit --bead <id>` → release reservations → close with the receipt.
+  commit → release reservations → close with the receipt. The commit is
+  `./dev commit --bead <id>` once W07 lands; until then, hand your paths to the
+  coordinator (Git Discipline, above).
 - The tool-managed sections below (Agent Mail, Beads, bv, ee) are appended by those
   tools; edit them only via the owning tool (`am docs`, `br agents`, `bv --agents-*`,
   `ee export agentsmd`).
+
+### Bead conventions (PLAN.md §11.4)
+
+- **Titles:** `W<nn>: <imperative>` for planned work (§12.2); `W<nn>.<k>: <imperative>`
+  for its subtasks; `BUG: <symptom>` for defects; `AUDIT: <milestone>` for audits;
+  `M<n>: …` for milestone epics; `OWNER: <action>` for owner-only actions. Discovered
+  work that is none of these gets an imperative title and the `discovered` label.
+- **Description template:** Context (why, 1–3 lines); Requirements (§6 IDs, checker
+  IDs, bug-variant IDs); Area (§11.7); Acceptance (executable criteria, e.g. "`./dev
+  check K-5 --case committed-prefix` passes; T0 green"); Out of scope.
+- **Priority:** P0 correctness bug, red gate or nondeterminism; P1 critical-path work;
+  P2 other planned work; P3 nice-to-have.
+- **Labels:** `m0`…`m5` (milestone); `plan:W<nn>` on the one bead per §12.2 item;
+  `sub:W<nn>` on its subtasks (no `plan:` label); `conflict`, `plan-change`, `hard`,
+  `needs-owner`, `failed`, `audit`; plus `milestone` (epics), `process`, `discovered`.
+- **Edges:** subtasks chain with `blocks` edges and the parent W bead blocks on all of
+  them. `parent-child` is used only for epic membership: mixing both on one pair wedges
+  readiness in br. Edges between `plan:W` beads mirror §12.3 exactly; never add or
+  remove one without a plan change.
+- **Closing** needs a passing acceptance receipt for the current tree (rule 16), quoted
+  in a bead comment. A failed spike is never closed: it stays open with `failed` +
+  `needs-owner` (§11.4).
 
 ---
 

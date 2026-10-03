@@ -81,6 +81,8 @@ pub enum StaticCheck {
     DepRule,
     /// Every direct third-party dependency is ledgered in DEPENDENCIES.md (CD-12).
     DepLedger,
+    /// AGENTS.md carries every PLAN.md §11.5 rule verbatim (W01).
+    AgentsRules,
 }
 
 impl StaticCheck {
@@ -91,6 +93,7 @@ impl StaticCheck {
             Self::LintTiers => crate::lint::check_tiers(root),
             Self::DepRule => crate::tiers::check_dependency_rule(root),
             Self::DepLedger => crate::ledger::check_ledger(root),
+            Self::AgentsRules => crate::agents::check_agents_rules(root),
         }
     }
 
@@ -101,6 +104,7 @@ impl StaticCheck {
             Self::LintTiers => "LINT-TIERS",
             Self::DepRule => "DEP-RULE",
             Self::DepLedger => "DEP-LEDGER",
+            Self::AgentsRules => "AGENTS-RULES",
         }
     }
 
@@ -111,6 +115,7 @@ impl StaticCheck {
             Self::LintTiers => "crate(s)",
             Self::DepRule => "crate(s)+edge(s)",
             Self::DepLedger => "edge(s)+row(s)",
+            Self::AgentsRules => "rule(s)+statement(s)",
         }
     }
 }
@@ -239,6 +244,17 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::DepLedger),
         min_cases: 5,
+    },
+    CheckDef {
+        id: "AGENTS-RULES",
+        summary: "AGENTS.md carries every PLAN.md §11.5 rule verbatim and replaces the \
+                  ACFS git checklist",
+        kind: Kind::Static,
+        covers: &["P7", "P9", "CD-12"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::AgentsRules),
+        min_cases: 18,
     },
     CheckDef {
         id: "DEV-GATE",
