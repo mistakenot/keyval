@@ -442,6 +442,34 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 5,
     },
+    CheckDef {
+        id: "DOMAIN-ENUMS",
+        summary: "lifecycle, CAS expectation, mutation, decision and attempt states are \
+                  enums whose invalid combinations cannot be built (CD-2)",
+        kind: Kind::TestGroup,
+        covers: &["CD-2", "CD-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["lifecycle::", "mutation::", "outcome::"],
+        },
+        min_cases: 7,
+    },
+    CheckDef {
+        id: "ERROR-CODES",
+        summary: "ErrorCode equals api/openapi.yaml's error codes in order, with the §8.4 \
+                  statuses and terminality",
+        kind: Kind::TestGroup,
+        covers: &["CD-6", "F-10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["error_code::"],
+        },
+        min_cases: 3,
+    },
 ];
 
 /// Outcome of one requested check.

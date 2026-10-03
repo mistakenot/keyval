@@ -25,13 +25,17 @@
 //! - **Smart constructors** (CD-3): [`Key::parse`] (DM-1) and [`Value::parse`] (DM-2)
 //!   enforce the byte limits once, at the boundary; fields are private, so the core
 //!   never re-checks.
+//! - **Domain enums** (CD-2): [`Lifecycle`], [`ExpectedVersion`], [`Mutation`], the
+//!   write's [`Decision`] and [`TerminalResult`], and an [`Attempt`]'s state (§7.5, §7.8).
+//! - **Error codes** (CD-6): [`ErrorCode`] has one variant per §8.4 code, matching
+//!   `api/openapi.yaml` exactly.
 //!
 //! Integers that appear in the HTTP API (node IDs, terms, log indices, versions) are
 //! refused at or above 2^53 when constructed ([`MAX_SAFE_INTEGER`], D-77).
 //!
-//! The domain enums, error type and ports arrive with the rest of W04. This crate also
-//! owns [`invariant!`], the project's CD-7 assertion macro and the only sanctioned panic
-//! in first-party production code (CD-8).
+//! The ports arrive with the rest of W04. This crate also owns [`invariant!`], the
+//! project's CD-7 assertion macro and the only sanctioned panic in first-party
+//! production code (CD-8).
 //!
 //! As a deterministic crate it obeys the determinism rules of §7.14 and §11.5 rule 4: no
 //! wall clock, no unseeded or thread-local randomness, no threads or async, no randomly
@@ -40,13 +44,21 @@
 
 mod counts;
 mod data;
+mod error_code;
 mod ids;
 mod invariant;
+mod lifecycle;
 mod log_index;
+mod mutation;
+mod outcome;
 mod range;
 
 pub use counts::{ByteCount, PageSize, Tick};
 pub use data::{Key, KeyError, Value, ValueError};
+pub use error_code::{ErrorCode, Terminality};
 pub use ids::{ClusterId, ClusterIdError, NodeId, RequestId, RequestIdError};
+pub use lifecycle::Lifecycle;
 pub use log_index::{LogIndex, Term, Version};
+pub use mutation::{ExpectedVersion, Mutation};
+pub use outcome::{Attempt, AttemptOutcome, Decision, LiveStateLimit, TerminalResult};
 pub use range::{MAX_SAFE_INTEGER, OutOfRange, Quantity};
