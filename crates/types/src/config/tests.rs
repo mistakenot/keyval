@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use super::rules::{self, Values};
 use super::*;
-use crate::{ClusterIdError, Key, OutOfRange, Quantity, Value};
+use crate::{
+    ClusterIdError, Key, KeyError, KeyValueLimits, OutOfRange, Quantity, Value, ValueError,
+};
 
 /// The repository's local cluster config.
 const LOCAL: &str = include_str!("../../../../config/local.toml");
@@ -1207,4 +1209,103 @@ fn errors_name_the_line_and_the_rule() {
             "rule: errors are specific (§7.10)"
         );
     }
+}
+
+#[test]
+fn no_accepted_config_lets_a_key_or_value_past_its_configured_limit() {
+    // D-80: the configured limits are the ones in force at every parse. Every accepted
+    // config, the fixture corpus and local.toml included, across the whole range of both
+    // limits: a key or value of exactly the limit parses, one byte more is refused.
+    let mut configs: Vec<(String, Config)> = FIXTURES
+        .iter()
+        .map(|(name, text)| ((*name).to_owned(), accepted(text, "fixture")))
+        .collect();
+    configs.push(("local.toml".to_owned(), accepted(LOCAL, "local.toml")));
+    for max_key in [1, 2, 16, 255, 256] {
+        for max_value in [0, 1, 64, 65_535, 65_536] {
+            let text = with(
+                "max_key_bytes = 256\n",
+                &format!("max_key_bytes = {max_key}\n"),
+            )
+            .replace(
+                "max_value_bytes = 65536\n",
+                &format!("max_value_bytes = {max_value}\n"),
+            );
+            configs.push((
+                format!("key {max_key}, value {max_value}"),
+                accepted(&text, "limits"),
+            ));
+        }
+    }
+    for (name, config) in configs {
+        let limits = config.key_value_limits();
+        let (key_limit, value_limit) = (limits.max_key_bytes(), limits.max_value_bytes());
+        assert_eq!(
+            (
+                u64::try_from(key_limit).unwrap(),
+                u64::try_from(value_limit).unwrap()
+            ),
+            (config.max_key_bytes().get(), config.max_value_bytes().get()),
+            "rule: the limits in force are the configured ones (O-5, D-80); config={name}"
+        );
+        assert!(
+            key_limit <= Key::MAX_BYTES && value_limit <= Value::MAX_BYTES,
+            "rule: DM-1/DM-2 bound every configured limit; config={name}"
+        );
+        assert!(
+            Key::parse("k".repeat(key_limit), limits).is_ok(),
+            "config={name}"
+        );
+        assert_eq!(
+            Key::parse("k".repeat(key_limit + 1), limits),
+            Err(KeyError::TooLong {
+                bytes: key_limit + 1,
+                limit: key_limit
+            }),
+            "rule: no key past the configured limit parses (D-80); config={name}"
+        );
+        assert!(
+            Value::parse("v".repeat(value_limit), limits).is_ok(),
+            "config={name}"
+        );
+        assert_eq!(
+            Value::parse("v".repeat(value_limit + 1), limits),
+            Err(ValueError::TooLong {
+                bytes: value_limit + 1,
+                limit: value_limit
+            }),
+            "rule: no value past the configured limit parses (D-80); config={name}"
+        );
+    }
+}
+
+#[test]
+fn the_small_limits_profile_enforces_16_byte_keys_and_64_byte_values() {
+    let config = accepted(FIXTURES[3].1, "small-limits.toml");
+    assert_eq!(FIXTURES[3].0, "small-limits.toml", "test setup");
+    let limits = config.key_value_limits();
+    assert_eq!(limits, KeyValueLimits::new(16, 64).unwrap(), "rule: D-80");
+    for (bytes, ok) in [(15, true), (16, true), (17, false)] {
+        assert_eq!(
+            Key::parse("k".repeat(bytes), limits).is_ok(),
+            ok,
+            "rule: keys of 15/16/17 bytes under max_key_bytes = 16 (D-80); bytes={bytes}"
+        );
+    }
+    // A two-byte character straddling the limit: 15 + 2 = 17 bytes.
+    assert!(
+        Key::parse(format!("{}é", "k".repeat(15)), limits).is_err(),
+        "rule: bytes, not characters"
+    );
+    for (bytes, ok) in [(63, true), (64, true), (65, false)] {
+        assert_eq!(
+            Value::parse("v".repeat(bytes), limits).is_ok(),
+            ok,
+            "rule: values of 63/64/65 bytes under max_value_bytes = 64 (D-80); bytes={bytes}"
+        );
+    }
+    assert!(
+        Value::parse(format!("{}€", "v".repeat(62)), limits).is_err(),
+        "rule: 62 + 3 = 65 bytes"
+    );
 }

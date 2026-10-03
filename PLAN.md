@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document version | 1.9 |
+| Document version | 1.10 |
 | Status | **Active** — approved by the owner on 2026-10-01 after five independent review rounds and a fix-verification pass (D-43…D-76, §16); all §15 dispositions accepted at their defaults. Change control per §0.5 and §16. |
 | Last revised | 2026-10-03 |
 | Owner | Project owner (the human running the swarm) |
@@ -737,7 +737,7 @@ data_dir = "../.local/nodes/1"   # relative to this config file's directory (§7
 # config/local.toml contains explicit entries for nodes 2–5.
 ```
 
-Every key shown above is required: no built-in default stands in for a semantic or timing parameter (O-5), and an unknown key is rejected with its line number, so a misspelt key can never fall back to a default. The local library limits of §7.11 (replication batch size and in-flight batches, per-peer send queue, uncommitted proposal bytes, committed bytes per Ready) are optional keys that default to their §7.11 values and are not fingerprinted. The format limits (canonical command, journal frame, HTTP body) are fixed constants, not configuration. `types` reads the file with an in-crate strict reader for exactly this grammar; the core takes no TOML dependency (D-79).
+Every key shown above is required: no built-in default stands in for a semantic or timing parameter (O-5). `max_key_bytes` and `max_value_bytes` are the key and value limits in force wherever keys and values are parsed, at most the DM-1/DM-2 maxima (D-80); and an unknown key is rejected with its line number, so a misspelt key can never fall back to a default. The local library limits of §7.11 (replication batch size and in-flight batches, per-peer send queue, uncommitted proposal bytes, committed bytes per Ready) are optional keys that default to their §7.11 values and are not fingerprinted. The format limits (canonical command, journal frame, HTTP body) are fixed constants, not configuration. `types` reads the file with an in-crate strict reader for exactly this grammar; the core takes no TOML dependency (D-79).
 
 ### 7.11 Limits and backpressure
 
@@ -745,7 +745,7 @@ Every allocation-bearing collection has an entry in the limits registry before i
 
 | Limit | Default | When exhausted |
 |---|---:|---|
-| Key / value | 256 B / 64 KiB decoded UTF-8 | `400 invalid_request` / `413 too_large` before proposal |
+| Key / value | 256 B / 64 KiB decoded UTF-8: the DM-1/DM-2 maxima; the configured `max_key_bytes` and `max_value_bytes` are the limits in force (D-80) | `400 invalid_request` / `413 too_large` before proposal |
 | HTTP request body | 512 KiB | `413 too_large` (enough for worst-case JSON escaping of a valid value) |
 | Canonical command | 66 KiB | Rejected at the boundary; a test proves every valid command fits |
 | SCAN page | 1–128 items (default 32); ≤ 1 MiB of **decoded** key+value bytes | Page stops before the next item would exceed either bound; one maximum-size item always fits. The caps are fixed semantic constants (part of the fingerprint), and the accumulation rule is exact: sum `len(key) + len(value)` in decoded bytes over returned items, stop before the item that would exceed either cap, always return the first item; `next_after` and probe-item bytes never count. Implemented independently by the core, the model and K-5 (T-12; the encoded response stays bounded by construction) |
@@ -2041,6 +2041,7 @@ Items marked **disposition required** change what a requirement guarantees, so v
 | D-77 | **Every API integer is below 2^53: the largest valid value is 2^53 − 1 (9007199254740991), for CAS `expected.version`, terms and node IDs alike** (v1.7, 2026-10-03) | Decided | Owner decision on `br-s4dg`. §8.1 said "below 2^53" generally but "above 2^53" for CAS versions and terms, and §7.10 said "≤ 2^53" for node IDs, so 2^53 itself was both valid and invalid. 2^53 − 1 is the largest integer every JSON client represents exactly |
 | D-78 | **The proof that every accepted config constructs a `RawNode` is a W13 test over the fixture corpus W08 commits in `config/fixtures/`; W08 makes each raft-rs 0.7 `Config::validate` constraint its own parser rule with its own test** (v1.8, 2026-10-03) | Decided | Owner decision on `br-4eli`. §7.10 assigned the test to W08, but W08 (area `types`, `config`; depends only on W04) cannot depend on the vendored raft-rs: `types` is a pure domain crate, DEP-RULE allows raft-rs only in engine crates (dev-dependencies included), and `raft_adapter`, which owns the mapping onto the library's config, is created by W13 |
 | D-79 | **The config file is read by an in-crate strict reader in `types` for exactly the §7.10 grammar, with no TOML dependency in the core; unknown keys are rejected with line-numbered errors; every §7.10 key is required, the §7.11 local library limits are optional with their §7.11 defaults and are not fingerprinted, the format limits are fixed constants, and each parameter's allowed range is declared in one table in `types` that W08's limits registry extends** (v1.8, 2026-10-03) | Decided | Owner decisions while starting W08.1 (`br-w08-1-config-parser-rules-gwj`). Follows the in-crate CRC-32C and SHA-256 precedent (CD-12, D-75); rejecting unknown keys stops a misspelt key from silently falling back to a default (O-5); optional local limits make every cross-limit rule reachable from a config file, and none of them is semantic |
+| D-80 | **Configured key and value limits apply: `Key::parse` and `Value::parse` take the configured `max_key_bytes`/`max_value_bytes` (a `KeyValueLimits` value from the `Config`), and DM-1/DM-2's 256 B / 64 KiB remain the upper bound** (v1.10, 2026-10-03) | Decided | Owner decision on `br-key-parse-ignores-config-limits-528e` (option A). W08.1 accepted smaller configured limits that `Key::parse`/`Value::parse` never enforced, so under a small-limits profile an over-limit key or value parsed and, by CD-3, was never re-checked. A test proves that no accepted config lets a key or value past its limit |
 
 **D-05 detail: Raft library**
 
@@ -2107,6 +2108,7 @@ OpenRaft, fallback:
 | R-24 | `cfg(simulation)` branches in semantic code | Simulation would test different code from production (P3) | — |
 | R-25 | Create `raft_adapter` and add the vendored raft-rs to the workspace in W08, only to construct a `RawNode` from each accepted config | Outside W08's area, ahead of W02 and W13 in §12.3, and a crate created early for one test (P6); D-78 | W13 no longer owns the raft-rs config mapping |
 | R-26 | A TOML library (e.g. `toml`) in the deterministic core | It would be the core's first third-party dependency, about eight crates including `indexmap`, for a fixed grammar of integers, strings, comments and `[[nodes]]`; D-79 | The config grammar outgrows a small strict reader |
+| R-27 | Pin `max_key_bytes`/`max_value_bytes` to exactly the DM-1/DM-2 maxima, so the parsers need no config | Smaller configured limits are useful for capacity profiles and keep the semantic fingerprint meaningful; the owner chose to enforce them instead (D-80) | A deployment needs the API's limits fixed regardless of profile |
 
 ### 16.3 Negative evidence ledger
 

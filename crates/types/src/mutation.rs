@@ -78,13 +78,14 @@ impl Mutation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::KeyValueLimits;
 
     fn key(text: &str) -> Key {
-        Key::parse(text.to_owned()).unwrap()
+        Key::parse(text.to_owned(), KeyValueLimits::MAXIMA).unwrap()
     }
 
     fn value(text: &str) -> Value {
-        Value::parse(text.to_owned()).unwrap()
+        Value::parse(text.to_owned(), KeyValueLimits::MAXIMA).unwrap()
     }
 
     #[test]

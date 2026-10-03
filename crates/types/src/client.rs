@@ -416,13 +416,14 @@ mod tests {
     // check: PORTS
 
     use super::*;
+    use crate::data::KeyValueLimits;
     use crate::outcome::{Decision, LiveStateLimit};
 
     /// A SCAN range over [`start`, `end`) with page size `limit`.
     fn scan_range(start: &str, end: &str, limit: u64) -> ScanRange {
         ScanRange::new(
-            Some(Key::parse(start.to_owned()).unwrap()),
-            Some(Key::parse(end.to_owned()).unwrap()),
+            Some(Key::parse(start.to_owned(), KeyValueLimits::MAXIMA).unwrap()),
+            Some(Key::parse(end.to_owned(), KeyValueLimits::MAXIMA).unwrap()),
             None,
             PageSize::new(limit).unwrap(),
         )
@@ -432,8 +433,8 @@ mod tests {
     /// A scan item with `value_bytes` bytes of value, at version 1.
     fn scan_item(key: &str, value_bytes: usize) -> ScanItem {
         ScanItem {
-            key: Key::parse(key.to_owned()).unwrap(),
-            value: Value::parse("v".repeat(value_bytes)).unwrap(),
+            key: Key::parse(key.to_owned(), KeyValueLimits::MAXIMA).unwrap(),
+            value: Value::parse("v".repeat(value_bytes), KeyValueLimits::MAXIMA).unwrap(),
             version: Version::new(1).unwrap(),
         }
     }
@@ -450,7 +451,7 @@ mod tests {
     fn a_scan_page_keeps_its_items_continuation_and_server() {
         let range = scan_range("a", "z", 3);
         let items = vec![scan_item("b", 1), scan_item("c", 1), scan_item("d", 1)];
-        let continuation = Some(Key::parse("d".to_owned()).unwrap());
+        let continuation = Some(Key::parse("d".to_owned(), KeyValueLimits::MAXIMA).unwrap());
         let page = ScanPage::new(&range, items.clone(), continuation.clone(), served());
         assert_eq!(
             page.items(),
@@ -537,7 +538,7 @@ mod tests {
     #[should_panic(expected = "invariant SCAN-PAGE-CONTINUATION violated")]
     fn a_continuation_other_than_the_last_key_is_an_invariant_failure() {
         let range = scan_range("a", "z", 3);
-        let continuation = Some(Key::parse("b".to_owned()).unwrap());
+        let continuation = Some(Key::parse("b".to_owned(), KeyValueLimits::MAXIMA).unwrap());
         let _ = ScanPage::new(
             &range,
             vec![scan_item("b", 1), scan_item("c", 1)],
@@ -550,12 +551,12 @@ mod tests {
     #[should_panic(expected = "invariant SCAN-PAGE-CONTINUATION violated")]
     fn a_continuation_on_an_empty_page_is_an_invariant_failure() {
         let range = scan_range("a", "z", 3);
-        let continuation = Some(Key::parse("b".to_owned()).unwrap());
+        let continuation = Some(Key::parse("b".to_owned(), KeyValueLimits::MAXIMA).unwrap());
         let _ = ScanPage::new(&range, Vec::new(), continuation, served());
     }
 
     fn key(text: &str) -> Key {
-        Key::parse(text.to_owned()).unwrap()
+        Key::parse(text.to_owned(), KeyValueLimits::MAXIMA).unwrap()
     }
 
     #[test]

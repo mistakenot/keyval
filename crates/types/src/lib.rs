@@ -23,7 +23,7 @@
 //!   [`Tick`], [`RequestId`], [`ByteCount`] and [`PageSize`]. Each kind of quantity has
 //!   its own type, conversions are explicit, and arithmetic is checked.
 //! - **Smart constructors** (CD-3): [`Key::parse`] (DM-1) and [`Value::parse`] (DM-2)
-//!   enforce the byte limits once, at the boundary; fields are private, so the core
+//!   enforce the configured byte limits ([`KeyValueLimits`], D-80) once, at the boundary; fields are private, so the core
 //!   never re-checks.
 //! - **Domain enums** (CD-2): [`Lifecycle`], [`ExpectedVersion`], [`Mutation`], the
 //!   write's [`Decision`] and [`TerminalResult`], and an [`Attempt`]'s state (§7.5, §7.8).
@@ -90,7 +90,7 @@ pub use consensus::{
     Ready, Role, Status, StepError,
 };
 pub use counts::{ByteCount, PageSize, Tick};
-pub use data::{Key, KeyError, Value, ValueError};
+pub use data::{Key, KeyError, KeyValueLimits, Value, ValueError};
 pub use effects::{Effect, Inbound, Incarnation, Input, StorageOp, SyncSeq};
 pub use error_code::{ErrorCode, Terminality};
 pub use ids::{ClusterId, ClusterIdError, NodeId, RequestId, RequestIdError};

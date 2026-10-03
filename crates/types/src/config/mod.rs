@@ -50,7 +50,7 @@ pub use params::{
     MAX_SCAN_PAGE_BYTES, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION,
 };
 
-use crate::{ByteCount, ClusterId, NodeId, Tick};
+use crate::{ByteCount, ClusterId, KeyValueLimits, NodeId, Tick};
 use reader::{Document, Raw, Table};
 use rules::Values;
 
@@ -128,6 +128,8 @@ pub struct Config {
     cluster_id: ClusterId,
     /// Every numeric parameter.
     values: Values,
+    /// The key and value limits in force (D-80): `max_key_bytes` and `max_value_bytes`.
+    key_value_limits: KeyValueLimits,
     /// The voters, by ID.
     nodes: BTreeMap<NodeId, NodeConfig>,
 }
@@ -149,12 +151,14 @@ impl Config {
         check_known_keys(&document)?;
         let cluster_id = read_cluster_id(&document.top)?;
         let values = read_values(&document.top)?;
+        let key_value_limits = key_value_limits(&document.top, &values)?;
         let nodes = read_nodes(&document, config_dir)?;
         rules::timing(&values)?;
         rules::limits(&values)?;
         let config = Self {
             cluster_id,
             values,
+            key_value_limits,
             nodes,
         };
         for &node in config.nodes.keys() {
@@ -230,6 +234,13 @@ impl Config {
     #[must_use]
     pub const fn max_value_bytes(&self) -> ByteCount {
         ByteCount::new(self.values.max_value_bytes)
+    }
+
+    /// The key and value limits in force, for [`Key::parse`](crate::Key::parse) and
+    /// [`Value::parse`](crate::Value::parse) at every boundary (D-80).
+    #[must_use]
+    pub const fn key_value_limits(&self) -> KeyValueLimits {
+        self.key_value_limits
     }
 
     /// The live-key limit (DM-6).
@@ -444,6 +455,23 @@ fn read_values(top: &Table) -> Result<Values, ConfigError> {
         peer_send_queue_bytes: read(ConfigParam::PeerSendQueueBytes)?,
         max_uncommitted_bytes: read(ConfigParam::MaxUncommittedBytes)?,
         max_committed_bytes_per_ready: read(ConfigParam::MaxCommittedBytesPerReady)?,
+    })
+}
+
+/// The key and value limits from `max_key_bytes` and `max_value_bytes`. Their
+/// [`ConfigParam`] ranges are exactly [`KeyValueLimits`]'s, so this refuses nothing that
+/// [`read_values`] admitted; the error names the parameter if they ever drift apart.
+fn key_value_limits(top: &Table, values: &Values) -> Result<KeyValueLimits, ConfigError> {
+    let key = usize::try_from(values.max_key_bytes).unwrap_or(usize::MAX);
+    let value = usize::try_from(values.max_value_bytes).unwrap_or(usize::MAX);
+    KeyValueLimits::new(key, value).ok_or_else(|| {
+        let param = KeyValueLimits::new(key, 0)
+            .map_or(ConfigParam::MaxKeyBytes, |_| ConfigParam::MaxValueBytes);
+        ConfigError::OutOfRange {
+            line: top.get(param.key()).map_or(0, |entry| entry.line),
+            param,
+            value: values.get(param),
+        }
     })
 }
 
