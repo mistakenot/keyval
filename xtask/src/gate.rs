@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::candidate;
 use crate::cargo::{Cargo, Runner};
 use crate::check::StaticCheck;
 use crate::clock::Utc;
@@ -320,8 +321,9 @@ pub struct Context<'a> {
     pub progress: bool,
 }
 
-/// Determines the tree to judge. With `asserted`, the caller vouches for the ID and git
-/// is never consulted; otherwise `root` must be a clean git checkout.
+/// Determines the tree to judge. With `asserted`, the caller vouches for the ID, git is
+/// never asked for it, and `root` must be git-isolated; otherwise `root` must be a clean
+/// git checkout.
 pub fn resolve_tree(
     root: &Path,
     asserted: Option<&str>,
@@ -331,18 +333,33 @@ pub fn resolve_tree(
 }
 
 /// Runs git with `args` in a directory and returns its stdout.
-type GitRunner = dyn Fn(&Path, &[&str]) -> Result<String, String>;
+type GitRunner<'a> = dyn Fn(&Path, &[&str]) -> Result<String, String> + 'a;
 
 fn resolve_tree_with(
     root: &Path,
     asserted: Option<&str>,
     changed: Vec<String>,
-    git: &GitRunner,
+    git: &GitRunner<'_>,
 ) -> Result<Tree, String> {
     if let Some(id) = asserted {
         let valid = matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit());
         if !valid {
             return Err(format!("--tree {id:?} is not a git tree object ID"));
+        }
+        // Candidate mode: the tree ID is the caller's record, and git is never asked for it,
+        // so the build ID derives from the recorded tree (§11.10 step 4). The one git call
+        // is a probe that must fail: if git can see any repository from here, the run is
+        // not isolated, and something in it could judge the shared checkout instead of
+        // this tree (P11).
+        if let Ok(found) = git(root, &["rev-parse", "--absolute-git-dir"]) {
+            return Err(format!(
+                "candidate mode (--tree) needs a git-isolated tree, but git sees the repository \
+                 {} from {}. Run it with GIT_DIR={} and GIT_CEILING_DIRECTORIES covering the \
+                 candidate and its parent, as ./dev commit does (§11.10 step 4)",
+                found.trim(),
+                root.display(),
+                candidate::ISOLATED_GIT_DIR
+            ));
         }
         return Ok(Tree {
             id: id.to_ascii_lowercase(),
@@ -1240,7 +1257,7 @@ mod tests {
         let changed = changed.iter().map(|&path| path.to_owned()).collect();
         let ctx = Context {
             root: &root,
-            tree: resolve_tree(&root, Some(TREE), changed).unwrap(),
+            tree: resolve_tree_with(&root, Some(TREE), changed, &no_repository).unwrap(),
             artifacts: scratch_dir(&format!("gate-{fixture_name}")),
             cargo: nested_cargo("keyval-gate"),
             tool_path,
@@ -1536,17 +1553,91 @@ mod tests {
         }
     }
 
+    /// git as seen from an isolated candidate: there is no repository.
+    fn no_repository(_root: &Path, _args: &[&str]) -> Result<String, String> {
+        Err("fatal: not a git repository (or any of the parent directories): .git".to_owned())
+    }
+
     #[test]
     fn asserted_tree_ids_are_validated() {
         let root = workspace_root();
         for bad in ["", "xyz", "0123", &"g".repeat(40)] {
             assert!(
-                resolve_tree(&root, Some(bad), vec![]).is_err(),
+                resolve_tree_with(&root, Some(bad), vec![], &no_repository).is_err(),
                 "tree={bad:?}"
             );
         }
-        let tree = resolve_tree(&root, Some(&TREE.to_uppercase()), vec![]).unwrap();
+        let tree =
+            resolve_tree_with(&root, Some(&TREE.to_uppercase()), vec![], &no_repository).unwrap();
         assert_eq!(tree.id, TREE, "IDs are normalised to lower case");
+    }
+
+    #[test]
+    fn candidate_mode_takes_the_tree_from_the_caller_never_from_git() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let recording = |root: &Path, args: &[&str]| {
+            calls.borrow_mut().push(args.join(" "));
+            no_repository(root, args)
+        };
+        let changed = vec!["xtask/src/gate.rs".to_owned()];
+        let tree =
+            resolve_tree_with(&workspace_root(), Some(TREE), changed.clone(), &recording).unwrap();
+        assert_eq!(
+            (tree.id.as_str(), tree.source, tree.changed),
+            (TREE, TreeSource::Caller, changed),
+            "rule: the receipt's tree, and so its build ID, is the recorded tree ID"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["rev-parse --absolute-git-dir"],
+            "rule: candidate mode never asks git for the tree; its one git call is the \
+             isolation probe (§11.10 step 4)"
+        );
+    }
+
+    #[test]
+    fn candidate_mode_refuses_a_tree_where_git_sees_a_repository() {
+        let visible = |_root: &Path, _args: &[&str]| Ok("/w/.git\n".to_owned());
+        let refused = resolve_tree_with(&workspace_root(), Some(TREE), vec![], &visible);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.contains("git-isolated") && e.contains("/w/.git")),
+            "rule: a candidate run that can see a repository is refused (P11); \
+             observed={refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_real_candidate_passes_the_probe_only_under_the_isolation_environment() {
+        let repo = scratch_dir("gate-isolation-probe");
+        fixture_git(&repo, &["init", "--quiet"]).unwrap();
+        let candidate = repo.join(".local/candidate");
+        fs::create_dir_all(&candidate).unwrap();
+        let isolated = |root: &Path, args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.args(args)
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1");
+            for (key, value) in candidate::git_isolation(root) {
+                cmd.env(key, value);
+            }
+            let out = cmd.output().map_err(|err| err.to_string())?;
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).into_owned())
+            }
+        };
+        let accepted = resolve_tree_with(&candidate, Some(TREE), vec![], &isolated);
+        assert!(accepted.is_ok(), "observed={accepted:?}");
+        let refused = resolve_tree_with(&candidate, Some(TREE), vec![], &fixture_git);
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains("git-isolated")),
+            "control: without isolation the nested candidate sees the repository; \
+             observed={refused:?}"
+        );
     }
 
     /// git for a fixture repository, immune to the caller's git environment: inside a

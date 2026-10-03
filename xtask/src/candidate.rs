@@ -8,12 +8,39 @@
 //! stray `tests/*.rs`), the same bytes (by git blob ID), and the same modes.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use crate::git::{Git, TreeEntry};
+
+/// `GIT_DIR` inside a candidate run: a path that never exists, so git finds no repository.
+pub const ISOLATED_GIT_DIR: &str = "/nonexistent/keyval-candidate-git";
+
+/// The environment that git-isolates a run in the candidate `dir` (§11.10 step 4).
+/// Nothing that runs there (UBS, cargo's VCS lookups, a stray `git` call) can see the
+/// shared checkout.
+///
+/// - `GIT_DIR` points at [`ISOLATED_GIT_DIR`], which overrides discovery outright.
+/// - `GIT_CEILING_DIRECTORIES` lists `dir` **and its parent**. It is defence in depth for
+///   a child process that drops `GIT_DIR`. git never checks a ceiling directory's own
+///   ancestors from below, but it still looks upward from its starting directory:
+///   measured, a ceiling at `dir` alone leaves a process whose working directory is `dir`
+///   free to find the repository above it. The parent closes that gap; `dir` itself stays
+///   listed, as §11.10 states.
+pub fn git_isolation(dir: &Path) -> [(&'static str, OsString); 2] {
+    let mut ceiling = dir.as_os_str().to_os_string();
+    if let Some(parent) = dir.parent() {
+        ceiling.push(":");
+        ceiling.push(parent);
+    }
+    [
+        ("GIT_DIR", OsString::from(ISOLATED_GIT_DIR)),
+        ("GIT_CEILING_DIRECTORIES", ceiling),
+    ]
+}
 
 /// What [`materialise`] changed.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -325,6 +352,93 @@ mod tests {
             observed, expected,
             "rule: leftover (cargo would run tests/stray.rs), missing and altered files all \
              refuse the run (§11.10 step 3)"
+        );
+    }
+
+    /// Runs git in `dir` with a scrubbed environment plus `extra`, returning whether it
+    /// found a repository and what it printed.
+    fn git_sees_a_repo(dir: &Path, args: &[&str], extra: &[(&str, OsString)]) -> (bool, String) {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(dir);
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_CEILING_DIRECTORIES",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        for (key, value) in extra {
+            cmd.env(key, value);
+        }
+        let out = cmd.output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    }
+
+    #[test]
+    fn a_git_call_inside_an_isolated_candidate_sees_no_repository() {
+        // A candidate nested in a real repository, exactly like .local/candidate/.
+        let git = fixture::repo("cand-isolation", &[("a.rs", "a\n")]);
+        let tree = git.write_tree().unwrap();
+        let candidate = git.root().join(".local/candidate");
+        materialise(&git, &tree, &candidate).unwrap();
+        fs::create_dir_all(candidate.join("sub")).unwrap();
+        let isolation = git_isolation(&candidate);
+        let without_git_dir: Vec<(&str, OsString)> = isolation
+            .iter()
+            .filter(|(key, _)| *key != "GIT_DIR")
+            .cloned()
+            .collect();
+        let probes: [&[&str]; 3] = [
+            &["rev-parse", "--git-dir"],
+            &["status", "--porcelain"],
+            &["log", "-1", "--format=%H"],
+        ];
+        for dir in [candidate.clone(), candidate.join("sub")] {
+            // Control: without isolation, git finds the enclosing repository, so the
+            // fixture would catch a leak.
+            let (found, text) = git_sees_a_repo(&dir, &["rev-parse", "--git-dir"], &[]);
+            assert!(
+                found,
+                "control: git must see the outer repo from {dir:?}: {text}"
+            );
+            for args in probes {
+                for (label, env) in [
+                    ("full isolation", &isolation[..]),
+                    ("GIT_DIR dropped", &without_git_dir[..]),
+                ] {
+                    let (found, text) = git_sees_a_repo(&dir, args, env);
+                    assert!(
+                        !found,
+                        "rule: nothing in the candidate sees a repository (§11.10 step 4); \
+                         {label}; cwd={dir:?} git {args:?} printed: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_isolation_ceiling_lists_the_candidate_and_its_parent() {
+        let [(git_dir_key, git_dir), (ceiling_key, ceiling)] =
+            git_isolation(Path::new("/w/.local/candidate"));
+        assert_eq!(
+            (git_dir_key, git_dir.to_str()),
+            ("GIT_DIR", Some(ISOLATED_GIT_DIR))
+        );
+        assert_eq!(
+            (ceiling_key, ceiling.to_str()),
+            (
+                "GIT_CEILING_DIRECTORIES",
+                Some("/w/.local/candidate:/w/.local")
+            )
         );
     }
 

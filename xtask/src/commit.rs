@@ -605,12 +605,11 @@ fn gate_command(
     for path in changed {
         cmd.args(["--changed", path]);
     }
-    let ceiling = candidate.parent().unwrap_or(candidate);
-    cmd.current_dir(candidate)
-        .env("KEYVAL_ROOT", candidate)
-        // Git isolation (§11.10 step 4): nothing in the candidate can see the checkout.
-        .env("GIT_DIR", "/nonexistent/keyval-candidate-git")
-        .env("GIT_CEILING_DIRECTORIES", ceiling);
+    cmd.current_dir(candidate).env("KEYVAL_ROOT", candidate);
+    // Git isolation (§11.10 step 4): nothing in the candidate can see the checkout.
+    for (key, value) in candidate::git_isolation(candidate) {
+        cmd.env(key, value);
+    }
     // The candidate builds into its own target dir, never the checkout's or a shared one,
     // so the gate's tests are the candidate's own build (br-gate-shared-target-dir-dtqu).
     // Under the shared base, it also stays out of the candidate, whose manifest must stay
@@ -770,11 +769,13 @@ mod tests {
         );
         assert_eq!(env(cargo::TARGET_BASE_ENV), Some(base), "cmd={cmd:?}");
         assert_eq!(env("KEYVAL_ROOT").as_deref(), Some(candidate.as_path()));
-        assert_eq!(
-            env("GIT_DIR"),
-            Some(PathBuf::from("/nonexistent/keyval-candidate-git")),
-            "rule: the candidate is git-isolated (§11.10 step 4)"
-        );
+        for (key, value) in candidate::git_isolation(&candidate) {
+            assert_eq!(
+                env(key),
+                Some(PathBuf::from(value)),
+                "rule: the candidate gate runs git-isolated (§11.10 step 4); cmd={cmd:?}"
+            );
+        }
     }
 
     #[test]
