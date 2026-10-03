@@ -31,7 +31,9 @@ info:
       `minLength`/`maxLength` count characters, not bytes, so each byte limit is
       recorded in an `x-maxUtf8Bytes` extension on the schema it bounds. Where a
       schema also carries `maxLength`, it is only a necessary condition (one character
-      is at least one byte); `x-maxUtf8Bytes` is the limit.
+      is at least one byte); `x-maxUtf8Bytes` is the limit. A SCAN page's cap on the
+      sum of its items' decoded key and value bytes is `x-maxPageUtf8Bytes` on
+      `ScanPage` (F-4, §7.11).
     - **Writes** (PUT, DELETE, compare-and-swap) MUST carry an `Idempotency-Key` header
       of exactly 32 lowercase hexadecimal characters (128 bits) (F-6). Its value is the
       request ID.
@@ -41,6 +43,70 @@ info:
       `400 invalid_request`.
     - **Terminal results are immutable.** `request_id`, `index` and the decision never
       change across retries or status lookups; only `served_by` and `replayed` may.
+    - **Request size.** A request body over 512 KiB (524,288 bytes) is `413 too_large`,
+      recorded as `x-maxBodyBytes` on each request body. That is enough for the
+      worst-case JSON escaping of a valid value (§7.11).
+
+    ## Errors (PLAN.md §8.1, §8.4)
+
+    Every error has the same envelope, `{"error": {"code", "message", "details"}}`.
+    `code` is one of the twelve codes below; `message` is human-readable text with no
+    contract; `details` is always present, possibly empty, and its schema is fixed by
+    the code (and, for `busy`, `unavailable` and `recovering`, by whether the request
+    was a write). Write errors use exactly three `details` shapes:
+
+    1. **Terminal execution results** (`version_mismatch`, `capacity_exceeded`): always
+       `request_id`, `index` (the first execution's log index), `replayed` and the
+       decision, exactly as immutable as a success. Such an error is evidence that
+       the request executed and committed (§8.3).
+    2. **Conflict refusal** (`request_id_conflict`): `request_id` and `original_index`.
+       It is terminal *for this ID*, but it is not an execution of this command.
+    3. **Non-terminal refusals** (`not_leader`, `busy`, `unavailable`, `recovering`,
+       `unknown_outcome`, `history_full`): `request_id` and `attempt_state`
+       (`not_submitted` or `submitted`), plus code-specific fields. `attempt_state`
+       describes **this attempt only** (A-5); terminality is a property of the
+       decision, never of whether this attempt submitted a proposal.
+
+    Validation errors (`400 invalid_request`, `413 too_large`) carry `request_id`
+    only when a well-formed `Idempotency-Key` was present. A missing or malformed ID
+    is the one case where it is omitted.
+
+    | HTTP | `code` | Terminal? | When |
+    |---|---|---|---|
+    | 307 | `not_leader` | no (`not_submitted`) | A write reached a non-leader that believes it knows the leader. `Location` is the leader's URL for the same path and query. |
+    | 400 | `invalid_request` | no | Malformed input, bad key (DM-1), bad request ID, bad range or pagination parameters. |
+    | 404 | `not_found` | — | GET of an absent key. |
+    | 409 | `version_mismatch` | **yes** | The compare-and-swap expectation did not match at application. Consumes the request ID. |
+    | 409 | `request_id_conflict` | **yes**, for this ID | The ID was already used for a different command. Nothing changed. |
+    | 413 | `too_large` | no | Value over 64 KiB (DM-2) or body over 512 KiB. |
+    | 429 | `busy` | no (`not_submitted`) | A local admission bound was hit, or the consensus library synchronously rejected the proposal with nothing appended (§7.11). Reads can be `busy` too (A-2). |
+    | 503 | `unavailable` | no (`not_submitted`) | No leader known, or the node is shutting down. |
+    | 503 | `recovering` | no | The node is not ready (starting, recovering or failed). |
+    | 504 | `unknown_outcome` | **unresolved** | Submitted, but commit was not observed before the deadline, leadership was lost, or the entry was superseded or truncated after submission. |
+    | 507 | `capacity_exceeded` | **yes**, a committed decision | The live-state quota (DM-6) refused the executed write. |
+    | 507 | `history_full` | no (`not_submitted`) | The history capacity (DM-7) refused admission before proposal. |
+
+    `capacity_exceeded` and `history_full` are two distinct codes by design: one is a
+    committed decision, the other a refusal before proposal (D-54).
+
+    Unsupported methods and media types may be answered `405` or `415`, still with
+    the error envelope (code `invalid_request`) where the server controls the response.
+
+    ## Client guidance (PLAN.md §8.4; the CLI implements it)
+
+    - `307`: follow `Location` with the same request ID and body.
+    - `503 unavailable`, `429 busy`, `503 recovering`: back off and retry the same
+      request, possibly at another node.
+    - `504 unknown_outcome`, or a dropped connection after sending: retry with the
+      **same** request ID and command, or query `GET /v1/requests/{id}`. A status of
+      `unknown` is not a failure.
+    - `507 history_full`: the log is at capacity; retrying helps only after the limit
+      is raised (v2 compaction). Reads, status lookups and retries of already-executed
+      requests still work.
+    - `version_mismatch`: to try again against newer state, read the new version and
+      send a **new** request ID.
+    - An error on a later attempt is never evidence that an earlier attempt did not
+      commit.
 
     The peer channel (`POST /raft` on each node's peer address) is internal to the
     cluster and is not part of this contract.
@@ -88,6 +154,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadResult'
+        '400':
+          $ref: '#/components/responses/InvalidReadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/ReadBusy'
+        '503':
+          $ref: '#/components/responses/ReadUnavailable'
     put:
       operationId: putKey
       tags: [kv]
@@ -102,10 +176,16 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
+        x-maxBodyBytes: 524288
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PutRequest'
+            examples:
+              greeting:
+                summary: PLAN.md §8.6
+                value:
+                  value: hello
       responses:
         '200':
           description: The write executed, or this is a replay of its first execution.
@@ -116,6 +196,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VersionedWriteResult'
+              examples:
+                greeting:
+                  summary: >-
+                    PLAN.md §8.6: `PUT /v1/kv?key=greeting` with
+                    `Idempotency-Key: d70ff69df7084a088e4a531837cc4e5a`.
+                  value:
+                    request_id: d70ff69df7084a088e4a531837cc4e5a
+                    index: 42
+                    version: 42
+                    replayed: false
+                    served_by:
+                      node_id: 2
+                      applied_index: 42
+        '307':
+          $ref: '#/components/responses/NotLeader'
+        '400':
+          $ref: '#/components/responses/InvalidWriteRequest'
+        '409':
+          $ref: '#/components/responses/RequestIdConflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/WriteBusy'
+        '503':
+          $ref: '#/components/responses/WriteUnavailable'
+        '504':
+          $ref: '#/components/responses/UnknownOutcome'
+        '507':
+          $ref: '#/components/responses/SetCapacity'
     delete:
       operationId: deleteKey
       tags: [kv]
@@ -138,6 +247,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeleteResult'
+        '307':
+          $ref: '#/components/responses/NotLeader'
+        '400':
+          $ref: '#/components/responses/InvalidWriteRequest'
+        '409':
+          $ref: '#/components/responses/RequestIdConflict'
+        '429':
+          $ref: '#/components/responses/WriteBusy'
+        '503':
+          $ref: '#/components/responses/WriteUnavailable'
+        '504':
+          $ref: '#/components/responses/UnknownOutcome'
+        '507':
+          $ref: '#/components/responses/HistoryFull'
   /v1/cas:
     post:
       operationId: compareAndSwap
@@ -157,10 +280,25 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
+        x-maxBodyBytes: 524288
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CasRequest'
+            examples:
+              counter:
+                summary: PLAN.md §8.6
+                value:
+                  expected:
+                    kind: version
+                    version: 41
+                  value: '12'
+              create-only:
+                summary: Set the key only if it is absent.
+                value:
+                  expected:
+                    kind: absent
+                  value: first
       responses:
         '200':
           description: >-
@@ -173,6 +311,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/VersionedWriteResult'
+        '307':
+          $ref: '#/components/responses/NotLeader'
+        '400':
+          $ref: '#/components/responses/InvalidWriteRequest'
+        '409':
+          description: >-
+            `version_mismatch`: the expectation did not match when the entry was applied
+            (terminal; consumes the request ID). `request_id_conflict`: the ID was
+            already used for a different command (nothing changed).
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/VersionMismatchError'
+                  - $ref: '#/components/schemas/RequestIdConflictError'
+              examples:
+                version-mismatch:
+                  summary: >-
+                    PLAN.md §8.6: `POST /v1/cas?key=counter` with
+                    `Idempotency-Key: 7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5`.
+                  value:
+                    error:
+                      code: version_mismatch
+                      message: expected 41, current 57
+                      details:
+                        current_version: 57
+                        request_id: 7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5
+                        index: 58
+                        replayed: false
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/WriteBusy'
+        '503':
+          $ref: '#/components/responses/WriteUnavailable'
+        '504':
+          $ref: '#/components/responses/UnknownOutcome'
+        '507':
+          $ref: '#/components/responses/SetCapacity'
   /v1/scan:
     get:
       operationId: scanKeys
@@ -216,6 +396,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScanPage'
+        '400':
+          $ref: '#/components/responses/InvalidReadRequest'
+        '429':
+          $ref: '#/components/responses/ReadBusy'
+        '503':
+          $ref: '#/components/responses/ReadUnavailable'
   /v1/requests/{request_id}:
     get:
       operationId: getRequestStatus
@@ -240,6 +426,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestStatus'
+        '400':
+          $ref: '#/components/responses/InvalidReadRequest'
+        '429':
+          $ref: '#/components/responses/ReadBusy'
+        '503':
+          $ref: '#/components/responses/ReadUnavailable'
   /v1/health/live:
     get:
       operationId: getLiveness
@@ -278,6 +470,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadyHealth'
+        '503':
+          description: The node is not ready (`recovering`).
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveringReadError'
   /v1/cluster:
     get:
       operationId: getClusterStatus
@@ -363,7 +564,187 @@ components:
         minimum: 1
         maximum: 128
         default: 32
+  responses:
+    NotLeader:
+      description: >-
+        `not_leader`: this node is not the leader but believes it knows one. Follow
+        `Location` with the same request ID and body. Nothing was submitted by this
+        attempt.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+        Location:
+          $ref: '#/components/headers/LeaderLocation'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NotLeaderError'
+    InvalidWriteRequest:
+      description: >-
+        `invalid_request`: malformed input, a bad key or a bad request ID. Rejected
+        before proposal, with no side effect (F-8).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InvalidWriteRequestError'
+    InvalidReadRequest:
+      description: >-
+        `invalid_request`: malformed input, a bad key or request ID, or bad range or
+        pagination parameters.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InvalidReadRequestError'
+    NotFound:
+      description: '`not_found`: the key is absent in the applied prefix in `served_by`.'
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NotFoundError'
+    RequestIdConflict:
+      description: >-
+        `request_id_conflict`: the ID was already used for a different command.
+        Nothing changed.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RequestIdConflictError'
+    TooLarge:
+      description: >-
+        `too_large`: the value is over 64 KiB (DM-2) or the body is over 512 KiB.
+        Rejected before proposal, with no side effect (F-8).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TooLargeError'
+    WriteBusy:
+      description: >-
+        `busy`: a local admission bound was hit, or the consensus library
+        synchronously rejected the proposal with nothing appended. Not submitted;
+        back off and retry the same request.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BusyWriteError'
+    ReadBusy:
+      description: '`busy`: a local admission bound was hit (A-2). Back off and retry.'
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BusyReadError'
+    WriteUnavailable:
+      description: >-
+        `unavailable`: no leader is known, or the node is shutting down.
+        `recovering`: the node is not ready. Neither submitted anything; back off and
+        retry the same request, possibly at another node.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/UnavailableWriteError'
+              - $ref: '#/components/schemas/RecoveringWriteError'
+    ReadUnavailable:
+      description: >-
+        `unavailable`: the node is shutting down. `recovering`: the node is not ready,
+        so it serves no reads (A-2). Back off and retry, possibly at another node.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/UnavailableReadError'
+              - $ref: '#/components/schemas/RecoveringReadError'
+    UnknownOutcome:
+      description: >-
+        `unknown_outcome`: this attempt was submitted, but its commit was not observed
+        before the deadline, leadership was lost, or the entry was superseded or
+        truncated after submission. Retry with the same request ID and command, or
+        query `GET /v1/requests/{id}`.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UnknownOutcomeError'
+          examples:
+            deadline:
+              summary: PLAN.md §8.6, for the PUT of `greeting`.
+              value:
+                error:
+                  code: unknown_outcome
+                  message: A committed result is not known locally.
+                  details:
+                    request_id: d70ff69df7084a088e4a531837cc4e5a
+                    attempt_state: submitted
+                    guidance: retry_same_request_or_query_status
+                    nodes:
+                      - http://127.0.0.1:7001
+                      - http://127.0.0.1:7002
+                      - http://127.0.0.1:7003
+                      - http://127.0.0.1:7004
+                      - http://127.0.0.1:7005
+    SetCapacity:
+      description: >-
+        `capacity_exceeded`: the live-state quota (DM-6) refused the executed write, a
+        committed terminal decision. `history_full`: the history capacity (DM-7)
+        refused admission before proposal, which is not terminal.
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/CapacityExceededError'
+              - $ref: '#/components/schemas/HistoryFullError'
+    HistoryFull:
+      description: >-
+        `history_full`: the history capacity (DM-7) refused admission before proposal.
+        A DELETE is never refused by the live-state quota (DM-6).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/CacheControl'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HistoryFullError'
   headers:
+    LeaderLocation:
+      description: >-
+        The believed leader's client URL for the same path and query, re-encoding
+        exactly the same decoded query bytes (§8.1).
+      required: true
+      schema:
+        type: string
+        format: uri
+        pattern: '^http://[^/?#]+/v1/'
     CacheControl:
       description: >-
         Present on every response, with exactly this value, so that no intermediary
@@ -572,6 +953,7 @@ components:
         Items are unique and in ascending key order. When `has_more` is true,
         `next_after` is exactly the last returned key; otherwise it is null.
       type: object
+      x-maxPageUtf8Bytes: 1048576
       additionalProperties: false
       required: [items, has_more, next_after, served_by]
       properties:
@@ -606,12 +988,17 @@ components:
     TerminalResult:
       description: |
         A write's stored terminal result, exactly as the body a retry of the same
-        request (same ID, same command) would receive from this node now: its
-        `request_id`, `index` and decision are the original's, `replayed` is `true`,
-        and its `served_by` equals the lookup's.
+        request (same ID, same command) would receive from this node now: a success
+        body, or the `version_mismatch` or `capacity_exceeded` error envelope (whose
+        `code` implies the HTTP status of the original, 409 or 507). Its `request_id`,
+        `index` and decision are the original's, `replayed` is `true`, and a success
+        body's `served_by` equals the lookup's. `request_id_conflict` is never a stored
+        result: it is not an execution of any command (§8.1).
       oneOf:
         - $ref: '#/components/schemas/VersionedWriteResult'
         - $ref: '#/components/schemas/DeleteResult'
+        - $ref: '#/components/schemas/VersionMismatchError'
+        - $ref: '#/components/schemas/CapacityExceededError'
     RequestStatus:
       description: The state of a request ID as known to the serving node (F-9).
       oneOf:
@@ -745,3 +1132,463 @@ components:
           $ref: '#/components/schemas/NodeUrl'
         match_index:
           $ref: '#/components/schemas/ProgressIndex'
+    ErrorCode:
+      description: >-
+        Every error code (§8.4). The domain error type's variants match this list
+        exactly (§10.13 condition 5).
+      type: string
+      enum:
+        - not_leader
+        - invalid_request
+        - not_found
+        - version_mismatch
+        - request_id_conflict
+        - too_large
+        - busy
+        - unavailable
+        - recovering
+        - unknown_outcome
+        - capacity_exceeded
+        - history_full
+    ErrorMessage:
+      description: Human-readable text. Clients must not parse it; `code` and `details` carry the contract.
+      type: string
+    AttemptState:
+      description: >-
+        Whether **this attempt** submitted a proposal (A-5). `not_submitted` says
+        nothing about earlier attempts with the same ID.
+      type: string
+      enum: [not_submitted, submitted]
+    NotReadyLifecycle:
+      description: A lifecycle state in which the node serves no reads and admits no writes.
+      type: string
+      enum: [starting, recovering, failed]
+    NodeList:
+      description: >-
+        Every configured voter's client address, in ascending node-ID order (§8.4:
+        "all configured client addresses").
+      type: array
+      minItems: 1
+      maxItems: 5
+      items:
+        $ref: '#/components/schemas/NodeUrl'
+    LiveStateLimit:
+      description: >-
+        Which live-state quota (DM-6) the executed write would have exceeded, named
+        by its configuration parameter (§7.10).
+      type: string
+      enum: [max_live_keys, max_live_bytes]
+    HistoryLimit:
+      description: >-
+        Which history capacity (DM-7) refused admission, named by its configuration
+        parameter (§7.10).
+      type: string
+      enum: [max_log_entries, max_history_bytes]
+    NotLeaderError:
+      description: '`307 not_leader`: a non-terminal refusal; this attempt was not submitted.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: not_leader
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [leader_hint, request_id, attempt_state]
+              properties:
+                leader_hint:
+                  description: The node ID of the leader this node believes in.
+                  $ref: '#/components/schemas/NodeId'
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                attempt_state:
+                  const: not_submitted
+    InvalidWriteRequestError:
+      description: >-
+        `400 invalid_request` on a write. `request_id` is present exactly when a
+        well-formed `Idempotency-Key` was sent.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: invalid_request
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+    InvalidReadRequestError:
+      description: '`400 invalid_request` on a read or status lookup; it carries no write fields.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: invalid_request
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+    NotFoundError:
+      description: '`404 not_found`: GET of a key absent in the applied prefix in `served_by`.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: not_found
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [served_by]
+              properties:
+                served_by:
+                  $ref: '#/components/schemas/ServedBy'
+    VersionMismatchError:
+      description: >-
+        `409 version_mismatch`: a terminal execution result. The compare-and-swap
+        executed at `index` and its expectation did not match; it changed nothing and
+        consumed the request ID (F-5). `current_version` is the key's version when the
+        entry was applied, or null if the key was absent.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: version_mismatch
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [current_version, request_id, index, replayed]
+              properties:
+                current_version:
+                  oneOf:
+                    - $ref: '#/components/schemas/Version'
+                    - type: 'null'
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                index:
+                  $ref: '#/components/schemas/EntryIndex'
+                replayed:
+                  type: boolean
+    RequestIdConflictError:
+      description: >-
+        `409 request_id_conflict`: a conflict refusal, terminal for this ID. The ID
+        was first executed, with a different command, at `original_index`; nothing
+        changed.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: request_id_conflict
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, original_index]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                original_index:
+                  $ref: '#/components/schemas/EntryIndex'
+    TooLargeError:
+      description: >-
+        `413 too_large`. `request_id` is present exactly when a well-formed
+        `Idempotency-Key` was sent.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: too_large
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+    BusyWriteError:
+      description: '`429 busy` on a write: a non-terminal refusal; this attempt was not submitted.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: busy
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, attempt_state]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                attempt_state:
+                  const: not_submitted
+    BusyReadError:
+      description: '`429 busy` on a read or status lookup; it carries no write fields.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: busy
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+    UnavailableWriteError:
+      description: >-
+        `503 unavailable` on a write: no leader is known, or the node is shutting
+        down. A non-terminal refusal; this attempt was not submitted.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: unavailable
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, attempt_state, nodes]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                attempt_state:
+                  const: not_submitted
+                nodes:
+                  $ref: '#/components/schemas/NodeList'
+    UnavailableReadError:
+      description: '`503 unavailable` on a read or status lookup: the node is shutting down.'
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: unavailable
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [nodes]
+              properties:
+                nodes:
+                  $ref: '#/components/schemas/NodeList'
+    RecoveringWriteError:
+      description: >-
+        `503 recovering` on a write: the node is not ready. A non-terminal refusal;
+        this attempt was not submitted.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: recovering
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [lifecycle, request_id, attempt_state]
+              properties:
+                lifecycle:
+                  $ref: '#/components/schemas/NotReadyLifecycle'
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                attempt_state:
+                  const: not_submitted
+    RecoveringReadError:
+      description: >-
+        `503 recovering` on a read, status lookup or readiness probe: the node is not
+        ready, so it serves no state at all, never an empty or partial one (A-2, §7.9).
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: recovering
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [lifecycle]
+              properties:
+                lifecycle:
+                  $ref: '#/components/schemas/NotReadyLifecycle'
+    UnknownOutcomeError:
+      description: >-
+        `504 unknown_outcome`: unresolved. This attempt was submitted, so the write may
+        or may not commit; it is never reported as failed (A-5).
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: unknown_outcome
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, attempt_state, guidance, nodes]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                attempt_state:
+                  const: submitted
+                guidance:
+                  const: retry_same_request_or_query_status
+                nodes:
+                  $ref: '#/components/schemas/NodeList'
+    CapacityExceededError:
+      description: >-
+        `507 capacity_exceeded`: a terminal execution result. The write executed at
+        `index` and the live-state quota (DM-6) refused it; it changed nothing and
+        consumed the request ID. PUT and a matching compare-and-swap are checked
+        identically; a mismatching compare-and-swap is `version_mismatch` instead.
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: capacity_exceeded
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, limit, index, replayed]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                limit:
+                  $ref: '#/components/schemas/LiveStateLimit'
+                index:
+                  $ref: '#/components/schemas/EntryIndex'
+                replayed:
+                  type: boolean
+    HistoryFullError:
+      description: >-
+        `507 history_full`: a non-terminal refusal before proposal; this attempt was
+        not submitted. Retrying helps only after the limit is raised (v2 compaction).
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              const: history_full
+            message:
+              $ref: '#/components/schemas/ErrorMessage'
+            details:
+              type: object
+              additionalProperties: false
+              required: [request_id, limit, attempt_state]
+              properties:
+                request_id:
+                  $ref: '#/components/schemas/RequestId'
+                limit:
+                  $ref: '#/components/schemas/HistoryLimit'
+                attempt_state:
+                  const: not_submitted
