@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn the_real_workspace_lists_its_members() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = crate::test_support::workspace_root();
         let metadata = load(&root).unwrap();
         let names: Vec<&str> = metadata.members().iter().map(|p| p.name.as_str()).collect();
         for expected in ["xtask", "types"] {

@@ -197,6 +197,7 @@ fn run_gate(
         tree,
         artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
         cargo: cargo::Cargo::detect(),
+        tool_path: None,
         progress: true,
     };
     match gate::run(&ctx, tier, gate::BOOTSTRAP_SET) {

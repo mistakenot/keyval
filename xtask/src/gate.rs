@@ -6,7 +6,8 @@
 //! format check, lints with denied warnings (clippy plus the LINT-ALLOWS and LINT-TIERS
 //! policy checks), the dependency rule (DEP-RULE, CD-1), the dependency ledger
 //! (DEP-LEDGER, CD-12), the workspace tests (xtask's included), and UBS on the exact
-//! changed files.
+//! changed files. UBS's `panic!` rule is applied to production code only, because CD-8
+//! lets tests panic ([`UBS_PRODUCTION_ONLY`]).
 //!
 //! **Exact trees only (P11).** In a git checkout the gate refuses to run unless the
 //! working tree is clean, and tests `HEAD^{tree}`. A commit wrapper that has
@@ -18,6 +19,7 @@
 //! scannable source file changed, UBS scans every first-party source instead of none.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,10 +40,10 @@ use crate::process::{self, Captured};
 use crate::steplog::{self, StepLog};
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.gate/v1";
+pub const SCHEMA: &str = "keyval.dev.gate/v2";
 
 /// Schema identifier of a receipt file.
-pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v1";
+pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v2";
 
 /// T0 time budget: target and alert threshold (§10.10). A run is never cut off.
 const TARGET: Duration = Duration::from_mins(2);
@@ -193,8 +195,35 @@ pub struct BuildInputs {
 pub struct Tools {
     /// How cargo builds were launched.
     pub cargo_runner: Runner,
+    /// The target directory the builds and tests used: this checkout's own
+    /// (`cargo::checkout_target_dir`), so the tests that ran are this tree's build.
+    /// `None` means cargo's default, `<root>/target`.
+    pub cargo_target_dir: Option<String>,
     /// `ubs --version`, if UBS ran.
     pub ubs: Option<String>,
+    /// The ast-grep UBS's rule packs ran on, if UBS ran.
+    pub ast_grep: Option<AstGrep>,
+}
+
+/// The ast-grep that UBS used, and whether its rules provably ran
+/// (br-gate-ubs-partial-scan-o59g).
+#[derive(Clone, Debug, Serialize)]
+pub struct AstGrep {
+    /// Where `ast-grep` resolves on UBS's `PATH`; `None` when it is not there.
+    pub path: Option<String>,
+    /// First line of `ast-grep --version`, or why it could not be read.
+    pub version: String,
+    /// Whether UBS reported the canary's finding, which only its ast-grep rules detect.
+    pub rules_ran: bool,
+}
+
+/// What the UBS step learnt about the scanner, for the receipt.
+#[derive(Debug, Default)]
+struct Scanner {
+    /// `ubs --version`.
+    ubs: Option<String>,
+    /// The ast-grep it used.
+    ast_grep: Option<AstGrep>,
 }
 
 /// The T0 budget and whether this run exceeded its alert threshold.
@@ -208,7 +237,10 @@ pub struct Budget {
     pub over_alert: bool,
 }
 
-/// A gate receipt (`keyval.dev.receipt/v1`): exactly what ran, on exactly which tree.
+/// A gate receipt (`keyval.dev.receipt/v2`): exactly what ran, on exactly which tree.
+///
+/// v2 adds `tools.cargo_target_dir` (br-gate-shared-target-dir-dtqu) and
+/// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g).
 #[derive(Debug, Serialize)]
 pub struct Receipt {
     /// Schema identifier.
@@ -258,7 +290,7 @@ pub struct StepLogSummary {
     pub dropped: usize,
 }
 
-/// The `./dev gate` report (`keyval.dev.gate/v1`).
+/// The `./dev gate` report (`keyval.dev.gate/v2`, which embeds a v2 receipt).
 #[derive(Debug, Serialize)]
 pub struct GateReport {
     /// Schema identifier.
@@ -281,6 +313,9 @@ pub struct Context<'a> {
     pub artifacts: PathBuf,
     /// How cargo builds run.
     pub cargo: Cargo,
+    /// The `PATH` that UBS, and the ast-grep it runs, see. `None` inherits this
+    /// process's. Tests put stand-in tools first.
+    pub tool_path: Option<OsString>,
     /// Whether to echo each step's record to stderr as it finishes.
     pub progress: bool,
 }
@@ -383,7 +418,7 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
 
     let build_inputs = build_inputs(ctx.root)?;
     let build_id = build_id(&ctx.tree.id, &build_inputs);
-    let mut ubs_version = None;
+    let mut scanner = Scanner::default();
     // Step records (W01.6 standard) go to stderr as progress and to steps.jsonl next to
     // the step logs. A gate runs every step, so one run reports every failure.
     let mut steplog = StepLog::new(
@@ -395,7 +430,7 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
     let results: Vec<StepResult> = steps
         .iter()
         .map(|&step| {
-            let result = run_step(ctx, step, &log_dir, &mut ubs_version);
+            let result = run_step(ctx, step, &log_dir, &mut scanner);
             log_step(&mut steplog, step, &result);
             result
         })
@@ -419,7 +454,12 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
         policy_hashes: policy_hashes(ctx.root),
         tools: Tools {
             cargo_runner: ctx.cargo.runner(),
-            ubs: ubs_version,
+            cargo_target_dir: ctx
+                .cargo
+                .target_dir()
+                .map(|dir| PathBuf::from(dir).display().to_string()),
+            ubs: scanner.ubs,
+            ast_grep: scanner.ast_grep,
         },
         started_at: started_at.rfc3339(),
         finished_at: Utc::now().rfc3339(),
@@ -496,12 +536,7 @@ pub const fn tier_name(tier: GateTier) -> &'static str {
     }
 }
 
-fn run_step(
-    ctx: &Context<'_>,
-    step: Step,
-    log_dir: &Path,
-    ubs_version: &mut Option<String>,
-) -> StepResult {
+fn run_step(ctx: &Context<'_>, step: Step, log_dir: &Path, scanner: &mut Scanner) -> StepResult {
     let started = Instant::now();
     let mut result = StepResult {
         id: step.id(),
@@ -519,7 +554,7 @@ fn run_step(
         Step::Clippy => clippy_step(ctx, &mut result),
         Step::Static(check) => static_step(ctx, check, &mut result),
         Step::Tests => tests_step(ctx, &mut result),
-        Step::Ubs => ubs_step(ctx, &mut result, ubs_version),
+        Step::Ubs => ubs_step(ctx, log_dir, &mut result, scanner),
     };
     let (verdict, log_text) = match outcome {
         Ok(text) => (Verdict::Passed, text),
@@ -645,63 +680,270 @@ fn tests_step(ctx: &Context<'_>, result: &mut StepResult) -> StepOutcome {
     Ok(log)
 }
 
+/// The UBS category that holds `rust.ownership.panic-macro`, the rule that rejects
+/// `panic!`. CD-8 lets tests panic (owner decision on br-gate-ubs-test-panics-brzy), so
+/// the gate judges this category on production code only: UBS 5.4's only critical rule
+/// in it is that one, and its other rules (unwrap/expect, todo!, dbg! and the like) are
+/// warnings or infos, which never fail the gate.
+const UBS_PRODUCTION_ONLY: &str = "rust.ownership";
+
+/// The UBS canary (br-gate-ubs-partial-scan-o59g): one production `panic!`, which only
+/// UBS's ast-grep rule pack detects. UBS reports a scan whose ast-grep rules never ran
+/// (ast-grep missing, failing, or exiting 0 without output) as complete and clean, so
+/// every UBS step first scans this file and requires exactly this one critical finding.
+const UBS_CANARY: &str = "\
+//! UBS canary (br-gate-ubs-partial-scan-o59g): one production `panic!`, which only
+//! UBS's ast-grep rule pack detects. A scan that does not report it ran no ast-grep rules.
+
+/// Returns `value`, which must not be zero.
+pub fn canary(value: u32) -> u32 {
+    if value == 0 {
+        panic!(\"canary\");
+    }
+    value
+}
+";
+
+/// Wall-clock limit for `ast-grep --version`.
+const AST_GREP_PROBE_LIMIT: Duration = Duration::from_secs(30);
+
+/// Runs UBS three times, every run uncached. First the canary ([`UBS_CANARY`]) proves
+/// that UBS's ast-grep rules run; if it fails, so does the step. Pass 1 then scans the exact changed files with every
+/// rule except the [`UBS_PRODUCTION_ONLY`] category. Pass 2 runs every rule on a
+/// production view of the Rust files, with their test code blanked (see
+/// `lint::test_code_ranges`). The canary and the views are kept under the step's log
+/// directory. Each run is judged by its JSON report; its text report goes to the log,
+/// so the log shows every rule that ran and where any finding is.
 fn ubs_step(
     ctx: &Context<'_>,
+    log_dir: &Path,
     result: &mut StepResult,
-    ubs_version: &mut Option<String>,
+    scanner: &mut Scanner,
 ) -> StepOutcome {
     result.unit = "file(s)";
+    let tool_path = ctx
+        .tool_path
+        .clone()
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
     let mut version = Command::new("ubs");
-    version.arg("--version").current_dir(ctx.root);
+    version
+        .arg("--version")
+        .env("PATH", &tool_path)
+        .current_dir(ctx.root);
     let version = run_captured(&mut version)?;
-    *ubs_version = version.stdout.lines().next().map(str::to_owned);
-
+    scanner.ubs = version.stdout.lines().next().map(str::to_owned);
     let files = ubs_scope(ctx).map_err(|why| StepFailure::new(why, ""))?;
     if files.is_empty() {
         return Err(StepFailure::new("no first-party source files to scan", ""));
     }
-    let list = files.join(",");
-    let mut cmd = Command::new("ubs");
-    cmd.args([
-        "--no-auto-update",
-        "--no-color",
-        "--format=json",
-        &format!("--files={list}"),
-        ".",
-    ])
-    .current_dir(ctx.root);
-    result.command = Some(format!(
-        "ubs --no-auto-update --format=json --files={list} ."
-    ));
-    let captured = run_captured(&mut cmd)?;
-    let mut log = combined(&captured);
-    result.cases = serde_json::from_str::<serde_json::Value>(&captured.stdout)
-        .ok()
-        .and_then(|report| report["totals"]["files"].as_u64())
-        .unwrap_or(0);
-    match ubs_verdict(&captured.stdout, captured.status.code()) {
-        Ok(_) => Ok(log),
-        Err(why) => {
-            // UBS's Rust module emits no per-finding records in its machine formats, so
-            // re-run once in text mode to put the exact locations in the log.
-            let mut text = Command::new("ubs");
-            text.args([
-                "--no-auto-update",
-                "--no-color",
-                &format!("--files={list}"),
-                ".",
-            ])
-            .current_dir(ctx.root);
-            if let Ok(report) = process::run(&mut text, STEP_LIMIT) {
-                log.push_str("\n--- ubs text report (for finding locations) ---\n");
-                log.push_str(&report.stdout);
-            }
-            Err(StepFailure::new(
-                format!("{why}; locations in the log"),
-                log,
-            ))
+    let canary = ubs_canary(log_dir, &tool_path)?;
+    let mut log = canary.log;
+    let mut commands = vec![canary.command];
+    let rules_ran = canary.verdict.is_ok();
+    let ast_grep = scanner.ast_grep.insert(AstGrep {
+        rules_ran,
+        ..probe_ast_grep(&tool_path)
+    });
+    let shown = format!(
+        "ast-grep on UBS's PATH: {} ({})",
+        ast_grep.path.as_deref().unwrap_or("not found"),
+        ast_grep.version
+    );
+    log.insert_str(0, &format!("{shown}\n"));
+    if let Err(why) = canary.verdict {
+        // Without its ast-grep rules UBS cannot judge the real files either, so the
+        // step fails here rather than spend two more scans on untrustworthy results.
+        log.push_str("\n=== passes 1 and 2: not run, the canary failed ===\n");
+        result.command = Some(commands.join("; "));
+        return Err(StepFailure::new(format!("canary: {why}; {shown}"), log));
+    }
+
+    let mut failures = Vec::new();
+    let skip = format!("--skip={UBS_PRODUCTION_ONLY}");
+    let exact = ubs_pass(
+        "pass 1: the exact files, all rules except the production-only category",
+        ctx.root,
+        &files,
+        &[&skip],
+        &tool_path,
+        (&log_dir.join("ubs-exact.json"), ubs_verdict),
+    )?;
+    result.cases = exact.files;
+    log.push_str(&exact.log);
+    commands.push(exact.command);
+    if let Err(why) = exact.verdict {
+        failures.push(format!("pass 1 (exact files): {why}"));
+    }
+    let view_dir = log_dir.join("ubs-production");
+    let production = production_views(ctx.root, &files, &view_dir)
+        .map_err(|why| StepFailure::new(why, log.clone()))?;
+    if production.is_empty() {
+        log.push_str("\n=== pass 2: not run, no scanned Rust file holds production code ===\n");
+    } else {
+        let pass = ubs_pass(
+            "pass 2: the production view (test code blanked), all rules",
+            &view_dir,
+            &production,
+            &[],
+            &tool_path,
+            (&log_dir.join("ubs-production.json"), ubs_verdict),
+        )?;
+        log.push_str(&pass.log);
+        commands.push(format!("(cd {} && {})", view_dir.display(), pass.command));
+        if let Err(why) = pass.verdict {
+            failures.push(format!(
+                "pass 2 (production code): {why}; test code counts only inside \
+                 #[test]/#[cfg(test)] items and #![cfg(test)] files (CD-8)"
+            ));
         }
     }
+    result.command = Some(commands.join("; "));
+    if failures.is_empty() {
+        Ok(log)
+    } else {
+        Err(StepFailure::new(
+            format!("{}; locations in the log", failures.join("; ")),
+            log,
+        ))
+    }
+}
+
+/// Scans the canary ([`UBS_CANARY`]), written under `log_dir`, with every rule.
+fn ubs_canary(log_dir: &Path, tool_path: &OsStr) -> Result<UbsPass, StepFailure> {
+    let dir = log_dir.join("ubs-canary");
+    let file = "src/canary.rs";
+    fs::create_dir_all(dir.join("src"))
+        .and_then(|()| fs::write(dir.join(file), UBS_CANARY))
+        .map_err(|err| StepFailure::new(format!("cannot write the UBS canary: {err}"), ""))?;
+    let mut pass = ubs_pass(
+        "canary: one production panic! that only UBS's ast-grep rules detect",
+        &dir,
+        &[file.to_owned()],
+        &[],
+        tool_path,
+        (&log_dir.join("ubs-canary.json"), canary_verdict),
+    )?;
+    pass.command = format!("(cd {} && {})", dir.display(), pass.command);
+    Ok(pass)
+}
+
+/// The ast-grep that UBS will find on `tool_path` (UBS looks it up on `PATH`), and its
+/// version. Whether its rules ran is for the canary to show.
+fn probe_ast_grep(tool_path: &OsStr) -> AstGrep {
+    let Some(path) = process::find_in(tool_path, "ast-grep") else {
+        return AstGrep {
+            path: None,
+            version: "not found".to_owned(),
+            rules_ran: false,
+        };
+    };
+    // A fixed program name, looked up on the child's `PATH`: the one UBS will see.
+    let mut cmd = Command::new("ast-grep");
+    cmd.arg("--version").env("PATH", tool_path);
+    let version = match process::run(&mut cmd, AST_GREP_PROBE_LIMIT) {
+        Ok(out) if out.status.success() => out
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map_or_else(|| "printed no version".to_owned(), str::to_owned),
+        Ok(out) => format!("`ast-grep --version` exited with {}", out.status),
+        Err(err) => format!("`ast-grep --version`: {err}"),
+    };
+    AstGrep {
+        path: Some(path.display().to_string()),
+        version,
+        rules_ran: false,
+    }
+}
+
+/// One UBS run and how it was judged.
+struct UbsPass {
+    /// The command line, relative to the directory it ran in.
+    command: String,
+    /// Files UBS reports it scanned.
+    files: u64,
+    /// The judge's verdict on its JSON report.
+    verdict: Result<u64, String>,
+    /// Its text report and stderr, for the step log.
+    log: String,
+}
+
+/// Judges a UBS JSON report, its exit code and the number of files it was given.
+type UbsJudge = fn(&str, Option<i32>, u64) -> Result<u64, String>;
+
+/// Runs UBS in text mode on `files` (relative to `dir`) with `tool_path` as its `PATH`,
+/// writing its JSON report to `report.0`, which `report.1` judges (§11.5 rule 14: the
+/// text is only logged).
+fn ubs_pass(
+    title: &str,
+    dir: &Path,
+    files: &[String],
+    extra: &[&str],
+    tool_path: &OsStr,
+    (report, judge): (&Path, UbsJudge),
+) -> Result<UbsPass, StepFailure> {
+    let files_arg = format!("--files={}", files.join(","));
+    let report_arg = format!("--report-json={}", report.display());
+    // `--no-cache`: UBS's scan cache is keyed by file content, not by the ast-grep that
+    // produced an entry, so a hit can replay a scan whose rules never ran
+    // (br-gate-ubs-partial-scan-o59g). It costs nothing measurable here.
+    let mut args = vec!["--no-auto-update", "--no-color", "--no-cache"];
+    args.extend_from_slice(extra);
+    args.extend([report_arg.as_str(), files_arg.as_str(), "."]);
+    let command = format!("ubs {}", args.join(" "));
+    // A stale report from an earlier run must never judge this one.
+    let _ = fs::remove_file(report);
+    let mut cmd = Command::new("ubs");
+    cmd.args(&args)
+        .env("PATH", tool_path)
+        .env("NO_COLOR", "1")
+        .current_dir(dir);
+    let captured = run_captured(&mut cmd)?;
+    let json = fs::read_to_string(report).unwrap_or_default();
+    let scanned = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .and_then(|value| value["totals"]["files"].as_u64())
+        .unwrap_or(0);
+    let given = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    let verdict = judge(&json, captured.status.code(), given);
+    let log = format!(
+        "\n=== {title} ===\n$ {command}\n(exit {:?}; JSON report {})\n{}",
+        captured.status.code(),
+        report.display(),
+        combined(&captured)
+    );
+    Ok(UbsPass {
+        command,
+        files: scanned,
+        verdict,
+        log,
+    })
+}
+
+/// Writes the production view of each scanned Rust file that has production code to
+/// the same relative path under `dir`, and returns those paths.
+fn production_views(root: &Path, files: &[String], dir: &Path) -> Result<Vec<String>, String> {
+    let mut written = Vec::new();
+    let rust = |file: &&String| Path::new(file).extension().is_some_and(|e| e == "rs");
+    for file in files.iter().filter(rust) {
+        let text = fs::read_to_string(root.join(file))
+            .map_err(|err| format!("cannot read {file}: {err}"))?;
+        let view = lint::production_view(&text);
+        if view.trim().is_empty() {
+            continue;
+        }
+        let target = dir.join(file);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
+        }
+        fs::write(&target, view)
+            .map_err(|err| format!("cannot write {}: {err}", target.display()))?;
+        written.push(file.clone());
+    }
+    Ok(written)
 }
 
 /// The files UBS scans: the changed first-party sources, or, when none changed, every
@@ -738,11 +980,13 @@ fn ubs_scope(ctx: &Context<'_>) -> Result<Vec<String>, String> {
     Ok(all)
 }
 
-/// Judges UBS's JSON report: a complete scan (exit 0, status `ok`, no failed modules)
-/// with zero critical findings. Returns the number of files scanned.
-pub fn ubs_verdict(stdout: &str, exit_code: Option<i32>) -> Result<u64, String> {
-    let report: serde_json::Value = serde_json::from_str(stdout)
-        .map_err(|err| format!("UBS output is not JSON (exit {exit_code:?}): {err}"))?;
+/// Judges UBS's JSON report: a complete scan (exit 0, status `ok`, no failed modules,
+/// every one of the `given` files scanned) with zero critical findings. Returns the
+/// number of files scanned.
+pub fn ubs_verdict(stdout: &str, exit_code: Option<i32>, given: u64) -> Result<u64, String> {
+    let report: serde_json::Value = serde_json::from_str(stdout).map_err(|err| {
+        format!("UBS's report is missing or not JSON (exit {exit_code:?}): {err}")
+    })?;
     let critical = report["totals"]["critical"].as_u64();
     let files = report["totals"]["files"].as_u64().unwrap_or(0);
     let failed_modules = report["failed_modules"].as_array().map_or(0, Vec::len);
@@ -753,11 +997,48 @@ pub fn ubs_verdict(stdout: &str, exit_code: Option<i32>) -> Result<u64, String> 
             report["status"]
         ));
     }
+    if files != given {
+        return Err(format!(
+            "UBS scanned {files} of the {given} file(s) it was given; a partial scan is a \
+             failure (§11.1)"
+        ));
+    }
     match (exit_code, critical) {
         (Some(0), Some(0)) => Ok(files),
         (_, Some(n)) if n > 0 => Err(format!("UBS found {n} critical issue(s)")),
         (code, _) => Err(format!(
             "UBS exited with {code:?} (2 = partial/refused scan, 3 = nothing scanned)"
+        )),
+    }
+}
+
+/// Judges the canary scan ([`UBS_CANARY`]): a complete scan of the one given file that
+/// reports exactly the canary's critical finding, and exits 1 for it. A clean canary
+/// means UBS's ast-grep rules did not run. Returns the number of files scanned.
+pub fn canary_verdict(stdout: &str, exit_code: Option<i32>, given: u64) -> Result<u64, String> {
+    let report: serde_json::Value = serde_json::from_str(stdout).map_err(|err| {
+        format!("UBS's canary report is missing or not JSON (exit {exit_code:?}): {err}")
+    })?;
+    let critical = report["totals"]["critical"].as_u64();
+    let files = report["totals"]["files"].as_u64().unwrap_or(0);
+    let failed_modules = report["failed_modules"].as_array().map_or(0, Vec::len);
+    if report["status"] != "ok" || failed_modules > 0 || files != given {
+        return Err(format!(
+            "UBS's canary scan is incomplete (status {}, {failed_modules} failed module(s), \
+             {files} of {given} file(s)); a partial scan is a failure (§11.1)",
+            report["status"]
+        ));
+    }
+    match (exit_code, critical) {
+        (Some(1), Some(1)) => Ok(files),
+        (_, Some(0)) => Err(
+            "UBS did not report the canary's panic!, so its ast-grep rules did not run \
+             (ast-grep missing, broken or silent); a partial scan is a failure (§11.1)"
+                .to_owned(),
+        ),
+        (code, found) => Err(format!(
+            "the canary expects exactly 1 critical finding and exit 1, but UBS reported \
+             {found:?} with exit {code:?}; re-check UBS_CANARY against the installed UBS"
         )),
     }
 }
@@ -936,18 +1217,33 @@ mod tests {
     const TREE: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn fixture(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+        crate::test_support::manifest_dir()
             .join("tests/fixtures")
             .join(name)
     }
 
     fn gate(fixture_name: &str, steps: &[Step]) -> GateReport {
+        gate_changed(fixture_name, &["src/lib.rs"], steps)
+    }
+
+    fn gate_changed(fixture_name: &str, changed: &[&str], steps: &[Step]) -> GateReport {
+        gate_with_path(fixture_name, changed, steps, None)
+    }
+
+    fn gate_with_path(
+        fixture_name: &str,
+        changed: &[&str],
+        steps: &[Step],
+        tool_path: Option<OsString>,
+    ) -> GateReport {
         let root = fixture(fixture_name);
+        let changed = changed.iter().map(|&path| path.to_owned()).collect();
         let ctx = Context {
             root: &root,
-            tree: resolve_tree(&root, Some(TREE), vec!["src/lib.rs".to_owned()]).unwrap(),
+            tree: resolve_tree(&root, Some(TREE), changed).unwrap(),
             artifacts: scratch_dir(&format!("gate-{fixture_name}")),
             cargo: nested_cargo("keyval-gate"),
+            tool_path,
             progress: false,
         };
         run(&ctx, GateTier::Fast, steps).unwrap()
@@ -972,6 +1268,13 @@ mod tests {
         assert_eq!(written["tree"]["id"], TREE, "receipt={written:#}");
         assert_eq!(written["tree"]["source"], "caller", "receipt={written:#}");
         assert_eq!(written["result"], "passed", "receipt={written:#}");
+        assert!(
+            written["tools"]["cargo_target_dir"]
+                .as_str()
+                .is_some_and(|dir| dir.ends_with("keyval-gate")),
+            "rule: the receipt records the target dir the run built into \
+             (br-gate-shared-target-dir-dtqu); receipt={written:#}"
+        );
         assert!(
             written["build_id"]
                 .as_str()
@@ -1039,15 +1342,130 @@ mod tests {
         let critical = r#"{"status":"ok","failed_modules":[],"totals":{"critical":2,"files":4}}"#;
         let partial =
             r#"{"status":"partial","failed_modules":["rust"],"totals":{"critical":0,"files":4}}"#;
-        assert_eq!(ubs_verdict(ok, Some(0)), Ok(4));
+        assert_eq!(ubs_verdict(ok, Some(0), 4), Ok(4));
         let cases = [
-            (critical, Some(1), "2 critical"),
-            (partial, Some(2), "partial scan is a failure"),
-            (ok, Some(3), "nothing scanned"),
-            ("UBS crashed", Some(2), "not JSON"),
+            (critical, Some(1), 4, "2 critical"),
+            (partial, Some(2), 4, "partial scan is a failure"),
+            (ok, Some(3), 4, "nothing scanned"),
+            ("UBS crashed", Some(2), 4, "not JSON"),
+            (ok, Some(0), 5, "scanned 4 of the 5 file(s)"),
+        ];
+        for (stdout, code, given, expected) in cases {
+            let observed = ubs_verdict(stdout, code, given);
+            assert!(
+                observed.as_ref().is_err_and(|e| e.contains(expected)),
+                "stdout={stdout} code={code:?} given={given} expected error containing \
+                 {expected:?}; observed={observed:?}"
+            );
+        }
+    }
+
+    /// The probe for br-gate-ubs-test-panics-brzy, with the real UBS: test code may
+    /// panic (CD-8), production code may not. The fixture panics in a `#[cfg(test)]`
+    /// module (src/lib.rs:18), in a `#![cfg(test)]` file (tests/doubling.rs:6) and in
+    /// production code (src/halve.rs:7); only the last one may fail the gate.
+    #[test]
+    fn ubs_lets_tests_panic_but_never_production_code() {
+        let changed = ["src/lib.rs", "tests/doubling.rs", "src/halve.rs"];
+        let report = gate_changed("gate-ubs", &changed, &[Step::Ubs]);
+        let ubs = step(&report, "ubs");
+        let log = fs::read_to_string(ubs.log.as_deref().unwrap_or_default()).unwrap_or_default();
+        let detail = ubs.detail.as_deref().unwrap_or_default();
+        assert!(
+            ubs.status == Verdict::Failed && ubs.cases == 3,
+            "rule: the step scans every changed file and fails; observed={ubs:#?}"
+        );
+        assert!(
+            detail.contains("pass 2 (production code): UBS found 1 critical issue(s)")
+                && !detail.contains("pass 1"),
+            "rule: only the production panic! fails the gate (CD-8); detail={detail}\n\
+             log:\n{log}"
+        );
+        assert!(
+            log.contains("src/halve.rs:7:9 [rule:rust.ownership.panic-macro]")
+                && !log.contains("src/lib.rs:18")
+                && !log.contains("tests/doubling.rs:6"),
+            "rule: the log locates the production panic! and no test panic!; log:\n{log}"
+        );
+        let ast_grep = report.receipt.tools.ast_grep.as_ref();
+        assert!(
+            ast_grep.is_some_and(|a| a.rules_ran && a.path.is_some()),
+            "rule: the receipt records the ast-grep UBS used and that its rules ran \
+             (br-gate-ubs-partial-scan-o59g); observed={ast_grep:?}"
+        );
+    }
+
+    /// The fixture for br-gate-ubs-partial-scan-o59g, with the real UBS. UBS reports a
+    /// scan whose ast-grep rules never ran as complete and clean; the canary must catch
+    /// it, both when `ast-grep` fails and when it exits 0 having done nothing. (The
+    /// self-spawning stub of the incident is never run here: it is a fork bomb, and is
+    /// only ever exercised by hand under a hard task cap.)
+    #[test]
+    fn ubs_fails_when_its_ast_grep_rules_do_not_run() {
+        let stubs = scratch_dir("ast-grep-stubs");
+        for (name, body, version) in [
+            (
+                "failing",
+                "echo 'stub ast-grep: broken' >&2\nexit 1",
+                "`ast-grep --version` exited with exit status: 1",
+            ),
+            ("silent", "exit 0", "printed no version"),
+        ] {
+            let bin = stubs.join(name);
+            fs::create_dir_all(&bin).unwrap();
+            let stub = bin.join("ast-grep");
+            fs::write(&stub, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let mut tool_path = OsString::from(&bin);
+            tool_path.push(":");
+            tool_path.push(std::env::var_os("PATH").unwrap_or_default());
+            let report =
+                gate_with_path("gate-ubs", &["src/halve.rs"], &[Step::Ubs], Some(tool_path));
+            let ubs = step(&report, "ubs");
+            let detail = ubs.detail.as_deref().unwrap_or_default();
+            assert!(
+                ubs.status == Verdict::Failed
+                    && detail.contains("canary")
+                    && detail.contains("ast-grep rules did not run"),
+                "rule: a UBS scan whose ast-grep rules never ran fails the gate (§11.1); \
+                 stub={name} observed={ubs:#?}"
+            );
+            let ast_grep = report.receipt.tools.ast_grep.as_ref();
+            assert!(
+                ast_grep.is_some_and(|a| {
+                    !a.rules_ran
+                        && a.path.as_deref() == Some(stub.display().to_string().as_str())
+                        && a.version == version
+                }),
+                "rule: the receipt names the ast-grep UBS used and that its rules did not \
+                 run; stub={name} observed={ast_grep:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn canary_verdicts() {
+        let report = |status: &str, critical: u64, files: u64| {
+            format!(
+                r#"{{"status":"{status}","failed_modules":[],"totals":{{"critical":{critical},"files":{files}}}}}"#
+            )
+        };
+        assert_eq!(canary_verdict(&report("ok", 1, 1), Some(1), 1), Ok(1));
+        let cases = [
+            (report("ok", 0, 1), Some(0), "ast-grep rules did not run"),
+            (
+                report("partial", 1, 1),
+                Some(2),
+                "partial scan is a failure",
+            ),
+            (report("ok", 1, 0), Some(1), "0 of 1 file(s)"),
+            (report("ok", 2, 1), Some(1), "expects exactly 1 critical"),
+            (report("ok", 1, 1), Some(0), "expects exactly 1 critical"),
+            (String::new(), Some(2), "not JSON"),
         ];
         for (stdout, code, expected) in cases {
-            let observed = ubs_verdict(stdout, code);
+            let observed = canary_verdict(&stdout, code, 1);
             assert!(
                 observed.as_ref().is_err_and(|e| e.contains(expected)),
                 "stdout={stdout} code={code:?} expected error containing {expected:?}; \

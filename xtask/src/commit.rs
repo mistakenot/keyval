@@ -31,6 +31,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::candidate;
+use crate::cargo;
 use crate::clock::Utc;
 use crate::git::Git;
 use crate::output::Report;
@@ -545,25 +546,14 @@ impl Ports for LivePorts {
 
     fn gate(&self, candidate: &Path, tree: &str, changed: &[String]) -> Result<GateRun, String> {
         let xtask_self = std::env::current_exe().map_err(|err| err.to_string())?;
-        let mut cmd = Command::new(&xtask_self);
-        cmd.args(["--json", "gate", "fast", "--tree", tree, "--artifacts"])
-            .arg(&self.artifacts);
-        for path in changed {
-            cmd.args(["--changed", path]);
-        }
-        let ceiling = candidate.parent().unwrap_or(candidate);
-        cmd.current_dir(candidate)
-            .env("KEYVAL_ROOT", candidate)
-            // Git isolation (§11.10 step 4): nothing in the candidate can see the checkout.
-            .env("GIT_DIR", "/nonexistent/keyval-candidate-git")
-            .env("GIT_CEILING_DIRECTORIES", ceiling);
-        if std::env::var_os("CARGO_TARGET_DIR").is_none() {
-            // Keep build output out of the candidate, whose manifest must stay exact.
-            cmd.env(
-                "CARGO_TARGET_DIR",
-                self.root.join(".local/candidate-target"),
-            );
-        }
+        let mut cmd = gate_command(
+            &xtask_self,
+            &self.root,
+            &self.artifacts,
+            candidate,
+            tree,
+            changed,
+        )?;
         let captured = process::run(&mut cmd, GATE_LIMIT).map_err(|err| format!("gate: {err}"))?;
         // The gate's step records arrive on stderr; pass them through as progress.
         let _ = io::stderr().lock().write_all(captured.stderr.as_bytes());
@@ -597,6 +587,40 @@ impl Ports for LivePorts {
             )
             .collect()
     }
+}
+
+/// The `xtask gate fast` command that judges `candidate` in candidate mode, git-isolated
+/// (§11.10 step 4) and building into the candidate's own target directory.
+fn gate_command(
+    xtask: &Path,
+    root: &Path,
+    artifacts: &Path,
+    candidate: &Path,
+    tree: &str,
+    changed: &[String],
+) -> Result<Command, String> {
+    let mut cmd = Command::new(xtask);
+    cmd.args(["--json", "gate", "fast", "--tree", tree, "--artifacts"])
+        .arg(artifacts);
+    for path in changed {
+        cmd.args(["--changed", path]);
+    }
+    let ceiling = candidate.parent().unwrap_or(candidate);
+    cmd.current_dir(candidate)
+        .env("KEYVAL_ROOT", candidate)
+        // Git isolation (§11.10 step 4): nothing in the candidate can see the checkout.
+        .env("GIT_DIR", "/nonexistent/keyval-candidate-git")
+        .env("GIT_CEILING_DIRECTORIES", ceiling);
+    // The candidate builds into its own target dir, never the checkout's or a shared one,
+    // so the gate's tests are the candidate's own build (br-gate-shared-target-dir-dtqu).
+    // Under the shared base, it also stays out of the candidate, whose manifest must stay
+    // exact.
+    let base = cargo::target_base(root);
+    cmd.env(cargo::TARGET_BASE_ENV, &base).env(
+        cargo::TARGET_DIR_ENV,
+        cargo::checkout_target_dir(&base, candidate)?,
+    );
+    Ok(cmd)
 }
 
 impl Report for CommitReport {
@@ -710,6 +734,47 @@ mod tests {
 
     fn commit_in(git: &Git, request: &Request, ports: &dyn Ports) -> CommitReport {
         run(git, request, ports, &scratch_dir("commit-artifacts"))
+    }
+
+    #[test]
+    fn the_candidate_gate_builds_into_the_candidates_own_target_dir() {
+        let root = scratch_dir("commit-gate-cmd");
+        let candidate = root.join(CANDIDATE_DIR);
+        fs::create_dir_all(&candidate).unwrap();
+        let cmd = gate_command(
+            Path::new("/bin/xtask"),
+            &root,
+            &root.join("artifacts"),
+            &candidate,
+            "0123",
+            &["a.rs".to_owned()],
+        )
+        .unwrap();
+        let env = |key: &str| {
+            cmd.get_envs()
+                .find(|(name, _)| *name == key)
+                .and_then(|(_, value)| value)
+                .map(PathBuf::from)
+        };
+        let base = cargo::target_base(&root);
+        assert_eq!(
+            env(cargo::TARGET_DIR_ENV),
+            Some(cargo::checkout_target_dir(&base, &candidate).unwrap()),
+            "rule: the candidate's gate never shares the checkout's or a shared target \
+             dir (br-gate-shared-target-dir-dtqu); cmd={cmd:?}"
+        );
+        assert_ne!(
+            env(cargo::TARGET_DIR_ENV),
+            Some(cargo::checkout_target_dir(&base, &root).unwrap()),
+            "cmd={cmd:?}"
+        );
+        assert_eq!(env(cargo::TARGET_BASE_ENV), Some(base), "cmd={cmd:?}");
+        assert_eq!(env("KEYVAL_ROOT").as_deref(), Some(candidate.as_path()));
+        assert_eq!(
+            env("GIT_DIR"),
+            Some(PathBuf::from("/nonexistent/keyval-candidate-git")),
+            "rule: the candidate is git-isolated (§11.10 step 4)"
+        );
     }
 
     #[test]

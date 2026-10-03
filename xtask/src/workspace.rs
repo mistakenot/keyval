@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn the_repository_pin_is_an_exact_stable_release() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = crate::test_support::workspace_root();
         let pin = pinned_toolchain(&root).unwrap();
         let parts: Vec<&str> = pin.split('.').collect();
         assert!(

@@ -9,8 +9,11 @@
 //!   a CD principle, and every other `allow` names the bead that decided it.
 //! - **LINT-PROBES** (the tests in `probes` below): every denied lint and every
 //!   determinism entry is proven to fire on the pinned toolchain, and the controls pass.
+//! - **Test code** ([`test_code_ranges`]): the code CD-8 lets use `panic!`, in clippy's
+//!   sense, so that the gate's UBS step can judge production code alone.
 
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::check::StaticOutcome;
@@ -508,6 +511,142 @@ fn char_literal_end(rest: &[u8]) -> Option<usize> {
     (rest.get(1 + width) == Some(&b'\'')).then_some(width + 2)
 }
 
+// ---------------------------------------------------------------------------------------
+// Test code (CD-8: tests may use unwrap/expect/panic!)
+
+/// Keywords that start an item. An outer `#[cfg(test)]` or `#[test]` makes test code only
+/// of an item that starts with one of these (after any further attributes and a
+/// visibility), so attributes on statements, fields, variants and match arms never
+/// widen a test range over the production code that follows them.
+const ITEM_KEYWORDS: &[&str] = &[
+    "async",
+    "const",
+    "enum",
+    "extern",
+    "fn",
+    "impl",
+    "macro_rules",
+    "mod",
+    "static",
+    "struct",
+    "trait",
+    "type",
+    "union",
+    "unsafe",
+    "use",
+];
+
+/// The byte ranges of a Rust source that are test code in clippy's sense, the sense of
+/// `allow-panic-in-tests` (AGENTS.md "Lint Policy"): every item under `#[cfg(test)]` or
+/// `#[test]`, and the whole module or file of a `#![cfg(test)]` (which every
+/// `tests/*.rs` file starts with). The classification is conservative. Anything it
+/// cannot delimit with certainty stays production code, including the file of an
+/// out-of-line `#[cfg(test)] mod name;` unless that file starts with `#![cfg(test)]`.
+pub fn test_code_ranges(text: &str) -> Vec<Range<usize>> {
+    let masked = mask_comments_and_strings(text);
+    let bytes = masked.as_bytes();
+    let mut ranges = Vec::new();
+    for attribute in find_attributes(&masked) {
+        let body: String = masked
+            .get(attribute.body_start..attribute.end)
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let inner = bytes.get(attribute.start + 1) == Some(&b'!');
+        let range = match (inner, body.as_str()) {
+            (true, "cfg(test)") => enclosing_scope(bytes, attribute.start),
+            (false, "cfg(test)" | "test") => {
+                item_end(&masked, attribute.end + 1).map(|end| attribute.start..end)
+            }
+            _ => None,
+        };
+        ranges.extend(range);
+    }
+    ranges
+}
+
+/// `text` with its test code ([`test_code_ranges`]) blanked to spaces. Newlines are
+/// kept, so every production line keeps its line number.
+pub fn production_view(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    for range in test_code_ranges(text) {
+        for byte in bytes.get_mut(range).into_iter().flatten() {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+    }
+    // Every range starts and ends at an ASCII byte, so the result is still UTF-8.
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// The brace-delimited scope that contains `at`, braces included, or the whole text
+/// when `at` is at the top level.
+fn enclosing_scope(bytes: &[u8], at: usize) -> Option<Range<usize>> {
+    let mut depth = 0_usize;
+    for index in (0..at).rev() {
+        match bytes.get(index) {
+            Some(b'}') => depth += 1,
+            Some(b'{') if depth == 0 => {
+                let close = matching(bytes, index, b'{', b'}')?;
+                return Some(index..close + 1);
+            }
+            Some(b'{') => depth -= 1,
+            _ => {}
+        }
+    }
+    Some(0..bytes.len())
+}
+
+/// Where the item after an outer attribute ends: just past its `;`, or past the `}`
+/// that closes its first top-level block. `None` unless the item starts with one of
+/// the [`ITEM_KEYWORDS`] after any further attributes and a visibility.
+fn item_end(masked: &str, from: usize) -> Option<usize> {
+    let bytes = masked.as_bytes();
+    let skip_whitespace = |at: usize| {
+        at + bytes.get(at..).map_or(0, |rest| {
+            rest.iter().take_while(|b| b.is_ascii_whitespace()).count()
+        })
+    };
+    let word_at = |at: usize| {
+        let rest = masked.get(at..).unwrap_or("");
+        let len = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        rest.get(..len).unwrap_or("")
+    };
+    let mut at = skip_whitespace(from);
+    while bytes.get(at) == Some(&b'#') && bytes.get(at + 1) == Some(&b'[') {
+        at = skip_whitespace(matching(bytes, at + 1, b'[', b']')? + 1);
+    }
+    if word_at(at) == "pub" {
+        at = skip_whitespace(at + 3);
+        if bytes.get(at) == Some(&b'(') {
+            at = skip_whitespace(matching(bytes, at, b'(', b')')? + 1);
+        }
+    }
+    if !ITEM_KEYWORDS.contains(&word_at(at)) {
+        return None;
+    }
+    let mut depth = 0_usize;
+    for (index, &byte) in bytes.iter().enumerate().skip(at) {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' => depth = depth.checked_sub(1)?,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            b';' if depth == 0 => return Some(index + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,7 +785,7 @@ mod tests {
         let root = crate::test_support::workspace_root();
         let canonical_clippy = fs::read(root.join(CANONICAL_CLIPPY)).unwrap();
         let canonical_block = fs::read_to_string(root.join(CANONICAL_BLOCK)).unwrap();
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lint-tiers");
+        let fixtures = crate::test_support::manifest_dir().join("tests/fixtures/lint-tiers");
         let package = |dir: &str| Package {
             name: dir.to_owned(),
             id: dir.to_owned(),
@@ -681,6 +820,112 @@ mod tests {
                 "fixture={dir} expected a violation containing {expected:?}; found={found:#?}"
             );
         }
+    }
+
+    #[test]
+    fn test_code_is_what_clippy_lets_panic() {
+        // (input, whether its `panic!("T")` is test code). `panic!("P")` is production
+        // code in every case and must survive into the production view.
+        let cases = [
+            (
+                "fn p() { panic!(\"P\") }\n#[cfg(test)]\nmod tests {\n    use super::*;\n    \
+                 #[test]\n    fn t() { panic!(\"T\") }\n}\nfn q() { panic!(\"P\") }\n",
+                true,
+            ),
+            (
+                "#[test]\nfn t() { panic!(\"T\") }\nfn p() { panic!(\"P\") }\n",
+                true,
+            ),
+            (
+                "//! An integration test.\n#![cfg(test)]\nfn h() { panic!(\"T\") }\n",
+                true,
+            ),
+            (
+                "mod t {\n    #![cfg(test)]\n    fn h() { panic!(\"T\") }\n}\nfn p() { panic!(\"P\") }\n",
+                true,
+            ),
+            (
+                "#[cfg( test )]\n#[allow(dead_code)] // br-x\npub(crate) fn h() -> [u8; 2] { \
+                 panic!(\"T\") }\nfn p() { panic!(\"P\") }\n",
+                true,
+            ),
+            (
+                "#[cfg(test)]\nimpl<A, B> S<A, B> where A: Fn() -> B {\n    fn h() { panic!(\"T\") }\n}\n\
+                 fn p() { panic!(\"P\") }\n",
+                true,
+            ),
+            // Attributes on arms, fields and statements never classify what follows.
+            (
+                "fn p(x: E) {\n    match x {\n        #[cfg(test)]\n        E::A => panic!(\"T\"),\n        \
+                 E::B => panic!(\"P\"),\n    }\n}\n",
+                false,
+            ),
+            (
+                "struct S {\n    #[cfg(test)]\n    a: u8,\n}\nfn p() { panic!(\"P\") }\n",
+                false,
+            ),
+            (
+                "fn p() {\n    #[cfg(test)]\n    let _x = 1;\n    panic!(\"P\");\n}\n",
+                false,
+            ),
+            // Only test-only configurations count.
+            (
+                "#[cfg(any(test, feature = \"x\"))]\nfn h() { panic!(\"T\") }\n",
+                false,
+            ),
+            // Attribute text in comments and strings is not an attribute.
+            (
+                "// #[cfg(test)]\nfn p() { panic!(\"P\") }\nconst S: &str = \"#[test] fn\";\n\
+                 fn q() { panic!(\"P\") }\n",
+                false,
+            ),
+            // An out-of-line module's file is not classified from here.
+            (
+                "#[cfg(test)]\nmod tests;\nfn p() { panic!(\"P\") }\n",
+                false,
+            ),
+        ];
+        for (text, test_only) in cases {
+            let view = production_view(text);
+            assert_eq!(
+                view.contains("panic!(\"T\")"),
+                text.contains("panic!(\"T\")") && !test_only,
+                "rule: test code is #[test]/#[cfg(test)] items and #![cfg(test)] scopes; \
+                 input:\n{text}\nview:\n{view}"
+            );
+            assert_eq!(
+                (view.len(), view.lines().count()),
+                (text.len(), text.lines().count()),
+                "rule: the view keeps every byte offset and line; input:\n{text}"
+            );
+            for (line, (original, viewed)) in text.lines().zip(view.lines()).enumerate() {
+                if original.contains("panic!(\"P\")") {
+                    assert_eq!(
+                        viewed,
+                        original,
+                        "rule: production code is never blanked; line {}; input:\n{text}",
+                        line + 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_production_view_keeps_utf8_and_unterminated_items_intact() {
+        let text =
+            "#[cfg(test)]\nmod t { const S: &str = \"é→\"; }\nfn p() -> &'static str { \"ü\" }\n";
+        let view = production_view(text);
+        assert!(
+            view.ends_with("fn p() -> &'static str { \"ü\" }\n") && !view.contains('é'),
+            "input:\n{text}\nview:\n{view}"
+        );
+        let unterminated = "#[cfg(test)]\nmod t {\n    fn h() { panic!(\"T\") }\n";
+        assert_eq!(
+            production_view(unterminated),
+            unterminated,
+            "rule: an item whose end cannot be found stays production code"
+        );
     }
 
     #[test]

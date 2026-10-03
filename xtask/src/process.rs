@@ -1,6 +1,7 @@
 //! Running external tools with a wall-clock limit and bounded, captured output.
 
 use std::env;
+use std::ffi::OsStr;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -123,10 +124,15 @@ fn collect(handle: Option<JoinHandle<Drained>>) -> Result<String, RunError> {
 
 /// The first executable file called `program` in the directories of `PATH`.
 pub fn find_in_path(program: &str) -> Option<PathBuf> {
+    find_in(&env::var_os("PATH")?, program)
+}
+
+/// The first executable file called `program` in the directories of `search_path` (a
+/// `PATH`-style list), as a child given that `PATH` would find it.
+pub fn find_in(search_path: &OsStr, program: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
-    let path = env::var_os("PATH")?;
-    env::split_paths(&path)
+    env::split_paths(search_path)
         .map(|dir| dir.join(program))
         .find(|candidate| {
             candidate

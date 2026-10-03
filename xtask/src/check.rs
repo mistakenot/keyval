@@ -842,7 +842,7 @@ mod tests {
     const FIXTURE_PACKAGE: &str = "libtest-fixture";
 
     fn fixture_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/libtest-fixture")
+        crate::test_support::manifest_dir().join("tests/fixtures/libtest-fixture")
     }
 
     fn nested_cargo() -> Cargo {

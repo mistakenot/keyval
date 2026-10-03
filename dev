@@ -7,7 +7,17 @@
 #
 # KEYVAL_ROOT tells xtask where the workspace root is, so ./dev works from any
 # directory without changing what relative path arguments mean.
+#
+# Every checkout builds into its own target directory (br-gate-shared-target-dir-dtqu).
+# Cargo names a path package's build output relative to the workspace root and judges
+# freshness by mtime, so two checkouts sharing one CARGO_TARGET_DIR can run each other's
+# binaries. The shared base (CARGO_TARGET_DIR, else <root>/target) is kept in
+# KEYVAL_TARGET_BASE, and each checkout gets keyval-checkout-<first 16 hex digits of the
+# SHA-256 of its real path> under it. xtask's cargo::checkout_target_dir computes the same
+# name for the checkouts it materialises itself.
 set -eu
 KEYVAL_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-export KEYVAL_ROOT
+KEYVAL_TARGET_BASE=${KEYVAL_TARGET_BASE:-${CARGO_TARGET_DIR:-$KEYVAL_ROOT/target}}
+CARGO_TARGET_DIR=$KEYVAL_TARGET_BASE/keyval-checkout-$(printf '%s' "$KEYVAL_ROOT" | sha256sum | cut -c1-16)
+export KEYVAL_ROOT KEYVAL_TARGET_BASE CARGO_TARGET_DIR
 exec cargo run --quiet --locked --manifest-path "$KEYVAL_ROOT/xtask/Cargo.toml" -- "$@"

@@ -1,0 +1,10 @@
+# Fixture for the gate's UBS step (xtask/src/gate.rs): tests that panic, which CD-8
+# allows, and one production `panic!`, which it does not. Never built; its own workspace
+# root, never a member of the keyval workspace.
+[package]
+name = "gate-ubs"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]

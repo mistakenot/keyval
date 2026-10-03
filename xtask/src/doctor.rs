@@ -45,6 +45,9 @@ pub enum Expect {
     /// `ubs robot-docs exit-codes` documents the codes the gate relies on: 0 clean,
     /// 1 findings, 2 partial or refused scan, 3 nothing scanned.
     UbsExitCodes,
+    /// `ast-grep run --json`: exit 0 and a JSON array of at least one match, each with
+    /// a `file` and a `range`, so the engine really parsed and matched Rust.
+    AstGrepMatches,
 }
 
 /// One command run against a tool, and how its output is judged.
@@ -147,6 +150,27 @@ pub const TOOLS: &[ToolSpec] = &[
         capability: Some(probe(
             &["ubs", "robot-docs", "exit-codes"],
             Expect::UbsExitCodes,
+        )),
+    },
+    ToolSpec {
+        name: "ast-grep",
+        purpose: "structural matcher that UBS's rule packs run on (T0)",
+        need: Need::Required,
+        version: probe(&["ast-grep", "--version"], Expect::FirstLine),
+        // A real, bounded query (br-gate-ubs-partial-scan-o59g): an `ast-grep` can answer
+        // `--version` yet match nothing, and UBS then silently runs none of its rules.
+        capability: Some(probe(
+            &[
+                "ast-grep",
+                "run",
+                "--lang",
+                "rust",
+                "--pattern",
+                "mod $NAME;",
+                "--json=compact",
+                "xtask/src/main.rs",
+            ],
+            Expect::AstGrepMatches,
         )),
     },
     ToolSpec {
@@ -385,6 +409,7 @@ fn evaluate(expect: Expect, captured: &Captured, pin: Option<&str>) -> Verdict {
             Err(err) => Verdict::Broken(format!("output is not JSON: {err}")),
         },
         Expect::UbsExitCodes => ubs_exit_codes(&captured.stdout),
+        Expect::AstGrepMatches => ast_grep_matches(&captured.stdout),
     }
 }
 
@@ -424,6 +449,23 @@ fn ubs_exit_codes(stdout: &str) -> Verdict {
         Verdict::Pass("exit codes 0-3 documented".to_owned())
     } else {
         Verdict::Broken(format!("exit codes {missing:?} are not documented"))
+    }
+}
+
+fn ast_grep_matches(stdout: &str) -> Verdict {
+    let matches = match serde_json::from_str::<serde_json::Value>(stdout) {
+        Ok(serde_json::Value::Array(matches)) => matches,
+        Ok(_) => return Verdict::Broken("output is not a JSON array of matches".to_owned()),
+        Err(err) => return Verdict::Broken(format!("output is not JSON: {err}")),
+    };
+    let real = matches
+        .iter()
+        .filter(|m| m["file"].is_string() && m["range"].is_object())
+        .count();
+    if real == 0 {
+        Verdict::Broken("the query matched nothing in a file it must match".to_owned())
+    } else {
+        Verdict::Pass(format!("{real} match(es)"))
     }
 }
 
@@ -589,6 +631,50 @@ mod tests {
     }
 
     #[test]
+    fn the_ast_grep_query_must_return_real_matches() {
+        let real = r#"[{"text":"mod a;","range":{"start":{"line":0}},"file":"xtask/src/main.rs"}]"#;
+        assert_eq!(
+            evaluate(Expect::AstGrepMatches, &captured(0, real, ""), None),
+            Verdict::Pass("1 match(es)".to_owned())
+        );
+        // The stand-ins that voided UBS's rules (br-gate-ubs-partial-scan-o59g): a
+        // failing ast-grep, one that exits 0 having printed nothing, and lookalike output.
+        let cases = [
+            (1, "", "exited with"),
+            (0, "", "not JSON"),
+            (0, "`sg` is deprecated. Use `ast-grep` instead.", "not JSON"),
+            (0, "[]", "matched nothing"),
+            (0, r#"[{"text":"mod a;"}]"#, "matched nothing"),
+            (0, r#"{"matches":[]}"#, "not a JSON array"),
+        ];
+        for (code, stdout, expected) in cases {
+            let observed = evaluate(Expect::AstGrepMatches, &captured(code, stdout, ""), None);
+            assert!(
+                matches!(&observed, Verdict::Broken(why) if why.contains(expected)),
+                "rule: doctor fails an ast-grep whose real query does not match; \
+                 exit={code} stdout={stdout:?} expected {expected:?}; observed={observed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_installed_ast_grep_answers_the_real_query() {
+        let spec = TOOLS.iter().find(|t| t.name == "ast-grep").unwrap();
+        let report = run(
+            &crate::test_support::workspace_root(),
+            Ok("1.99.0".to_owned()),
+            std::slice::from_ref(spec),
+        );
+        let tool = report.tools.first().unwrap();
+        assert_eq!(
+            tool.status,
+            ToolStatus::Ok,
+            "rule: the installed ast-grep matches Rust (UBS's rules depend on it); \
+             observed={tool:?}"
+        );
+    }
+
+    #[test]
     fn a_tool_that_is_not_installed_is_missing_and_fails_doctor() {
         let spec = ToolSpec {
             name: "nosuchtool",
@@ -666,7 +752,9 @@ mod tests {
 
     #[test]
     fn the_required_set_covers_every_tool_named_by_o8() {
-        for name in ["rustc", "cargo", "br", "bv", "ntm", "ubs", "dcg", "am"] {
+        for name in [
+            "rustc", "cargo", "br", "bv", "ntm", "ubs", "ast-grep", "dcg", "am",
+        ] {
             let spec = TOOLS.iter().find(|t| t.name == name);
             assert!(
                 spec.is_some_and(|t| t.need == Need::Required),

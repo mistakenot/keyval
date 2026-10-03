@@ -17,6 +17,11 @@ mod doctor {
     /// arguments and fails on anything else.
     type FakeTool = (&'static str, Vec<(&'static str, String)>);
 
+    /// The arguments of doctor's real ast-grep query, and one match it accepts.
+    const AST_GREP_QUERY: &str =
+        "run --lang rust --pattern mod $NAME; --json=compact xtask/src/main.rs";
+    const AST_GREP_MATCH: &str = r#"[{"text":"mod a;","range":{},"file":"xtask/src/main.rs"}]"#;
+
     fn complete_install() -> Vec<FakeTool> {
         let ubs_codes = r#"{"exit_codes":[{"code":0},{"code":1},{"code":2},{"code":3}]}"#;
         vec![
@@ -68,6 +73,13 @@ mod doctor {
                 vec![
                     ("--version", "UBS Meta-Runner v5.4.17".to_owned()),
                     ("robot-docs exit-codes", ubs_codes.to_owned()),
+                ],
+            ),
+            (
+                "ast-grep",
+                vec![
+                    ("--version", "ast-grep 0.45.3".to_owned()),
+                    (AST_GREP_QUERY, AST_GREP_MATCH.to_owned()),
                 ],
             ),
             ("dcg", vec![("--version", "dcg 0.4.0".to_owned())]),
@@ -143,12 +155,27 @@ mod doctor {
                 }
             }
             write_install(&scenario_dir("broken-am"), &broken_am);
+
+            // An ast-grep whose --version works but which does nothing: it exits 0 and
+            // prints nothing (br-gate-ubs-partial-scan-o59g).
+            let mut hollow_ast_grep = complete_install();
+            for (name, responses) in &mut hollow_ast_grep {
+                if *name == "ast-grep" {
+                    *responses = vec![
+                        ("--version", "ast-grep 0.45.3".to_owned()),
+                        (AST_GREP_QUERY, String::new()),
+                    ];
+                }
+            }
+            write_install(&scenario_dir("hollow-ast-grep"), &hollow_ast_grep);
         })
     }
 
     fn doctor(scenario: &str, json: bool) -> Output {
         scenarios();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        // Located at run time: a compile-time path outlives its checkout
+        // (br-gate-shared-target-dir-dtqu).
+        let root = Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("..");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_xtask"));
         if json {
             cmd.arg("--json");
@@ -196,6 +223,7 @@ mod doctor {
             ("cargo", "cargo 1.99.0 (fake)"),
             ("br", "br 0.7.4"),
             ("ubs", "UBS Meta-Runner v5.4.17"),
+            ("ast-grep", "ast-grep 0.45.3"),
             ("dcg", "dcg 0.4.0"),
             ("am", "am 0.3.36"),
         ] {
@@ -239,6 +267,24 @@ mod doctor {
         let context = describe("old-rustc", &out);
         assert_eq!(out.status.code(), Some(1), "{context}");
         assert_eq!(tool(&report, "rustc")["status"], "mismatch", "{context}");
+    }
+
+    #[test]
+    fn an_ast_grep_that_matches_nothing_fails_doctor() {
+        let (out, report) = json_report("hollow-ast-grep");
+        let context = describe("hollow-ast-grep", &out);
+        assert_eq!(out.status.code(), Some(1), "{context}");
+        let ast_grep = tool(&report, "ast-grep");
+        assert_eq!(
+            ast_grep["status"], "broken",
+            "rule: --version alone never vouches for ast-grep (br-gate-ubs-partial-scan-o59g); \
+             {context}"
+        );
+        assert_eq!(
+            report["failures"],
+            serde_json::json!(["ast-grep"]),
+            "{context}"
+        );
     }
 
     #[test]

@@ -3,12 +3,18 @@
 #![cfg(test)]
 
 mod check {
+    use std::path::Path;
     use std::process::{Command, Output};
 
     fn dev(args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_xtask"))
             .args(args)
-            .env("KEYVAL_ROOT", concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+            // Located at run time: a compile-time path outlives its checkout
+            // (br-gate-shared-target-dir-dtqu).
+            .env(
+                "KEYVAL_ROOT",
+                Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join(".."),
+            )
             .output()
             .unwrap()
     }

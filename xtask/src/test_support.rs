@@ -1,13 +1,23 @@
 //! Helpers shared by xtask's own tests. Test-only: never compiled into `./dev`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::cargo::Cargo;
 
-/// The workspace root of this checkout.
+/// xtask's manifest directory, as `cargo test` reports it to the test process at run
+/// time. Never `env!("CARGO_MANIFEST_DIR")`: a compile-time path outlives its checkout,
+/// so a test binary built by one checkout would examine that checkout's files when
+/// another runs it (br-gate-shared-target-dir-dtqu).
+pub fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .expect("CARGO_MANIFEST_DIR is unset; run xtask's tests through `cargo test`")
+}
+
+/// The workspace root of the checkout under test.
 pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    manifest_dir().join("..")
 }
 
 /// Local cargo building into `<target>/<name>`.
