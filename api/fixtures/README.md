@@ -1,9 +1,8 @@
 # api/fixtures — SPEC check fixtures (W03.3)
 
-These files are the oracle for `./dev check SPEC`, which judges `api/openapi.yaml` against
-PLAN.md §8. The check itself, its xtask code, `// check: SPEC` marker, catalogue row and
-`min_cases`, is registered separately, after W07, on bead `br-w03-3-spec-fixtures-check-tdv`.
-The fixtures say **what** must hold. They never change to make a check pass (§11.5 rule 3).
+These files are the oracle for `./dev check SPEC` (`xtask/src/spec.rs`, W03.3), which judges
+`api/openapi.yaml` against PLAN.md §8. The fixtures say **what** must hold. They never change
+to make a check pass (§11.5 rule 3).
 
 | File | Schema | One case per |
 |---|---|---|
@@ -12,7 +11,9 @@ The fixtures say **what** must hold. They never change to make a check pass (§1
 | `negative.json` | `keyval.spec.fixtures/v1`, `"expect": "invalid"` | instance that MUST NOT validate |
 | `spec-mutants.json` | `keyval.spec.mutants/v1` | mutated spec that MUST trip its named rule |
 
-Case names are unique within a file and are the `--case` names.
+Case names are unique within a file, and every violation names its case. SPEC is a static
+check, so `--case` does not apply: rerun it whole with `./dev check SPEC`. One case is counted per
+spec rule, plus one per instance case and one per mutant.
 
 ## contract.json — PLAN.md §8 in machine-readable form
 
@@ -35,12 +36,12 @@ The check reports every violation of every rule. The unmutated spec MUST have no
 
 | Rule | Holds when |
 |---|---|
-| `openapi` | The document validates as OpenAPI `contract.openapi` (3.1.0), and every local `$ref` resolves. If it fails, the other rules are skipped. |
+| `openapi` | The document declares `contract.openapi` (3.1.0) and validates against the OpenAPI 3.1 schema vendored in `xtask/assets/` (pinned by SHA-256), and every local `$ref` resolves. If it fails, the other rules are skipped. |
 | `no-store` | Every Response Object (inline or under `components/responses`) declares a `Cache-Control` header that is `required: true`, with schema `{type: string, const: <contract.cache_control>}`. |
 | `examples` | Every Example Object value validates against its media type's schema, with the extension keywords below. |
-| `closed` | Every schema with `type: object` (under `components/schemas`, `components/parameters`, `components/headers`, recursively) sets `additionalProperties: false` (§8.1 strict JSON; per-operation precision). |
+| `closed` | Every schema with `type: object` (under `components/schemas`, `components/parameters`, `components/headers` and the operations' media types, recursively) sets `additionalProperties: false` (§8.1 strict JSON; per-operation precision). |
 | `codes` | The `ErrorCode` enum equals `contract.codes`, with no duplicates. Every error schema (a component schema with an `error` property) has `code: {$ref: ErrorCode, const: <c>}` with `c` in the enum. Every error schema reachable from an operation response sits under its code's status. Every `(code, status)` pair is reachable from at least one operation. |
-| `integers` | Every integer schema declares `maximum` ≤ `contract.integer_maximum` (D-77). |
+| `integers` | Every integer schema, in the same places as `closed`, declares `maximum` ≤ `contract.integer_maximum` (D-77). |
 | `operations` | The spec's operations are exactly the contract's (method + path). Each one has the contract's `operationId`, `x-requirements`, parameter names, `in` and `required`, request-body schema (required when present), 200 schema, and the exact status set. |
 | `limits` | Each `contract.byte_limits` entry exists at its pointer with exactly its value. |
 | `plan-examples` | Each `contract.examples` entry exists (by operation, request or response status, and example name), and its value equals the contract's exactly. |

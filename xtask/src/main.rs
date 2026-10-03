@@ -22,6 +22,7 @@ mod metadata;
 mod output;
 mod process;
 mod registry;
+mod spec;
 mod steplog;
 #[cfg(test)]
 mod test_support;

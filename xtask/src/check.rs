@@ -86,6 +86,8 @@ pub enum StaticCheck {
     AgentsRules,
     /// The vendored Raft library matches VENDOR.toml and its codegen stays pinned (W02).
     RaftVendor,
+    /// `api/openapi.yaml` meets PLAN.md §8, judged with the fixtures in `api/fixtures/` (W03.3).
+    Spec,
 }
 
 impl StaticCheck {
@@ -98,6 +100,7 @@ impl StaticCheck {
             Self::DepLedger => crate::ledger::check_ledger(root),
             Self::AgentsRules => crate::agents::check_agents_rules(root),
             Self::RaftVendor => crate::vendor::check_vendor(root),
+            Self::Spec => crate::spec::check_spec(root),
         }
     }
 
@@ -110,6 +113,7 @@ impl StaticCheck {
             Self::DepLedger => "DEP-LEDGER",
             Self::AgentsRules => "AGENTS-RULES",
             Self::RaftVendor => "RAFT-VENDOR",
+            Self::Spec => "SPEC",
         }
     }
 
@@ -122,6 +126,7 @@ impl StaticCheck {
             Self::DepLedger => "edge(s)+row(s)",
             Self::AgentsRules => "rule(s)+statement(s)",
             Self::RaftVendor => "file(s)+assertion(s)",
+            Self::Spec => "rule(s)+fixture(s)+mutant(s)",
         }
     }
 }
@@ -272,6 +277,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::RaftVendor),
         min_cases: 83,
+    },
+    CheckDef {
+        id: "SPEC",
+        summary: "api/openapi.yaml meets PLAN.md §8 (OpenAPI 3.1, operations, codes, no-store, \
+                  byte limits, §8.6 examples); instance fixtures hold; every mutant breaks its rule",
+        kind: Kind::Static,
+        covers: &[
+            "F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "O-1",
+        ],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::Spec),
+        min_cases: 174,
     },
     CheckDef {
         id: "DEV-GATE",
