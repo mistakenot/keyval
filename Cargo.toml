@@ -6,7 +6,12 @@
 # in DEPENDENCIES.md in the same commit (CD-12).
 [workspace]
 resolver = "3"
-members = ["xtask"]
+members = [
+    "crates/types",
+    "xtask",
+    "xtask/probes/deterministic",
+    "xtask/probes/production",
+]
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +19,9 @@ rust-version = "1.99"
 publish = false
 
 [workspace.dependencies]
+# First-party crates.
+types = { path = "crates/types" }
+# Third-party crates (each one ledgered in DEPENDENCIES.md).
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -24,16 +32,23 @@ toml = { version = "1.1.6", default-features = false, features = ["std", "serde"
 # principle; any other allow is narrow and documented with the bead that decided it.
 [workspace.lints.rust]
 unsafe_code = "forbid" # CD-8
+# The lint probes (xtask/probes) compile their deliberate violations only under
+# `--cfg keyval_probe="<name>"`; declare the cfg so normal builds stay warning-free.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(keyval_probe, values(any()))'] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
-# CD-8: expected failures are values; broken invariants use CD-7 assertions (`invariant!`).
-# clippy.toml permits unwrap/expect/panic inside tests.
+# CD-8: expected failures are values; broken invariants use CD-7 assertions, written with
+# `types::invariant!` (built on `assert!`), the only sanctioned panic. clippy.toml permits
+# unwrap/expect/panic inside tests. These stay `deny` rather than `forbid` only because
+# proc-macro derives (clap) emit `#[allow(clippy::restriction)]`; LINT-ALLOWS rejects any
+# first-party `allow` of a CD lint, and deterministic crates `forbid` them outright.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
+unreachable = "deny"
 dbg_macro = "deny"

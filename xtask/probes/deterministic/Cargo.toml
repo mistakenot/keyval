@@ -1,0 +1,13 @@
+[package]
+name = "lint-probe-deterministic"
+version = "0.0.0"
+description = "Lint probes for deterministic crates (W01.3): cfg-gated violations that must be rejected, plus controls that must pass"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+types.workspace = true
+
+[lints]
+workspace = true

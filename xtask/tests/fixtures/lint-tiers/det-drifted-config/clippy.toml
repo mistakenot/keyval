@@ -1,0 +1,74 @@
+# Canonical clippy configuration for deterministic crates (PLAN.md §5.2, §7.14;
+# AGENTS.md "Lint Policy"). Source of truth: xtask/lint/deterministic.clippy.toml.
+#
+# Every deterministic crate (types, statemachine, node, journal, raft_adapter) carries a
+# byte-identical copy as its own clippy.toml (check LINT-TIERS). Clippy reads the
+# clippy.toml nearest the crate, so this file replaces the workspace one for those crates.
+# Every entry is proven to fire by the lint probes (check LINT-PROBES). Never silence
+# these lints (§11.5 rules 4 and 11); each reason names the port to use instead (§7.2).
+
+# CD-8: tests may use unwrap/expect/panic; first-party production code may not.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "wall clock: time reaches the core only as Tick inputs from the Clock port (§7.14)" },
+  { path = "std::thread::spawn", reason = "threads: the deterministic core is single-threaded; effects are returned to the composition root (§7.2, §7.14)" },
+  { path = "std::thread::Builder::spawn", reason = "threads: the deterministic core is single-threaded; effects are returned to the composition root (§7.2, §7.14)" },
+  { path = "std::thread::scope", reason = "threads: the deterministic core is single-threaded; effects are returned to the composition root (§7.2, §7.14)" },
+  { path = "std::thread::sleep", reason = "blocking on wall-clock time: wait for Tick inputs from the Clock port (§7.14)" },
+  { path = "std::hash::RandomState::new", reason = "random hashing: use BTreeMap/BTreeSet; randomness comes only from the Entropy port (§7.14)" },
+  { path = "std::env::var", reason = "ambient environment: settings arrive parsed in the validated Config (O-5, CD-3)" },
+  { path = "std::env::var_os", reason = "ambient environment: settings arrive parsed in the validated Config (O-5, CD-3)" },
+  { path = "std::env::vars", reason = "ambient environment: settings arrive parsed in the validated Config (O-5, CD-3)" },
+  { path = "std::env::args", reason = "ambient environment: settings arrive parsed in the validated Config (O-5, CD-3)" },
+  { path = "std::env::args_os", reason = "ambient environment: settings arrive parsed in the validated Config (O-5, CD-3)" },
+  { path = "std::env::current_dir", reason = "ambient environment: paths arrive in the validated Config; storage goes through the Byte storage port" },
+  { path = "std::env::temp_dir", reason = "ambient environment: storage goes through the Byte storage port (§7.2)" },
+  { path = "std::fs::read", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::read_to_string", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::write", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::read_dir", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::create_dir_all", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::remove_file", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::rename", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::metadata", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::File::open", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::File::create", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::OpenOptions::open", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::io::stdin", reason = "direct I/O: input arrives through the inbound port (§7.2)" },
+  { path = "std::io::stdout", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::io::stderr", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::process::exit", reason = "process control belongs to the composition root; broken invariants use invariant! (CD-7)" },
+  { path = "std::process::abort", reason = "process control belongs to the composition root; broken invariants use invariant! (CD-7)" },
+  { path = "std::process::Command::new", reason = "direct process I/O is never part of the deterministic core (CD-1)" },
+  { path = "std::net::TcpStream::connect", reason = "direct network I/O: use the Peer transport port (§7.2)" },
+  { path = "std::net::TcpListener::bind", reason = "direct network I/O: use the Peer transport or Client API port (§7.2)" },
+  { path = "std::net::UdpSocket::bind", reason = "direct network I/O: use the Peer transport port (§7.2)" },
+]
+
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "random hashing and unordered iteration: use BTreeMap (§7.14)" },
+  { path = "std::collections::HashSet", reason = "random hashing and unordered iteration: use BTreeSet (§7.14)" },
+  { path = "std::hash::RandomState", reason = "random hashing: use BTreeMap/BTreeSet; randomness comes only from the Entropy port (§7.14)" },
+  { path = "std::time::Instant", reason = "wall-clock type: time reaches the core only as Tick inputs from the Clock port (§7.14)" },
+  { path = "std::time::SystemTime", reason = "wall-clock type: time reaches the core only as Tick inputs from the Clock port (§7.14)" },
+  { path = "std::fs::File", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::fs::OpenOptions", reason = "direct filesystem I/O: use the Byte storage port (§7.2)" },
+  { path = "std::net::TcpStream", reason = "direct network I/O: use the Peer transport port (§7.2)" },
+  { path = "std::net::TcpListener", reason = "direct network I/O: use the Peer transport or Client API port (§7.2)" },
+  { path = "std::net::UdpSocket", reason = "direct network I/O: use the Peer transport port (§7.2)" },
+  { path = "std::process::Command", reason = "direct process I/O is never part of the deterministic core (CD-1)" },
+  { path = "std::process::Child", reason = "direct process I/O is never part of the deterministic core (CD-1)" },
+  { path = "std::thread::JoinHandle", reason = "threads: the deterministic core is single-threaded (§7.14)" },
+]
+
+disallowed-macros = [
+  { path = "std::println", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::print", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::eprintln", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::eprint", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::dbg", reason = "direct I/O: emit Log/Observe effects through the Telemetry port (§7.2)" },
+  { path = "std::thread_local", reason = "hidden per-thread state, such as a thread-local RNG; state lives in the core's values, randomness in the Entropy port (§7.14)" },
+]

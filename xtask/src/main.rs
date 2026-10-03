@@ -8,8 +8,12 @@ mod cargo;
 mod check;
 mod doctor;
 mod libtest;
+mod lint;
+mod metadata;
 mod output;
 mod process;
+#[cfg(test)]
+mod test_support;
 mod workspace;
 
 use std::env;

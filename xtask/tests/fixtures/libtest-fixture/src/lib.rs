@@ -1,5 +1,16 @@
 //! Fixture for `./dev check`: known passing, failing and ignored libtest cases.
 
+/// A doctest whose name contains `passes_`: `./dev check` must never select it, because
+/// rustdoc splits test arguments on whitespace and doctest names contain spaces.
+///
+/// ```
+/// assert_eq!(libtest_fixture::passes_doc(), 1);
+/// ```
+#[must_use]
+pub const fn passes_doc() -> u8 {
+    1
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

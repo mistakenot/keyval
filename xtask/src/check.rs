@@ -36,6 +36,8 @@ const FAILURE_TAIL_LINES: usize = 120;
 pub enum Kind {
     /// A group of libtest cases.
     TestGroup,
+    /// An in-process static check of the workspace's files or manifests.
+    Static,
 }
 
 /// The claim class a check supports (§10.15). W05 adds the other classes.
@@ -63,6 +65,36 @@ pub enum Selector {
         /// Substring every selected case name contains.
         filter: Option<&'static str>,
     },
+    /// An in-process static check over the workspace; it runs no tests.
+    Static(StaticCheck),
+}
+
+/// The static checks xtask implements in-process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StaticCheck {
+    /// No first-party `allow` of a CD lint; every other `allow` names its bead.
+    LintAllows,
+    /// Every crate inherits the workspace lints; deterministic crates carry the
+    /// canonical deterministic configuration.
+    LintTiers,
+}
+
+impl StaticCheck {
+    fn run(self, root: &Path) -> Result<StaticOutcome, String> {
+        match self {
+            Self::LintAllows => crate::lint::check_allows(root),
+            Self::LintTiers => crate::lint::check_tiers(root),
+        }
+    }
+}
+
+/// What a static check examined, and what it found wrong.
+#[derive(Debug)]
+pub struct StaticOutcome {
+    /// Items examined (files, crates, dependencies); zero is a failure (P10).
+    pub cases: usize,
+    /// One message per violation, each naming its location.
+    pub violations: Vec<String>,
 }
 
 /// One registered check.
@@ -126,6 +158,53 @@ pub const CATALOGUE: &[CheckDef] = &[
             filter: Some("check::"),
         },
         min_cases: 6,
+    },
+    CheckDef {
+        id: "LINT-PROBES",
+        summary: "every denied lint and determinism entry fires on a probe; controls pass",
+        kind: Kind::TestGroup,
+        covers: &["CD-5", "CD-8", "CD-11", "P4", "T-1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filter: Some("lint::probes::"),
+        },
+        min_cases: 18,
+    },
+    CheckDef {
+        id: "LINT-ALLOWS",
+        summary: "no first-party allow of a CD lint; every other allow names its bead",
+        kind: Kind::Static,
+        covers: &["CD-5", "CD-8", "CD-11", "P4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::LintAllows),
+        min_cases: 10,
+    },
+    CheckDef {
+        id: "LINT-TIERS",
+        summary: "every crate inherits the workspace lints; deterministic crates carry the \
+                  canonical deterministic configuration",
+        kind: Kind::Static,
+        covers: &["CD-5", "CD-11", "P4", "T-1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::LintTiers),
+        min_cases: 4,
+    },
+    CheckDef {
+        id: "INVARIANT",
+        summary: "invariant! holds silently and panics with its ID and context (CD-7)",
+        kind: Kind::TestGroup,
+        covers: &["CD-7", "CD-8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filter: Some("invariant"),
+        },
+        min_cases: 3,
     },
 ];
 
@@ -281,6 +360,7 @@ pub fn run_one(root: &Path, def: &CheckDef, case: Option<&str>, cargo: &Cargo) -
         Selector::CargoTest { package, filter } => {
             run_cargo_test(&mut result, root, def, package, filter, case, cargo);
         }
+        Selector::Static(check) => run_static(&mut result, root, def, check, case),
     }
     result.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     if result.status != CheckStatus::Passed {
@@ -299,7 +379,18 @@ fn run_cargo_test(
     cargo: &Cargo,
 ) {
     // 1. Resolve the selection statically, without running anything (§10.13 cond. 4).
-    let list_args = ["test", "--locked", "-p", package, "--", "--list"];
+    // `--all-targets` leaves out doctests in both steps: rustdoc splits test arguments on
+    // whitespace, so a doctest name ("src/x.rs - f (line 3)") can never be selected
+    // exactly. Doctests run in the gate's whole-workspace test step instead.
+    let list_args = [
+        "test",
+        "--locked",
+        "-p",
+        package,
+        "--all-targets",
+        "--",
+        "--list",
+    ];
     result.commands.push(cargo.describe(&list_args));
     let listed = match execute(cargo, root, &list_args) {
         Ok(captured) => captured,
@@ -319,7 +410,15 @@ fn run_cargo_test(
     }
 
     // 2. Run exactly the selected cases.
-    let mut run_args: Vec<&str> = vec!["test", "--locked", "-p", package, "--", "--exact"];
+    let mut run_args: Vec<&str> = vec![
+        "test",
+        "--locked",
+        "-p",
+        package,
+        "--all-targets",
+        "--",
+        "--exact",
+    ];
     run_args.extend(selected.iter().map(String::as_str));
     result.commands.push(cargo.describe(&run_args));
     let ran = match execute_allowing_failure(cargo, root, &run_args) {
@@ -347,6 +446,44 @@ fn run_cargo_test(
             result.output_tail = Some(tail(&ran.stdout, &ran.stderr));
             result.fail(why);
         }
+    }
+}
+
+fn run_static(
+    result: &mut CheckResult,
+    root: &Path,
+    def: &CheckDef,
+    check: StaticCheck,
+    case: Option<&str>,
+) {
+    if case.is_some() {
+        return result.fail(
+            "--case selects test cases; a static check has none to select, so run it whole"
+                .to_owned(),
+        );
+    }
+    let outcome = match check.run(root) {
+        Ok(outcome) => outcome,
+        Err(why) => return result.fail(format!("the check could not run: {why}")),
+    };
+    result.selected = count(outcome.cases);
+    if !outcome.violations.is_empty() {
+        result.failed = count(outcome.violations.len());
+        result.failures = outcome.violations;
+        return result.fail(format!(
+            "{} violation(s) among {} case(s) examined",
+            result.failed, result.selected
+        ));
+    }
+    result.passed = result.selected;
+    let tally = Tally {
+        passed: result.passed,
+        failed: 0,
+        ignored: 0,
+    };
+    match verdict(result.selected, tally, true, def.min_cases) {
+        Ok(()) => result.status = CheckStatus::Passed,
+        Err(why) => result.fail(why),
     }
 }
 
@@ -545,10 +682,11 @@ mod tests {
 
     #[test]
     fn every_catalogue_check_has_exactly_one_code_marker() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let sources: Vec<String> = std::fs::read_dir(&src)
+        let root = crate::test_support::workspace_root();
+        let sources: Vec<String> = crate::lint::first_party_sources(&root)
             .unwrap()
-            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .iter()
+            .map(|path| std::fs::read_to_string(path).unwrap())
             .collect();
         for def in CATALOGUE {
             let marker = format!("// check: {}\n", def.id);
@@ -600,13 +738,8 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/libtest-fixture")
     }
 
-    /// Nested cargo must not share the outer `cargo test` build directory, which is
-    /// locked while tests run.
     fn nested_cargo() -> Cargo {
-        let exe = std::env::current_exe().unwrap();
-        // <target>/debug/deps/xtask-<hash> -> <target>/keyval-nested
-        let target = exe.ancestors().nth(3).unwrap().join("keyval-nested");
-        Cargo::local().with_target_dir(target)
+        crate::test_support::nested_cargo("keyval-nested")
     }
 
     fn fixture_check(filter: &'static str, min_cases: u32) -> CheckDef {

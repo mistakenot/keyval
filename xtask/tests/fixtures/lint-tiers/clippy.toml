@@ -1,0 +1,2 @@
+# fixture: plays the workspace-root clippy.toml
+allow-unwrap-in-tests = true
