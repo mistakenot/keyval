@@ -729,6 +729,25 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 8,
     },
+    CheckDef {
+        id: "LIMITS",
+        summary: "the limits registry names every §7.11 bound once and matches the API spec; bounded \
+                  queues and maps refuse past their limits at N-1/N/N+1; a non-loopback address \
+                  produces the O-9 warning (CD-9, O-9)",
+        kind: Kind::TestGroup,
+        covers: &["CD-9", "O-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &[
+                "limits::tests::",
+                "bounded::tests::",
+                "config::exposure::tests::",
+            ],
+        },
+        min_cases: 11,
+    },
 ];
 
 /// Outcome of one requested check.

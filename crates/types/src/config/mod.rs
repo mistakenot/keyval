@@ -29,6 +29,7 @@
 
 mod consensus;
 mod error;
+mod exposure;
 mod fingerprint;
 mod params;
 mod reader;
@@ -42,6 +43,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub use consensus::{ConsensusSettings, ConsensusViolation, ReadMode};
 pub use error::{AddressProblem, ConfigError, ConfigSyntax, ConfigTable, ConfigValueKind};
+pub use exposure::{AddressRole, ExposureWarning};
 pub use fingerprint::{SEMANTIC_ENCODING, SemanticFingerprint};
 pub use params::{
     COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, ConfigParam, ConfigParamClass,

@@ -476,3 +476,15 @@ tier = "T0"
 run = "./dev check CONFIG-FINGERPRINT"
 min_cases = 8
 status = "implemented"
+
+[[check]]
+id = "LIMITS"
+summary = "the limits registry names every §7.11 bound once and matches the API spec; bounded queues and maps refuse past their limits at N-1/N/N+1; a non-loopback address produces the O-9 warning (CD-9, O-9)"
+kind = "test_group"
+covers = ["CD-9", "O-9"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check LIMITS"
+min_cases = 11
+status = "implemented"

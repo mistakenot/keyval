@@ -45,6 +45,9 @@
 //!   [`ConfigParam`], and [`ConsensusSettings`] carry the consensus library's settings
 //!   in core-owned types. [`Config::semantic_fingerprint`] digests every value that can
 //!   change a result, plus the voter set (DUR-8).
+//! - **Limits** (CD-9, §7.11): [`Limit`] names every bound once, configured or fixed,
+//!   and [`BoundedQueue`] and [`BoundedMap`] enforce them with typed refusals.
+//!   [`Config::exposure_warnings`] reports each non-loopback address (O-9).
 //! - **SHA-256** ([`Sha256`], D-75): in-crate, for the fingerprint and command digests.
 //!
 //! This crate also owns [`invariant!`], the project's CD-7 assertion macro and the only
@@ -55,6 +58,7 @@
 //! hashed maps and no direct I/O. Its `clippy.toml` and the lint block above enforce this
 //! (checks LINT-TIERS and LINT-PROBES).
 
+mod bounded;
 mod client;
 mod config;
 mod consensus;
@@ -66,6 +70,7 @@ mod ids;
 mod in_process;
 mod invariant;
 mod lifecycle;
+mod limits;
 mod log_index;
 mod mutation;
 mod outcome;
@@ -73,17 +78,18 @@ mod range;
 mod sha256;
 mod telemetry;
 
+pub use bounded::{BoundedMap, BoundedQueue, MapFull, QueueFull, QueueRefused};
 pub use client::{
     AttemptId, ClientOp, HistoryLimit, Refusal, Response, ScanItem, ScanPage, ScanRange,
     ScanRangeError, ServedBy,
 };
 pub use config::{
-    AddressProblem, COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, Config, ConfigError,
-    ConfigParam, ConfigParamClass, ConfigSyntax, ConfigTable, ConfigValueKind, ConsensusSettings,
-    ConsensusViolation, ENTRY_ENVELOPE_BOUND, FRAME_FIELDS, FRAME_OVERHEAD_BYTES,
-    JOURNAL_PROTOCOL_ALLOWANCE, MAX_COMMAND_BYTES, MAX_CONFIG_BYTES, MAX_FRAME_PAYLOAD_BYTES,
-    MAX_REQUEST_BODY_BYTES, MAX_SCAN_PAGE_BYTES, NodeConfig, PER_ENTRY_OVERHEAD_BOUND,
-    PROTOCOL_VERSION, ReadMode, SEMANTIC_ENCODING, SemanticFingerprint,
+    AddressProblem, AddressRole, COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, Config,
+    ConfigError, ConfigParam, ConfigParamClass, ConfigSyntax, ConfigTable, ConfigValueKind,
+    ConsensusSettings, ConsensusViolation, ENTRY_ENVELOPE_BOUND, ExposureWarning, FRAME_FIELDS,
+    FRAME_OVERHEAD_BYTES, JOURNAL_PROTOCOL_ALLOWANCE, MAX_COMMAND_BYTES, MAX_CONFIG_BYTES,
+    MAX_FRAME_PAYLOAD_BYTES, MAX_REQUEST_BODY_BYTES, MAX_SCAN_PAGE_BYTES, NodeConfig,
+    PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION, ReadMode, SEMANTIC_ENCODING, SemanticFingerprint,
 };
 pub use consensus::{
     Consensus, Entry, EntryPayload, HardState, LightReady, OutboundMessage, Progress, ProposeError,
@@ -96,6 +102,7 @@ pub use error_code::{ErrorCode, Terminality};
 pub use ids::{ClusterId, ClusterIdError, NodeId, RequestId, RequestIdError};
 pub use in_process::{DataDir, Entropy, EntropyStream, JournalRead, ReadLen, StorageError};
 pub use lifecycle::{Lifecycle, NotReadyLifecycle};
+pub use limits::{Limit, LimitSource};
 pub use log_index::{EntryIndex, LogIndex, Term, Version};
 pub use mutation::{ExpectedVersion, Mutation};
 pub use outcome::{Attempt, AttemptOutcome, Decision, LiveStateLimit, TerminalResult};
