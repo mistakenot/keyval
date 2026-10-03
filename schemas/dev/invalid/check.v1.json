@@ -1,0 +1,57 @@
+{
+  "rule": "a passing check report ran only passing checks (P10)",
+  "error_at": "/checks/1/status",
+  "instance": {
+    "schema": "keyval.dev.check/v1",
+    "ok": true,
+    "case": null,
+    "runner": "rch",
+    "checks": [
+      {
+        "id": "AGENTS-RULES",
+        "status": "passed",
+        "summary": "AGENTS.md carries every PLAN.md \u00a711.5 rule verbatim and replaces the ACFS git checklist",
+        "kind": "static",
+        "tier": "T0",
+        "class": "invariant",
+        "covers": [
+          "P7",
+          "P9",
+          "CD-12"
+        ],
+        "min_cases": 18,
+        "selected": 23,
+        "passed": 23,
+        "failed": 0,
+        "ignored": 0,
+        "failures": [],
+        "rerun": [],
+        "commands": [],
+        "duration_ms": 4,
+        "detail": null
+      },
+      {
+        "id": "WORKGRAPH",
+        "status": "failed",
+        "summary": "registry/workgraph.toml mirrors PLAN.md \u00a712.2/\u00a712.3 (id, deps, reqs, area) and is acyclic (\u00a710.13 condition 8, plan half)",
+        "kind": "static",
+        "tier": "T0",
+        "class": "invariant",
+        "covers": [
+          "G1",
+          "P5"
+        ],
+        "min_cases": 501,
+        "selected": 561,
+        "passed": 561,
+        "failed": 0,
+        "ignored": 0,
+        "failures": [],
+        "rerun": [],
+        "commands": [],
+        "duration_ms": 5,
+        "detail": null
+      }
+    ]
+  }
+}

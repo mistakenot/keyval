@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/step.v1.schema.json",
+  "title": "keyval.dev.step/v1",
+  "description": "One step record of a scripted flow (xtask/src/steplog.rs `StepRecord`; AGENTS.md W01.6 standard). Written one per line to stderr and to the flow's log file, e.g. a gate run's steps.jsonl. A step that did not pass names its re-run command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "flow",
+    "step",
+    "action",
+    "expected",
+    "observed",
+    "outcome",
+    "duration_ms",
+    "rerun"
+  ],
+  "if": { "required": ["outcome"], "properties": { "outcome": { "const": "failed" } } },
+  "then": { "properties": { "rerun": { "type": "string" } } },
+  "else": { "properties": { "rerun": { "type": "null" } } },
+  "properties": {
+    "schema": { "const": "keyval.dev.step/v1" },
+    "flow": { "type": "string", "minLength": 1 },
+    "step": { "type": "string", "minLength": 1 },
+    "action": { "type": "string" },
+    "expected": { "type": "string" },
+    "observed": { "type": "string" },
+    "outcome": { "enum": ["passed", "failed"] },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "rerun": {
+      "description": "Null when the step passed; otherwise the re-run command, which a gate step that never built a command leaves empty.",
+      "type": ["string", "null"]
+    }
+  }
+}

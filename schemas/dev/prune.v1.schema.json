@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/prune.v1.schema.json",
+  "title": "keyval.dev.prune/v1",
+  "description": "The `./dev prune [--dry-run] --json` report, also written as the prune receipt (xtask/src/prune.rs `PruneReport`): every accept tree and orphaned per-checkout target dir, and what the Q9 retention rule did to it. `ok` means every intended removal succeeded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "dry_run",
+    "keep_accept_trees",
+    "accept_trees",
+    "target_dirs",
+    "freed_bytes",
+    "errors",
+    "started_at",
+    "finished_at",
+    "receipt_path"
+  ],
+  "allOf": [
+    {
+      "if": { "required": ["ok"], "properties": { "ok": { "const": true } } },
+      "then": { "properties": { "errors": { "maxItems": 0 } } }
+    },
+    {
+      "description": "A dry run removes nothing; a real run never reports `would_remove`.",
+      "if": { "required": ["dry_run"], "properties": { "dry_run": { "const": true } } },
+      "then": {
+        "properties": {
+          "accept_trees": { "items": { "properties": { "action": { "not": { "const": "removed" } } } } },
+          "target_dirs": { "items": { "properties": { "action": { "not": { "const": "removed" } } } } }
+        }
+      },
+      "else": {
+        "properties": {
+          "accept_trees": { "items": { "properties": { "action": { "not": { "const": "would_remove" } } } } },
+          "target_dirs": { "items": { "properties": { "action": { "not": { "const": "would_remove" } } } } }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": { "const": "keyval.dev.prune/v1" },
+    "ok": { "type": "boolean" },
+    "dry_run": { "type": "boolean" },
+    "keep_accept_trees": { "type": "integer", "minimum": 0 },
+    "accept_trees": {
+      "description": "Every accept tree, newest first.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tree", "action", "reason", "target_dir", "bytes"],
+        "properties": {
+          "tree": { "type": "string", "minLength": 1 },
+          "action": { "$ref": "#/$defs/action" },
+          "reason": { "$ref": "#/$defs/reason" },
+          "target_dir": { "type": ["string", "null"], "minLength": 1 },
+          "bytes": { "$ref": "#/$defs/bytes" }
+        }
+      }
+    },
+    "target_dirs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dir", "checkout", "action", "reason", "bytes"],
+        "properties": {
+          "dir": { "type": "string", "minLength": 1 },
+          "checkout": { "type": ["string", "null"], "minLength": 1 },
+          "action": { "$ref": "#/$defs/action" },
+          "reason": { "$ref": "#/$defs/reason" },
+          "bytes": { "$ref": "#/$defs/bytes" }
+        }
+      }
+    },
+    "freed_bytes": { "type": "integer", "minimum": 0 },
+    "errors": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "receipt_path": { "type": ["string", "null"], "minLength": 1 }
+  },
+  "$defs": {
+    "action": { "enum": ["kept", "removed", "would_remove"] },
+    "reason": {
+      "enum": [
+        "newest",
+        "failing",
+        "no_receipt",
+        "in_use",
+        "superseded",
+        "checkout_exists",
+        "checkout_gone",
+        "unattributed",
+        "marker_mismatch"
+      ]
+    },
+    "bytes": {
+      "description": "Bytes freed (or that would be); removals only.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "timestamp": {
+      "description": "UTC, RFC 3339, whole seconds (xtask/src/clock.rs).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

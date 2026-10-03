@@ -402,6 +402,20 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 9,
     },
     CheckDef {
+        id: "DEV-SCHEMAS",
+        summary: "every versioned ./dev JSON output matches its schema in schemas/dev/, and \
+                  each schema rejects its negative fixture",
+        kind: Kind::TestGroup,
+        covers: &["O-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["schemas::"],
+        },
+        min_cases: 18,
+    },
+    CheckDef {
         id: "INVARIANT",
         summary: "invariant! holds silently and panics with its ID and context (CD-7)",
         kind: Kind::TestGroup,

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/beads-import.v1.schema.json",
+  "title": "keyval.dev.beads-import/v1",
+  "description": "The `./dev beads import [--dry-run] --json` report (xtask/src/beads.rs `ImportReport`): the plan computed from registry/workgraph.toml against the tracker, and what was applied. `ok` means no refusal and no failure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "dry_run", "applied", "items", "plan", "created", "error"],
+  "if": { "required": ["ok"], "properties": { "ok": { "const": true } } },
+  "then": {
+    "properties": {
+      "error": { "type": "null" },
+      "plan": { "properties": { "refusals": { "maxItems": 0 } } }
+    }
+  },
+  "properties": {
+    "schema": { "const": "keyval.dev.beads-import/v1" },
+    "ok": { "type": "boolean" },
+    "dry_run": { "type": "boolean" },
+    "applied": { "type": "boolean" },
+    "items": { "type": "integer", "minimum": 0 },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adopted", "create", "add", "remove", "record", "refusals"],
+      "properties": {
+        "adopted": {
+          "description": "Work item ID to the existing bead it adopts.",
+          "$ref": "#/$defs/item_to_bead"
+        },
+        "create": { "type": "array", "items": { "$ref": "#/$defs/new_bead" } },
+        "add": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+        "remove": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+        "record": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "refusals": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "created": {
+      "description": "Work item ID to the bead created for it.",
+      "$ref": "#/$defs/item_to_bead"
+    },
+    "error": { "type": ["string", "null"], "minLength": 1 }
+  },
+  "$defs": {
+    "item_to_bead": {
+      "type": "object",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "new_bead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "title", "labels", "epic", "description"],
+      "properties": {
+        "item": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "labels": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "epic": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "edge": {
+      "description": "`item` depends on `on`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "on"],
+      "properties": {
+        "item": { "type": "string", "minLength": 1 },
+        "on": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

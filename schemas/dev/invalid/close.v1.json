@@ -1,0 +1,52 @@
+{
+  "rule": "the wrapped commit report is keyval.dev.commit/v1; a different version must not pass unnoticed",
+  "error_at": "/commit",
+  "instance": {
+    "schema": "keyval.dev.close/v1",
+    "ok": true,
+    "mode": "close",
+    "bead": "br-w04-2-domain-enums-errors-bfw",
+    "accept_receipt": "artifacts/receipts/accept-br-w04-2-domain-enums-errors-bfw.json",
+    "work_commit": "3155be86c9840b6107331acfd761b09eae5dbf4d",
+    "work_tree": "db956beb0a0dfb346122af3a5527433ddfd4a7c3",
+    "activated": [],
+    "commit": {
+      "schema": "keyval.dev.commit/v2",
+      "ok": true,
+      "outcome": "committed",
+      "bead": "br-w04-2-domain-enums-errors-bfw",
+      "agent": "SunnyDog",
+      "paths": [
+        "crates/types/src/lib.rs",
+        "crates/types/src/error_code.rs",
+        "crates/types/src/lifecycle.rs",
+        "crates/types/src/mutation.rs",
+        "crates/types/src/outcome.rs",
+        "xtask/src/check.rs",
+        "registry/workgraph.toml"
+      ],
+      "changed": [
+        "crates/types/src/error_code.rs",
+        "crates/types/src/lib.rs",
+        "crates/types/src/lifecycle.rs",
+        "crates/types/src/mutation.rs",
+        "crates/types/src/outcome.rs",
+        "registry/workgraph.toml",
+        "xtask/src/check.rs"
+      ],
+      "parent": "3077e7d54aad1f96d409892e5eddf2437e593546",
+      "tree": "db956beb0a0dfb346122af3a5527433ddfd4a7c3",
+      "commit": "3155be86c9840b6107331acfd761b09eae5dbf4d",
+      "attempts": 1,
+      "gate_receipt": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203012Z-db956beb0a0d-488992.json",
+      "push": [
+        "pushed origin main",
+        "pushed origin main:master"
+      ],
+      "receipt_path": "/data/projects/keyval/artifacts/receipts/commit-20261003T203054Z-db956beb0a0d-488914.json",
+      "detail": null,
+      "at": "2026-10-03T20:30:54Z"
+    },
+    "detail": null
+  }
+}

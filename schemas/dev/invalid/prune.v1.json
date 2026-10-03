@@ -1,0 +1,89 @@
+{
+  "rule": "a dry run removes nothing",
+  "error_at": "/accept_trees/0/action",
+  "instance": {
+    "schema": "keyval.dev.prune/v1",
+    "ok": true,
+    "dry_run": true,
+    "keep_accept_trees": 5,
+    "accept_trees": [
+      {
+        "tree": "0123456789abcdef0123456789abcdef01234567",
+        "action": "removed",
+        "reason": "superseded",
+        "target_dir": "/data/tmp/cargo-target/keyval-checkout-0123456789abcdef",
+        "bytes": 492830720
+      }
+    ],
+    "target_dirs": [
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-4764efb6984863b2",
+        "checkout": "/data/tmp/claude-1000/-data-projects-keyval/83cfa5f7-4500-44ef-8dca-97dc84397947/scratchpad/dev-gaj9",
+        "action": "kept",
+        "reason": "checkout_exists",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-93a86d45fa4df976",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-a2ae15f59440c24a",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-b27c6d1d869e9886",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-c526750555030cb7",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-cb8bcc9bd2192097",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-eb203f85569c3cbd",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-f5cfec8d79113cf9",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      },
+      {
+        "dir": "/data/tmp/cargo-target/keyval-checkout-fe062dd2f8b33986",
+        "checkout": null,
+        "action": "kept",
+        "reason": "unattributed",
+        "bytes": null
+      }
+    ],
+    "freed_bytes": 2335286130,
+    "errors": [],
+    "started_at": "2026-10-03T20:15:25Z",
+    "finished_at": "2026-10-03T20:15:26Z",
+    "receipt_path": "/data/projects/keyval/artifacts/receipts/prune-20261003T201526Z-333446.json"
+  }
+}

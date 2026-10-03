@@ -1,0 +1,15 @@
+{
+  "rule": "a step that did not pass names its re-run command (W01.6)",
+  "error_at": "/rerun",
+  "instance": {
+    "schema": "keyval.dev.step/v1",
+    "flow": "gate fast",
+    "step": "fmt",
+    "action": "cargo fmt --all --check",
+    "expected": "passes, examining at least one crate(s)",
+    "observed": "passed: 4 crate(s)",
+    "outcome": "failed",
+    "duration_ms": 352,
+    "rerun": null
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "rule": "an acceptance that ran no selector is not a pass (P10)",
+  "error_at": "/selectors",
+  "instance": {
+    "schema": "keyval.dev.accept/v1",
+    "ok": true,
+    "bead": "br-w04-2-domain-enums-errors-bfw",
+    "tree": "db956beb0a0dfb346122af3a5527433ddfd4a7c3",
+    "commit": "3155be86c9840b6107331acfd761b09eae5dbf4d",
+    "item": null,
+    "source": "labels",
+    "selectors": [],
+    "accept_dir": "/data/projects/keyval/.local/accept/db956beb0a0dfb346122af3a5527433ddfd4a7c3",
+    "cargo_target_dir": "/data/tmp/cargo-target/keyval-checkout-11e11e1946bf88f8",
+    "detail": null,
+    "started_at": "2026-10-03T20:32:35Z",
+    "finished_at": "2026-10-03T20:34:02Z",
+    "receipt_path": "/data/projects/keyval/artifacts/receipts/accept-br-w04-2-domain-enums-errors-bfw-db956beb0a0d-20261003T203402Z-510040.json"
+  }
+}

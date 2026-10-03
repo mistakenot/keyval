@@ -1,0 +1,12 @@
+{
+  "rule": "an error kind is one of usage, internal, refused, not_implemented",
+  "error_at": "/error/kind",
+  "instance": {
+    "schema": "keyval.dev.error/v1",
+    "ok": false,
+    "error": {
+      "kind": "crashed",
+      "message": "the gate panicked"
+    }
+  }
+}

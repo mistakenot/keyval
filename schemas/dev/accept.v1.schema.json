@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/accept.v1.schema.json",
+  "title": "keyval.dev.accept/v1",
+  "description": "The `./dev accept <bead> --tree <tree> --json` report, also written as the accept receipt (xtask/src/accept.rs `AcceptReport`). `ok` is true exactly when every selector passed on an untouched tree, which leaves `detail` null.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "bead",
+    "tree",
+    "commit",
+    "item",
+    "source",
+    "selectors",
+    "accept_dir",
+    "cargo_target_dir",
+    "detail",
+    "started_at",
+    "finished_at",
+    "receipt_path"
+  ],
+  "if": { "required": ["ok"], "properties": { "ok": { "const": true } } },
+  "then": {
+    "properties": {
+      "detail": { "type": "null" },
+      "commit": { "type": "string" },
+      "source": { "type": "string" },
+      "selectors": { "minItems": 1, "items": { "properties": { "ok": { "const": true } } } }
+    }
+  },
+  "else": { "properties": { "detail": { "type": "string" } } },
+  "properties": {
+    "schema": { "const": "keyval.dev.accept/v1" },
+    "ok": { "type": "boolean" },
+    "bead": { "type": "string" },
+    "tree": { "type": "string" },
+    "commit": { "type": ["string", "null"], "minLength": 1 },
+    "item": { "type": ["string", "null"], "minLength": 1 },
+    "source": {
+      "description": "workgraph: the canonical item's `accept` list in registry/workgraph.toml; labels: `accept:<CHECK-ID>` labels on the bead.",
+      "enum": ["workgraph", "labels", null]
+    },
+    "selectors": { "type": "array", "items": { "$ref": "#/$defs/selector" } },
+    "accept_dir": { "type": "string", "minLength": 1 },
+    "cargo_target_dir": { "type": ["string", "null"], "minLength": 1 },
+    "detail": { "type": ["string", "null"], "minLength": 1 },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "receipt_path": { "type": ["string", "null"], "minLength": 1 }
+  },
+  "$defs": {
+    "timestamp": {
+      "description": "UTC, RFC 3339, whole seconds (xtask/src/clock.rs).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "ok", "checks", "detail"],
+      "properties": {
+        "selector": { "type": "string", "minLength": 1 },
+        "ok": { "type": "boolean" },
+        "checks": {
+          "description": "Per-check outcome lines, e.g. `DEV-COMMIT passed 14`.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "detail": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
+  }
+}

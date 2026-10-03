@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/doctor.v2.schema.json",
+  "title": "keyval.dev.doctor/v2",
+  "description": "The `./dev doctor --json` report (xtask/src/doctor.rs): the pinned toolchain, every probed tool, and the vendored Raft code-generation pin. v2 added `raft_codegen` (W02.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "root",
+    "pinned_toolchain",
+    "pin_error",
+    "machine",
+    "tools",
+    "failures",
+    "raft_codegen"
+  ],
+  "if": { "required": ["ok"], "properties": { "ok": { "const": true } } },
+  "then": {
+    "description": "A passing doctor has no failed required tool, a readable pin and a verified Raft codegen pin.",
+    "properties": {
+      "failures": { "maxItems": 0 },
+      "pin_error": { "type": "null" },
+      "raft_codegen": { "properties": { "ok": { "const": true } } }
+    }
+  },
+  "properties": {
+    "schema": { "const": "keyval.dev.doctor/v2" },
+    "ok": { "type": "boolean" },
+    "root": { "type": "string", "minLength": 1 },
+    "pinned_toolchain": { "type": ["string", "null"], "minLength": 1 },
+    "pin_error": { "type": ["string", "null"], "minLength": 1 },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpus"],
+      "properties": {
+        "cpus": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "tools": { "type": "array", "items": { "$ref": "#/$defs/tool" } },
+    "failures": {
+      "description": "Names of required tools that are not `ok`.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "raft_codegen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "protoc", "files_verified", "violations"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "protoc": { "type": ["string", "null"], "minLength": 1 },
+        "files_verified": { "type": "integer", "minimum": 0 },
+        "violations": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "purpose",
+        "need",
+        "status",
+        "path",
+        "version",
+        "capability",
+        "detail"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "purpose": { "type": "string", "minLength": 1 },
+        "need": { "enum": ["required", "optional"] },
+        "status": { "enum": ["ok", "missing", "broken", "mismatch"] },
+        "path": { "type": ["string", "null"], "minLength": 1 },
+        "version": { "type": ["string", "null"] },
+        "capability": { "type": ["string", "null"], "minLength": 1 },
+        "detail": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
+  }
+}

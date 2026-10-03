@@ -1,0 +1,175 @@
+{
+  "rule": "a passing doctor has no failed required tool",
+  "error_at": "/failures",
+  "instance": {
+    "schema": "keyval.dev.doctor/v2",
+    "ok": true,
+    "root": "/data/projects/keyval",
+    "pinned_toolchain": "1.99.0",
+    "pin_error": null,
+    "machine": {
+      "cpus": 4
+    },
+    "tools": [
+      {
+        "name": "rustc",
+        "purpose": "Rust compiler, pinned by rust-toolchain.toml",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.cargo/bin/rustc",
+        "version": "rustc 1.99.0 (b940084d7 2026-09-28)",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "cargo",
+        "purpose": "Cargo, the only build tool",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.cargo/bin/cargo",
+        "version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "rustfmt",
+        "purpose": "format check (T0)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.cargo/bin/rustfmt",
+        "version": "rustfmt 1.10.0-stable (b940084d7e 2026-09-28)",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "clippy",
+        "purpose": "lints with denied warnings (T0)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.cargo/bin/cargo",
+        "version": "clippy 0.1.99 (b940084d7e 2026-09-28)",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "git",
+        "purpose": "version control; tree IDs for receipts",
+        "need": "required",
+        "status": "ok",
+        "path": "/usr/bin/git",
+        "version": "git version 2.53.0",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "br",
+        "purpose": "beads task tracker (robot mode)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/br",
+        "version": "br 0.7.4",
+        "capability": "br version --json",
+        "detail": null
+      },
+      {
+        "name": "bv",
+        "purpose": "beads triage (robot mode)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/bv",
+        "version": "bv v0.25.2",
+        "capability": "bv --robot-next",
+        "detail": null
+      },
+      {
+        "name": "ntm",
+        "purpose": "agent session manager",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/ntm",
+        "version": "ntm version 1.36.1",
+        "capability": "ntm --robot-version",
+        "detail": null
+      },
+      {
+        "name": "ubs",
+        "purpose": "bug scan of the exact staged files (T0)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/ubs",
+        "version": "UBS Meta-Runner v5.4.17",
+        "capability": "ubs robot-docs exit-codes",
+        "detail": null
+      },
+      {
+        "name": "ast-grep",
+        "purpose": "structural matcher that UBS's rule packs run on (T0)",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.cargo/bin/ast-grep",
+        "version": "ast-grep 0.45.3",
+        "capability": "ast-grep run --lang rust --pattern mod $NAME; --json=compact xtask/src/main.rs",
+        "detail": null
+      },
+      {
+        "name": "dcg",
+        "purpose": "destructive command guard",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/dcg",
+        "version": "0.15.2",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "am",
+        "purpose": "MCP Agent Mail: identities, messages, file reservations",
+        "need": "required",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/am",
+        "version": "am 0.3.36",
+        "capability": "am health --json",
+        "detail": null
+      },
+      {
+        "name": "rch",
+        "purpose": "offloads cargo builds to remote workers",
+        "need": "optional",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/rch",
+        "version": "rch 2.1.15 (commit 62f637837a38)",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "cass",
+        "purpose": "search past agent sessions",
+        "need": "optional",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/cass",
+        "version": "cass 0.10.0",
+        "capability": null,
+        "detail": null
+      },
+      {
+        "name": "cm",
+        "purpose": "CASS memory: learned procedures",
+        "need": "optional",
+        "status": "ok",
+        "path": "/home/dev/.local/bin/cm",
+        "version": "0.4.0",
+        "capability": null,
+        "detail": null
+      }
+    ],
+    "failures": [
+      "ubs"
+    ],
+    "raft_codegen": {
+      "ok": true,
+      "protoc": "libprotoc 3.9.0 (sha256 30c6f9b5c03fb4ad7c2f0ad2efa0297c1f4e349726b6c968a029a277e864d48e)",
+      "files_verified": 73,
+      "violations": []
+    }
+  }
+}

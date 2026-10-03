@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/receipt.v3.schema.json",
+  "title": "keyval.dev.receipt/v3",
+  "description": "A gate receipt (xtask/src/gate.rs `Receipt`): exactly what ran, on exactly which tree. Written to artifacts/receipts/gate-<run>.json and embedded in the keyval.dev.gate/v3 report. v2 added tools.cargo_target_dir and tools.ast_grep; v3 added build_inputs.raft_vendor_sha256 (W02.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "tier",
+    "set",
+    "run_id",
+    "result",
+    "tree",
+    "build_id",
+    "build_inputs",
+    "policy_hashes",
+    "tools",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "budget",
+    "steps",
+    "step_log"
+  ],
+  "if": { "required": ["result"], "properties": { "result": { "const": "passed" } } },
+  "then": {
+    "description": "A passing run executed at least one step, and every step passed (P10).",
+    "properties": {
+      "steps": {
+        "minItems": 1,
+        "items": { "properties": { "status": { "const": "passed" } } }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "keyval.dev.receipt/v3" },
+    "kind": { "const": "gate" },
+    "tier": { "enum": ["fast", "integration", "campaign", "release"] },
+    "set": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "result": { "$ref": "#/$defs/verdict" },
+    "tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "changed"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["git_head", "caller"] },
+        "changed": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "build_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "build_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rustc",
+        "cargo",
+        "target",
+        "lockfile_sha256",
+        "features",
+        "raft_patch_sha256",
+        "raft_vendor_sha256"
+      ],
+      "properties": {
+        "rustc": { "type": "string", "minLength": 1 },
+        "cargo": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "lockfile_sha256": { "$ref": "#/$defs/sha256" },
+        "features": { "type": "string", "minLength": 1 },
+        "raft_patch_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "raft_vendor_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "policy_hashes": {
+      "description": "`sha256:<hex>` of each policy file the run was judged by, or `missing`.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64}|missing)$" }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cargo_runner", "cargo_target_dir", "ubs", "ast_grep"],
+      "properties": {
+        "cargo_runner": { "enum": ["rch", "local"] },
+        "cargo_target_dir": { "type": ["string", "null"], "minLength": 1 },
+        "ubs": { "type": ["string", "null"] },
+        "ast_grep": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "version", "rules_ran"],
+              "properties": {
+                "path": { "type": ["string", "null"], "minLength": 1 },
+                "version": { "type": "string" },
+                "rules_ran": { "type": "boolean" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "duration_ms": { "$ref": "#/$defs/count" },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_ms", "alert_ms", "over_alert"],
+      "properties": {
+        "target_ms": { "$ref": "#/$defs/count" },
+        "alert_ms": { "$ref": "#/$defs/count" },
+        "over_alert": { "type": "boolean" }
+      }
+    },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "step_log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "records", "dropped"],
+      "properties": {
+        "path": { "type": ["string", "null"], "minLength": 1 },
+        "records": { "$ref": "#/$defs/count" },
+        "dropped": { "$ref": "#/$defs/count" }
+      }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": {
+      "description": "UTC, RFC 3339, whole seconds (xtask/src/clock.rs).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "verdict": { "enum": ["passed", "failed"] },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "cases", "unit", "duration_ms", "command", "log", "detail"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/verdict" },
+        "cases": { "$ref": "#/$defs/count" },
+        "unit": { "type": "string", "minLength": 1 },
+        "duration_ms": { "$ref": "#/$defs/count" },
+        "command": { "type": ["string", "null"], "minLength": 1 },
+        "log": { "type": ["string", "null"], "minLength": 1 },
+        "detail": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
+  }
+}

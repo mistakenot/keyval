@@ -24,6 +24,8 @@ mod output;
 mod process;
 mod prune;
 mod registry;
+#[cfg(test)]
+mod schemas;
 mod spec;
 mod steplog;
 #[cfg(test)]

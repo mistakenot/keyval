@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/check.v1.schema.json",
+  "title": "keyval.dev.check/v1",
+  "description": "The `./dev check <ID>... --json` report (xtask/src/check.rs): one result per requested check ID, in request order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "case", "runner", "checks"],
+  "if": { "required": ["ok"], "properties": { "ok": { "const": true } } },
+  "then": {
+    "description": "A passing report ran at least one check, and every check passed (P10).",
+    "properties": {
+      "checks": {
+        "minItems": 1,
+        "items": { "properties": { "status": { "const": "passed" } } }
+      }
+    }
+  },
+  "properties": {
+    "schema": { "const": "keyval.dev.check/v1" },
+    "ok": { "type": "boolean" },
+    "case": { "type": ["string", "null"], "minLength": 1 },
+    "runner": { "enum": ["rch", "local"] },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/result" } }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "kind",
+        "tier",
+        "class",
+        "covers",
+        "min_cases",
+        "selected",
+        "passed",
+        "failed",
+        "ignored",
+        "failures",
+        "rerun",
+        "commands",
+        "duration_ms",
+        "detail"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "status": {
+          "description": "not_run: registered, but nothing ran because another requested ID was unknown.",
+          "enum": ["passed", "failed", "unknown", "not_run"]
+        },
+        "summary": { "type": ["string", "null"], "minLength": 1 },
+        "kind": { "enum": ["test_group", "static", null] },
+        "tier": { "enum": ["T0", null] },
+        "class": { "enum": ["invariant", null] },
+        "covers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "min_cases": { "type": ["integer", "null"], "minimum": 1 },
+        "selected": { "$ref": "#/$defs/count" },
+        "passed": { "$ref": "#/$defs/count" },
+        "failed": { "$ref": "#/$defs/count" },
+        "ignored": { "$ref": "#/$defs/count" },
+        "failures": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "rerun": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "commands": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "duration_ms": { "$ref": "#/$defs/count" },
+        "detail": { "type": ["string", "null"], "minLength": 1 }
+      }
+    }
+  }
+}

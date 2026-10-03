@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/error.v1.schema.json",
+  "title": "keyval.dev.error/v1",
+  "description": "The envelope any ./dev command prints on stdout in --json mode when it cannot produce its normal report (xtask/src/output.rs). Exit status 2 for `usage`, 1 for the other kinds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "error"],
+  "properties": {
+    "schema": { "const": "keyval.dev.error/v1" },
+    "ok": { "const": false },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {
+          "description": "usage: invalid arguments, nothing ran; internal: could not complete; refused: preconditions not met; not_implemented: planned surface that does not exist yet (never a pass, P10).",
+          "enum": ["usage", "internal", "refused", "not_implemented"]
+        },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

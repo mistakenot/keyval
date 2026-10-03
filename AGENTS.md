@@ -298,15 +298,19 @@ cargo fmt --all --check
   tests run, so a nested build there waits forever.
 
 The `./dev` surface that exists today (PLAN.md §11.13; every command takes `--json`;
-exit 0 = ok, 1 = failed, 2 = usage error):
+exit 0 = ok, 1 = failed, 2 = usage error). Every `--json` output carries a versioned
+`schema` identifier whose JSON Schema is in `schemas/dev/` (check DEV-SCHEMAS). Change an
+output only together with its schema, and bump the version when the change breaks readers
+(rule 14):
 
 - `./dev doctor` — the pinned toolchain and every required tool (rustc, cargo, rustfmt,
   clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, DEV-PRUNE, LINT-PROBES,
-  LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, SPEC,
-  WORKGRAPH, DEV-BEADS, INVARIANT. Unknown IDs, zero-case selections, `#[ignore]`d cases
+  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, DEV-PRUNE, DEV-SCHEMAS,
+  LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR,
+  SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES,
+  PORTS. Unknown IDs, zero-case selections, `#[ignore]`d cases
   and runs below the check's minimum case count fail (P10). A failure prints its exact
   re-run command.
   Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.

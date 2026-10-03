@@ -1,0 +1,159 @@
+{
+  "rule": "a gate report is ok exactly when its receipt passed",
+  "error_at": "/receipt/result",
+  "instance": {
+    "schema": "keyval.dev.gate/v3",
+    "ok": true,
+    "receipt_path": "artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282.json",
+    "receipt": {
+      "schema": "keyval.dev.receipt/v3",
+      "kind": "gate",
+      "tier": "fast",
+      "set": "bootstrap",
+      "run_id": "fast-20261003T203236Z-e5da6ed9eb93-508282",
+      "result": "failed",
+      "tree": {
+        "id": "e5da6ed9eb935c98f77edbb6003f833ed63a613e",
+        "source": "caller",
+        "changed": [
+          "spike/raft-patch-tests.md",
+          "third_party/raft.patch",
+          "vendor/raft/VENDOR.toml",
+          "vendor/raft/raft/Cargo.toml",
+          "vendor/raft/raft/benches/suites/raft.rs",
+          "vendor/raft/raft/benches/suites/raw_node.rs",
+          "vendor/raft/raft/examples/five_mem_node/main.rs",
+          "vendor/raft/raft/examples/single_mem_node/main.rs",
+          "vendor/raft/raft/src/entropy.rs",
+          "vendor/raft/raft/src/lib.rs",
+          "vendor/raft/raft/src/raft.rs",
+          "vendor/raft/raft/src/raw_node.rs"
+        ]
+      },
+      "build_id": "sha256:49165c682c22be959fec512e21e1b6a06da915fb66fa943784004762281ef7e4",
+      "build_inputs": {
+        "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "target": "x86_64-unknown-linux-gnu",
+        "lockfile_sha256": "aae03f45302edd93cb2f1f2c75e523471f22206dbbda0d84e03eeee281133285",
+        "features": "all",
+        "raft_patch_sha256": "4b8572595a3a2ceb237207e3be6f3644764b5a78026a5e9ec958fabcd31412ad",
+        "raft_vendor_sha256": "7209c82d24dd4d76ce42d4fce2ceafe4bd9e95aec320913f4d8aefa2415368be"
+      },
+      "policy_hashes": {
+        "Cargo.lock": "sha256:aae03f45302edd93cb2f1f2c75e523471f22206dbbda0d84e03eeee281133285",
+        "Cargo.toml": "sha256:e8d7b2aafe3b0cb5f8cee8f704d52e3149ece96dc17fefc03e8f647171a1b2e0",
+        "DEPENDENCIES.md": "sha256:780a70bb0ff77c417cf1feff344601355e3d3e44dd27b7e108c3c10aed4b262a",
+        "clippy.toml": "sha256:8de8a9713e5608a9b26ff340e0bb47f6476c2ea2f71a9ed38d67775eb1436181",
+        "rust-toolchain.toml": "sha256:5527c34b4820978f98aa51522be531be24cbbfb43754bac9267bf6ad69435405",
+        "xtask/lint/deterministic-lints.rs": "sha256:91d6714150c0e44db955c05d13aa4e99006ae91cb20caac3eae5c63e7e8d57e6",
+        "xtask/lint/deterministic.clippy.toml": "sha256:1fc7cbe458e5fd8b58151212cbd83b906dce8339f068a7bf6a4b949a3db35c25"
+      },
+      "tools": {
+        "cargo_runner": "rch",
+        "cargo_target_dir": "/data/tmp/cargo-target/keyval-checkout-d296c5b5ad951dd5",
+        "ubs": "UBS Meta-Runner v5.4.17",
+        "ast_grep": {
+          "path": "/home/dev/.cargo/bin/ast-grep",
+          "version": "ast-grep 0.45.3",
+          "rules_ran": true
+        }
+      },
+      "started_at": "2026-10-03T20:32:36Z",
+      "finished_at": "2026-10-03T20:33:49Z",
+      "duration_ms": 72871,
+      "budget": {
+        "target_ms": 120000,
+        "alert_ms": 180000,
+        "over_alert": false
+      },
+      "steps": [
+        {
+          "id": "fmt",
+          "status": "passed",
+          "cases": 4,
+          "unit": "crate(s)",
+          "duration_ms": 307,
+          "command": "cargo fmt --all --check",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/fmt.log",
+          "detail": null
+        },
+        {
+          "id": "clippy",
+          "status": "passed",
+          "cases": 4,
+          "unit": "crate(s)",
+          "duration_ms": 19211,
+          "command": "rch exec -- cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/clippy.log",
+          "detail": null
+        },
+        {
+          "id": "LINT-ALLOWS",
+          "status": "passed",
+          "cases": 40,
+          "unit": "source file(s)",
+          "duration_ms": 76,
+          "command": "./dev check LINT-ALLOWS",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/LINT-ALLOWS.log",
+          "detail": null
+        },
+        {
+          "id": "LINT-TIERS",
+          "status": "passed",
+          "cases": 4,
+          "unit": "crate(s)",
+          "duration_ms": 32,
+          "command": "./dev check LINT-TIERS",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/LINT-TIERS.log",
+          "detail": null
+        },
+        {
+          "id": "DEP-RULE",
+          "status": "passed",
+          "cases": 13,
+          "unit": "crate(s)+edge(s)",
+          "duration_ms": 31,
+          "command": "./dev check DEP-RULE",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/DEP-RULE.log",
+          "detail": null
+        },
+        {
+          "id": "DEP-LEDGER",
+          "status": "passed",
+          "cases": 14,
+          "unit": "edge(s)+row(s)",
+          "duration_ms": 35,
+          "command": "./dev check DEP-LEDGER",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/DEP-LEDGER.log",
+          "detail": null
+        },
+        {
+          "id": "tests",
+          "status": "passed",
+          "cases": 266,
+          "unit": "test(s)",
+          "duration_ms": 30295,
+          "command": "rch exec -- cargo test --locked --workspace",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/tests.log",
+          "detail": null
+        },
+        {
+          "id": "ubs",
+          "status": "passed",
+          "cases": 41,
+          "unit": "file(s)",
+          "duration_ms": 22832,
+          "command": "(cd /data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs-canary && ubs --no-auto-update --no-color --no-cache --report-json=/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs-canary.json --files=src/canary.rs .); ubs --no-auto-update --no-color --no-cache --skip=rust.ownership --report-json=/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs-exact.json --files=crates/types/src/counts.rs,crates/types/src/data.rs,crates/types/src/ids.rs,crates/types/src/invariant.rs,crates/types/src/lib.rs,crates/types/src/log_index.rs,crates/types/src/range.rs,xtask/lint/deterministic-lints.rs,xtask/src/accept.rs,xtask/src/agents.rs,xtask/src/beads.rs,xtask/src/candidate.rs,xtask/src/cargo.rs,xtask/src/check.rs,xtask/src/clock.rs,xtask/src/closure.rs,xtask/src/commit.rs,xtask/src/doctor.rs,xtask/src/gate.rs,xtask/src/git.rs,xtask/src/ledger.rs,xtask/src/libtest.rs,xtask/src/lint.rs,xtask/src/main.rs,xtask/src/metadata.rs,xtask/src/output.rs,xtask/src/process.rs,xtask/src/registry.rs,xtask/src/spec.rs,xtask/src/steplog.rs,xtask/src/test_support.rs,xtask/src/tiers.rs,xtask/src/tracker.rs,xtask/src/vendor.rs,xtask/src/workgraph.rs,xtask/src/workspace.rs,xtask/tests/check.rs,xtask/tests/cli.rs,xtask/tests/doctor.rs,xtask/tests/gate.rs,dev .; (cd /data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs-production && ubs --no-auto-update --no-color --no-cache --report-json=/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs-production.json --files=crates/types/src/counts.rs,crates/types/src/data.rs,crates/types/src/ids.rs,crates/types/src/invariant.rs,crates/types/src/lib.rs,crates/types/src/log_index.rs,crates/types/src/range.rs,xtask/lint/deterministic-lints.rs,xtask/src/accept.rs,xtask/src/agents.rs,xtask/src/beads.rs,xtask/src/candidate.rs,xtask/src/cargo.rs,xtask/src/check.rs,xtask/src/clock.rs,xtask/src/closure.rs,xtask/src/commit.rs,xtask/src/doctor.rs,xtask/src/gate.rs,xtask/src/git.rs,xtask/src/ledger.rs,xtask/src/libtest.rs,xtask/src/lint.rs,xtask/src/main.rs,xtask/src/metadata.rs,xtask/src/output.rs,xtask/src/process.rs,xtask/src/registry.rs,xtask/src/spec.rs,xtask/src/steplog.rs,xtask/src/test_support.rs,xtask/src/tiers.rs,xtask/src/tracker.rs,xtask/src/vendor.rs,xtask/src/workgraph.rs,xtask/src/workspace.rs .)",
+          "log": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/ubs.log",
+          "detail": null
+        }
+      ],
+      "step_log": {
+        "path": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/steps.jsonl",
+        "records": 8,
+        "dropped": 0
+      }
+    }
+  }
+}
