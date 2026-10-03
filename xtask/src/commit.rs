@@ -280,8 +280,19 @@ fn commit(git: &Git, request: &Request, ports: &dyn Ports) -> CommitReport {
     }
     let outcome = gated_commit(git, request, ports, &paths, &reservations, report);
     if outcome.outcome != Outcome::Committed {
-        // Leave the index as we found it; working files are never touched.
-        let _ = git.unstage(&paths);
+        // Give the index back. If it still holds exactly our last snapshot, nobody else
+        // staged, so reset it to HEAD: that also drops the stale view a re-run left when
+        // HEAD moved. Otherwise unstage only our paths and leave theirs alone. Working
+        // files are never touched.
+        let ours = outcome
+            .tree
+            .as_ref()
+            .is_some_and(|tree| git.write_tree().ok().as_ref() == Some(tree));
+        let _ = if ours {
+            git.run(&["read-tree", "HEAD"]).map(drop)
+        } else {
+            git.unstage(&paths)
+        };
     }
     outcome
 }
@@ -319,8 +330,14 @@ fn gated_commit(
     mut report: CommitReport,
 ) -> CommitReport {
     let candidate_dir = git.root().join(CANDIDATE_DIR);
+    let mut previous: Option<String> = None;
     while report.attempts < MAX_ATTEMPTS {
         report.attempts += 1;
+        if let Some(tree) = &previous
+            && let Err(why) = rebase_index(git, tree, paths)
+        {
+            return report.refuse(why);
+        }
         let snapshot = match snapshot(git, paths, reservations) {
             Ok(snapshot) => snapshot,
             Err(why) => return report.refuse(why),
@@ -328,6 +345,7 @@ fn gated_commit(
         report.changed.clone_from(&snapshot.changed);
         report.parent = Some(snapshot.parent.clone());
         report.tree = Some(snapshot.tree.clone());
+        previous = Some(snapshot.tree.clone());
         let prepared = candidate::materialise(git, &snapshot.tree, &candidate_dir)
             .and_then(|_| candidate::verify(git, &snapshot.tree, &candidate_dir));
         if let Err(why) = prepared {
@@ -385,6 +403,26 @@ fn gated_commit(
     report.refuse(format!(
         "the checkout kept moving during the gate ({MAX_ATTEMPTS} attempts); nothing committed"
     ))
+}
+
+/// Prepares a re-run after the checkout moved during the gate (§11.10 step 5).
+///
+/// If the index still holds exactly the tree we staged (`staged`), only HEAD moved: the
+/// index is reset to the new HEAD (index only, working files untouched) and our paths
+/// are staged again, so the new candidate is the new HEAD plus our changes and never
+/// reverts the concurrent commit. If anything else changed the index, someone staged
+/// during the gate: refuse, and leave their staging alone.
+fn rebase_index(git: &Git, staged: &str, paths: &[String]) -> Result<(), String> {
+    if git.write_tree()? != staged {
+        let touched = git.run(&["diff-index", "--cached", "--name-only", staged])?;
+        let touched: Vec<&str> = touched.lines().collect();
+        return Err(format!(
+            "the index changed while the gate ran ({touched:?}); the wrapper never commits or \
+             discards another agent's staging (§11.10 step 1)"
+        ));
+    }
+    git.run(&["read-tree", "HEAD"])?;
+    git.stage(paths)
 }
 
 /// The parent, the staged tree and the changes it carries, at one moment.
@@ -1015,5 +1053,223 @@ mod tests {
                 "pattern={pattern} text={text}"
             );
         }
+    }
+
+    // --- Adversarial fixtures (W07.4, §11.10): the checkout moves while the gate runs. ---
+
+    /// Makes a commit on `main` the way another agent's wrapper would: through plumbing
+    /// and a private index, leaving the shared index untouched. Returns the new commit.
+    fn concurrent_commit(git: &Git, path: &str, content: &str) -> String {
+        let index = scratch_dir("concurrent-index").join("index");
+        let plumbing = |args: &[&str], stdin: Option<&str>| -> String {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(git.root()).args(args);
+            for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES"] {
+                cmd.env_remove(var);
+            }
+            cmd.env("GIT_INDEX_FILE", &index)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped());
+            let mut child = cmd.spawn().unwrap();
+            if let Some(text) = stdin {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+            }
+            drop(child.stdin.take());
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let head = git.rev_parse("HEAD").unwrap();
+        plumbing(&["read-tree", "HEAD"], None);
+        let blob = plumbing(&["hash-object", "-w", "--stdin"], Some(content));
+        plumbing(
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("100644,{blob},{path}"),
+            ],
+            None,
+        );
+        let tree = plumbing(&["write-tree"], None);
+        let commit = plumbing(
+            &["commit-tree", &tree, "-p", &head, "-m", "concurrent"],
+            None,
+        );
+        plumbing(&["update-ref", "refs/heads/main", &commit, &head], None);
+        commit
+    }
+
+    #[test]
+    fn head_moving_mid_gate_reruns_on_the_new_parent_without_reverting_it() {
+        let git = repo("adv-moving-head");
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let moved = RefCell::new(None);
+        let other = git.clone();
+        let fake = Fake::new();
+        *fake.during_gate.borrow_mut() = Box::new(|| {
+            if moved.borrow().is_none() {
+                *moved.borrow_mut() = Some(concurrent_commit(&other, "other.rs", "theirs\n"));
+            }
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(
+            report.attempts, 2,
+            "rule: HEAD moving during the gate forces a re-run"
+        );
+        let concurrent = moved.borrow().clone().unwrap();
+        assert_eq!(
+            git.rev_parse("HEAD~1").unwrap(),
+            concurrent,
+            "rule: committed on the new parent"
+        );
+        assert_eq!(
+            git.run(&["show", "HEAD:other.rs"]).unwrap(),
+            "theirs\n",
+            "rule: the concurrent commit's file is never reverted"
+        );
+        assert_eq!(git.run(&["show", "HEAD:a.rs"]).unwrap(), "a2\n");
+        let head_tree = git.rev_parse("HEAD^{tree}").unwrap();
+        let gated = fake.gate_trees.borrow();
+        assert_eq!(gated.len(), 2, "gated={gated:?}");
+        assert_eq!(
+            gated.last(),
+            Some(&head_tree),
+            "rule: the committed tree is the tree the deciding gate run tested (P11)"
+        );
+        assert_eq!(report.tree.as_deref(), Some(head_tree.as_str()));
+    }
+
+    #[test]
+    fn a_checkout_that_keeps_moving_is_refused_after_the_attempt_limit() {
+        let git = repo("adv-always-moving");
+        let head = git.rev_parse("HEAD").unwrap();
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let other = git.clone();
+        let mut n = 0;
+        *fake.during_gate.borrow_mut() = Box::new(move || {
+            n += 1;
+            concurrent_commit(&other, &format!("other{n}.rs"), "theirs\n");
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Refused, "report={report:#?}");
+        assert_eq!(report.attempts, MAX_ATTEMPTS);
+        let log = git
+            .run(&["log", "--format=%s", &format!("{head}..HEAD")])
+            .unwrap();
+        assert!(
+            log.lines().all(|subject| subject == "concurrent"),
+            "rule: nothing of ours is committed; log={log}"
+        );
+        assert_eq!(
+            git.staged_paths().unwrap(),
+            Vec::<String>::new(),
+            "our paths are unstaged"
+        );
+    }
+
+    #[test]
+    fn a_file_edited_mid_gate_is_not_committed() {
+        let git = repo("adv-mid-gate-edit");
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let root = git.root().to_path_buf();
+        *fake.during_gate.borrow_mut() = Box::new(move || {
+            fixture::write(&root, "a.rs", "a3 (edited during the gate)\n");
+            fixture::write(&root, "b.rs", "someone else's edit\n");
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(
+            report.attempts, 1,
+            "rule: unstaged edits do not change the candidate"
+        );
+        assert_eq!(
+            git.run(&["show", "HEAD:a.rs"]).unwrap(),
+            "a2\n",
+            "rule: the staged, gated version is committed, never a later edit (§11.10)"
+        );
+        assert_eq!(git.run(&["show", "HEAD:b.rs"]).unwrap(), "b\n");
+        assert_eq!(
+            fs::read_to_string(git.root().join("a.rs")).unwrap(),
+            "a3 (edited during the gate)\n",
+            "rule: the later edit stays in the working tree, unstaged"
+        );
+    }
+
+    #[test]
+    fn foreign_staging_mid_gate_is_refused_and_left_alone() {
+        let git = repo("adv-mid-gate-staging");
+        let head = git.rev_parse("HEAD").unwrap();
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let other = git.clone();
+        *fake.during_gate.borrow_mut() = Box::new(move || {
+            fixture::write(other.root(), "b.rs", "b2\n");
+            other.stage(&["b.rs".to_owned()]).unwrap();
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Refused, "report={report:#?}");
+        assert!(
+            report.detail.as_deref().is_some_and(|d| d.contains("b.rs")),
+            "report={report:#?}"
+        );
+        assert_eq!(git.rev_parse("HEAD").unwrap(), head, "nothing committed");
+        assert_eq!(
+            git.staged_paths().unwrap(),
+            ["b.rs"],
+            "rule: the wrapper never discards another agent's staging"
+        );
+    }
+
+    #[test]
+    fn a_leftover_planted_in_the_candidate_mid_gate_is_refused() {
+        let git = repo("adv-leftover");
+        let head = git.rev_parse("HEAD").unwrap();
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let candidate = git.root().join(CANDIDATE_DIR);
+        *fake.during_gate.borrow_mut() = Box::new(move || {
+            fixture::write(&candidate, "tests/stray.rs", "#[test] fn stray() {}\n");
+        });
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Refused, "report={report:#?}");
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("tests/stray.rs")),
+            "rule: a leftover file in the candidate refuses the commit (§11.10 step 3); \
+             report={report:#?}"
+        );
+        assert_eq!(git.rev_parse("HEAD").unwrap(), head);
+    }
+
+    #[test]
+    fn no_branch_or_linked_worktree_is_ever_created() {
+        let git = repo("adv-no-branches");
+        let before = git.branches_and_worktrees().unwrap();
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let report = commit_in(&git, &request(&["a.rs"]), &Fake::new());
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        let mut failing = Fake::new();
+        failing.passed = false;
+        fixture::write(git.root(), "b.rs", "b2\n");
+        let _ = commit_in(&git, &request(&["b.rs"]), &failing);
+        assert_eq!(
+            git.branches_and_worktrees().unwrap(),
+            before,
+            "rule: the wrapper never creates a branch or a linked worktree (D-16)"
+        );
     }
 }

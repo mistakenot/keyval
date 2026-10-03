@@ -329,7 +329,14 @@ impl SelectorRunner for LiveRunner {
                     .map(|checks| {
                         checks
                             .iter()
-                            .map(|c| format!("{} {} {}", c["id"], c["status"], c["passed"]))
+                            .map(|c| {
+                                format!(
+                                    "{} {} ({} cases)",
+                                    c["id"].as_str().unwrap_or("?"),
+                                    c["status"].as_str().unwrap_or("?"),
+                                    c["passed"]
+                                )
+                            })
                             .collect()
                     })
                     .unwrap_or_default();

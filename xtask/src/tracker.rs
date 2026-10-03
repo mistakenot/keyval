@@ -43,7 +43,11 @@ pub struct LiveTracker {
 impl LiveTracker {
     fn br(&self, args: &[&str]) -> Result<String, String> {
         let mut cmd = Command::new("br");
-        cmd.args(args).current_dir(&self.root);
+        // Always this workspace's .beads/: an inherited BEADS_DB must never redirect a
+        // closure (or a test's scratch tracker) to another database.
+        cmd.args(args)
+            .current_dir(&self.root)
+            .env_remove("BEADS_DB");
         let captured = process::run(&mut cmd, BR_LIMIT)
             .map_err(|err| format!("br {}: {err}", args.join(" ")))?;
         if captured.status.success() {
@@ -124,6 +128,83 @@ impl Tracker for LiveTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::scratch_dir;
+
+    /// Runs `br` in a scratch workspace and returns its stdout.
+    fn br(root: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("br")
+            .args(args)
+            .current_dir(root)
+            .env_remove("BEADS_DB")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "br {args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn create(root: &std::path::Path, title: &str) -> String {
+        let value: serde_json::Value = serde_json::from_str(&br(
+            root,
+            &["create", title, "-t", "task", "-p", "1", "--json"],
+        ))
+        .unwrap();
+        let bead = if value.is_array() { &value[0] } else { &value };
+        bead["id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_failed_spike_stays_open_and_its_dependant_stays_blocked_in_the_real_tracker() {
+        let root = scratch_dir("tracker-failed-spike");
+        br(&root, &["init", "--prefix", "t", "--json"]);
+        let spike = create(&root, "spike");
+        let dependant = create(&root, "dependant");
+        let done = create(&root, "done");
+        br(&root, &["dep", "add", &dependant, &spike, "--json"]);
+        let tracker = LiveTracker { root: root.clone() };
+
+        tracker
+            .mark_failed(&spike, "evidence: reports/spike.md")
+            .unwrap();
+        tracker.close(&done, "accepted").unwrap();
+        tracker.flush().unwrap();
+
+        let failed = tracker.bead(&spike).unwrap();
+        assert_eq!(
+            failed.status, "open",
+            "rule: a failed spike is never closed (§11.4)"
+        );
+        for label in ["failed", "needs-owner"] {
+            assert!(failed.labels.contains(&label.to_owned()), "bead={failed:?}");
+        }
+        assert_eq!(tracker.bead(&done).unwrap().status, "closed");
+        let ready: serde_json::Value =
+            serde_json::from_str(&br(&root, &["ready", "--json"])).unwrap();
+        let ready_list = ready
+            .get("issues")
+            .unwrap_or(&ready)
+            .as_array()
+            .unwrap()
+            .clone();
+        let ready_ids: Vec<&str> = ready_list.iter().filter_map(|i| i["id"].as_str()).collect();
+        assert!(
+            !ready_ids.contains(&dependant.as_str()),
+            "rule: the failed spike stays open, so its dependants stay blocked (D-70); \
+             ready={ready_ids:?}"
+        );
+        let all: Vec<String> = tracker
+            .all_beads()
+            .unwrap()
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        for id in [&spike, &dependant, &done] {
+            assert!(all.contains(id), "all={all:?}");
+        }
+        assert!(
+            root.join(".beads/issues.jsonl").is_file(),
+            "rule: flush exports the tracker for the closure commit"
+        );
+    }
 
     #[test]
     fn beads_parse_from_br_json() {

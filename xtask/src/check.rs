@@ -294,7 +294,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["commit::", "candidate::", "git::"],
         },
-        min_cases: 14,
+        min_cases: 23,
     },
     CheckDef {
         id: "DEV-ACCEPT",
@@ -307,7 +307,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["accept::", "tracker::"],
         },
-        min_cases: 7,
+        min_cases: 8,
     },
     CheckDef {
         id: "DEV-CLOSE",
