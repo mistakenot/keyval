@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document version | 1.8 |
+| Document version | 1.9 |
 | Status | **Active** — approved by the owner on 2026-10-01 after five independent review rounds and a fix-verification pass (D-43…D-76, §16); all §15 dispositions accepted at their defaults. Change control per §0.5 and §16. |
 | Last revised | 2026-10-03 |
 | Owner | Project owner (the human running the swarm) |
@@ -1966,7 +1966,7 @@ Items marked **disposition required** change what a requirement guarantees, so v
 | D-02 | **Raft** as consensus protocol | Decided | Best documented; widely implemented |
 | D-03 | **5 nodes**, tolerating 2 failures | Decided | Owner choice; richer failure scenarios than 3 |
 | D-04 | **Single Raft group** in v1 | Decided | Simplest; sharding is v2+ |
-| D-05 | **Borrow a Raft library behind a Consensus port.** Primary: `raft-rs` 0.7.0, vendored, pinned, with a minimal entropy patch. Fallback: OpenRaft 0.9.x. | Proposed (pending W02) | See below |
+| D-05 | **Borrow a Raft library behind a Consensus port.** Primary: `raft-rs` 0.7.0, vendored, pinned, with a minimal entropy patch. Fallback: OpenRaft 0.9.x. | Decided (W02 GO; v1.9, 2026-10-03) | See below |
 | D-06 | **Reads served locally by any ready node, may be stale**; report `served_by.applied_index` | Decided | Owner accepts staleness; simplest; keeps reads available in partitions |
 | D-07 | **Required request IDs; a replicated request history that never expires; conflict detection by command digest** | Decided | The only way to make every retry safe without a client-session protocol; a bounded window cannot tell a forgotten retry from a new write |
 | D-08 | **Static membership** in v1 | Proposed | Simplest; dynamic membership is v2 |
@@ -2063,6 +2063,14 @@ OpenRaft, fallback:
 - **Cons**
   - Async and runtime-driven, so full determinism under our harness is harder to guarantee. Its own maintainers note that a simulated runtime alone does not make it fully deterministic.
   - The 0.10 line is still alpha; the 0.9 line is bug-fix only.
+
+**W02 outcome (v1.9, 2026-10-03): GO.**
+
+- **Decision:** the owner's, on W02.5 (`br-w02-5-go-no-go-8zy`).
+- **Determinism:** `raft-rs` 0.7.0 is vendored, pinned and patched with the mandatory vendored entropy trait. It gave byte-identical spike-local traces for 100 seeds × 3 fresh processes, including crash-restart and re-election, and a wall-clock control diverges (`./dev check SPIKE-DETERMINISM`). This is simulation-evidenced, not proof.
+- **The patch:** it touches no vote, log-matching, quorum or commit rule, and every upstream test passes with it.
+- **Consequences:** W13 may start. The OpenRaft fallback stays recorded but unused.
+- **Evidence:** `spike/go-no-go.md`, which also records the risks carried forward: U-1 and U-2 to W13, U-3 and U-4 to W08.
 
 **D-14 detail: simulator approach**
 
