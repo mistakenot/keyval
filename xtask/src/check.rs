@@ -395,6 +395,20 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 12,
     },
     CheckDef {
+        id: "REGISTRY-FILES",
+        summary: "registry/requirements.toml equals PLAN.md §6 with derived statuses, and \
+                  registry/checks.toml mirrors the check catalogue",
+        kind: Kind::TestGroup,
+        covers: &["P5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["registry::files::"],
+        },
+        min_cases: 4,
+    },
+    CheckDef {
         id: "DEV-PRUNE",
         summary: "./dev prune keeps the newest accept trees and every failing run, removes \
                   the rest with their target dirs, and logs every removal",

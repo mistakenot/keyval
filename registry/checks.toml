@@ -1,0 +1,370 @@
+# The verification registry's checks (PLAN.md §10.13): one row per registered check.
+# Until W05.2 makes this file the catalogue's source, it mirrors the bootstrap
+# catalogue in xtask/src/check.rs exactly; a test fails on any difference, so a new
+# check lands with its row here in the same commit (§11.5 rule 12).
+#
+# `status` is declared and forward-only (planned -> implemented, D-56): moving a check
+# back needs an owner-approved plan-change. `run` is the exact ./dev check selector,
+# `min_cases` is never zero, and `catches` is only for bug variants (§10.6).
+
+schema = "keyval.registry.checks/v1"
+
+[[check]]
+id = "XTASK"
+summary = "the whole xtask test suite (the bootstrap gate's xtask tests, §10.10)"
+kind = "test_group"
+covers = ["P7", "P10", "O-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check XTASK"
+min_cases = 40
+status = "implemented"
+
+[[check]]
+id = "DEV-DOCTOR"
+summary = "./dev doctor reports each tool's version and fails on a missing one"
+kind = "test_group"
+covers = ["O-8"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-DOCTOR"
+min_cases = 10
+status = "implemented"
+
+[[check]]
+id = "DEV-CHECK"
+summary = "./dev check fails unknown IDs, zero-case selections and ignored cases"
+kind = "test_group"
+covers = ["P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-CHECK"
+min_cases = 6
+status = "implemented"
+
+[[check]]
+id = "LINT-PROBES"
+summary = "every denied lint and determinism entry fires on a probe; controls pass"
+kind = "test_group"
+covers = ["CD-5", "CD-8", "CD-11", "P4", "T-1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check LINT-PROBES"
+min_cases = 19
+status = "implemented"
+
+[[check]]
+id = "LINT-ALLOWS"
+summary = "no first-party allow of a CD lint; every other allow names its bead"
+kind = "static"
+covers = ["CD-5", "CD-8", "CD-11", "P4"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check LINT-ALLOWS"
+min_cases = 10
+status = "implemented"
+
+[[check]]
+id = "LINT-TIERS"
+summary = "every crate inherits the workspace lints; deterministic crates carry the canonical deterministic configuration"
+kind = "static"
+covers = ["CD-5", "CD-11", "P4", "T-1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check LINT-TIERS"
+min_cases = 4
+status = "implemented"
+
+[[check]]
+id = "DEP-RULE"
+summary = "dependencies point inward only; oracles depend on no production crate"
+kind = "static"
+covers = ["CD-1", "P3", "T-12", "P4"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEP-RULE"
+min_cases = 4
+status = "implemented"
+
+[[check]]
+id = "DEP-LEDGER"
+summary = "every direct dependency is in DEPENDENCIES.md at its locked version"
+kind = "static"
+covers = ["CD-12"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEP-LEDGER"
+min_cases = 5
+status = "implemented"
+
+[[check]]
+id = "AGENTS-RULES"
+summary = "AGENTS.md carries every PLAN.md §11.5 rule verbatim and replaces the ACFS git checklist"
+kind = "static"
+covers = ["P7", "P9", "CD-12"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check AGENTS-RULES"
+min_cases = 18
+status = "implemented"
+
+[[check]]
+id = "RAFT-VENDOR"
+summary = "vendor/raft matches VENDOR.toml file for file, and raft-proto's code generation stays pinned (vendored output, no build script)"
+kind = "static"
+covers = ["P4", "T-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check RAFT-VENDOR"
+min_cases = 83
+status = "implemented"
+
+[[check]]
+id = "SPEC"
+summary = "api/openapi.yaml meets PLAN.md §8 (OpenAPI 3.1, operations, codes, no-store, byte limits, §8.6 examples); instance fixtures hold; every mutant breaks its rule"
+kind = "static"
+covers = ["F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "O-1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check SPEC"
+min_cases = 174
+status = "implemented"
+
+[[check]]
+id = "WORKGRAPH"
+summary = "registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 (id, deps, reqs, area) and is acyclic (§10.13 condition 8, plan half)"
+kind = "static"
+covers = ["G1", "P5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check WORKGRAPH"
+min_cases = 501
+status = "implemented"
+
+[[check]]
+id = "DEV-BEADS"
+summary = "./dev beads import adopts or creates one bead per work item, mirrors only work-item edges, records bead IDs, refuses drift and is idempotent"
+kind = "test_group"
+covers = ["G1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-BEADS"
+min_cases = 18
+status = "implemented"
+
+[[check]]
+id = "DEV-GATE"
+summary = "./dev gate judges an exact tree, fails vacuous steps and writes a receipt"
+kind = "test_group"
+covers = ["P7", "P10", "P11"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-GATE"
+min_cases = 8
+status = "implemented"
+
+[[check]]
+id = "DEV-STEPLOG"
+summary = "scripted flows log expected/observed/rerun step records; skips fail"
+kind = "test_group"
+covers = ["P10", "T-4"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-STEPLOG"
+min_cases = 6
+status = "implemented"
+
+[[check]]
+id = "DEV-COMMIT"
+summary = "./dev commit gates and commits exactly the staged tree of the named paths"
+kind = "test_group"
+covers = ["P11"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-COMMIT"
+min_cases = 23
+status = "implemented"
+
+[[check]]
+id = "DEV-ACCEPT"
+summary = "./dev accept runs a bead's selectors on a committed tree in its own dir"
+kind = "test_group"
+covers = ["P11", "P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-ACCEPT"
+min_cases = 8
+status = "implemented"
+
+[[check]]
+id = "DEV-CLOSE"
+summary = "closure needs a receipt for the work tree; activation waits for the last canonical parent; a failed spike stays open"
+kind = "test_group"
+covers = ["P11", "P5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-CLOSE"
+min_cases = 12
+status = "implemented"
+
+[[check]]
+id = "REGISTRY-FILES"
+summary = "registry/requirements.toml equals PLAN.md §6 with derived statuses, and registry/checks.toml mirrors the check catalogue"
+kind = "test_group"
+covers = ["P5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check REGISTRY-FILES"
+min_cases = 4
+status = "implemented"
+
+[[check]]
+id = "DEV-PRUNE"
+summary = "./dev prune keeps the newest accept trees and every failing run, removes the rest with their target dirs, and logs every removal"
+kind = "test_group"
+covers = ["CD-9"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-PRUNE"
+min_cases = 9
+status = "implemented"
+
+[[check]]
+id = "DEV-SCHEMAS"
+summary = "every versioned ./dev JSON output matches its schema in schemas/dev/, and each schema rejects its negative fixture"
+kind = "test_group"
+covers = ["O-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-SCHEMAS"
+min_cases = 18
+status = "implemented"
+
+[[check]]
+id = "INVARIANT"
+summary = "invariant! holds silently and panics with its ID and context (CD-7)"
+kind = "test_group"
+covers = ["CD-7", "CD-8"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check INVARIANT"
+min_cases = 3
+status = "implemented"
+
+[[check]]
+id = "NEWTYPES"
+summary = "each kind of quantity has its own type; ranges (D-77, F-4), checked arithmetic and explicit conversions hold at their edges"
+kind = "test_group"
+covers = ["CD-3", "CD-4"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check NEWTYPES"
+min_cases = 13
+status = "implemented"
+
+[[check]]
+id = "KEY-VALUE"
+summary = "Key::parse and Value::parse enforce DM-1/DM-2 in decoded UTF-8 bytes; keys are stored exactly and order byte-wise (DM-4)"
+kind = "test_group"
+covers = ["DM-1", "DM-2", "DM-4", "CD-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check KEY-VALUE"
+min_cases = 5
+status = "implemented"
+
+[[check]]
+id = "DOMAIN-ENUMS"
+summary = "lifecycle, CAS expectation, mutation, decision and attempt states are enums whose invalid combinations cannot be built (CD-2)"
+kind = "test_group"
+covers = ["CD-2", "CD-5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DOMAIN-ENUMS"
+min_cases = 7
+status = "implemented"
+
+[[check]]
+id = "ERROR-CODES"
+summary = "ErrorCode equals api/openapi.yaml's error codes in order, with the §8.4 statuses and terminality"
+kind = "test_group"
+covers = ["CD-6", "F-10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check ERROR-CODES"
+min_cases = 3
+status = "implemented"
+
+[[check]]
+id = "PORTS"
+summary = "the ports are core-owned types: inbound step -> ordered effects, stale completions recognisable, bounded in-process reads, a library-neutral Consensus port (§7.2, §7.3)"
+kind = "test_group"
+covers = ["CD-1", "T-1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check PORTS"
+min_cases = 11
+status = "implemented"
+
+[[check]]
+id = "COMPILE-FAIL"
+summary = "forging a types value past its constructor, or comparing a Version with a LogIndex, does not compile (CD-2, CD-3, CD-4)"
+kind = "test_group"
+covers = ["CD-2", "CD-3", "CD-4"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check COMPILE-FAIL"
+min_cases = 10
+status = "implemented"
+
+[[check]]
+id = "DEP-RULE-FIXTURES"
+summary = "the dependency rule rejects each forbidden edge, including a deterministic crate on an adapter crate (CD-1, T-12)"
+kind = "test_group"
+covers = ["CD-1", "T-12"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEP-RULE-FIXTURES"
+min_cases = 9
+status = "implemented"
+
+[[check]]
+id = "SPIKE-DETERMINISM"
+summary = "the Raft spike's seeded 3-node loop gives byte-identical traces for 100 seeds x 3 fresh processes, with crash-restart and re-election, and a wall-clock control diverges (§7.3, W02)"
+kind = "static"
+covers = ["P4", "T-3", "T-11"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check SPIKE-DETERMINISM"
+min_cases = 301
+status = "implemented"

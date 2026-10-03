@@ -313,13 +313,17 @@ output only together with its schema, and bump the version when the change break
   clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, DEV-PRUNE, DEV-SCHEMAS,
-  LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR,
-  SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES,
-  PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM. Unknown IDs, zero-case
-  selections, `#[ignore]`d cases and runs below the check's minimum case count fail (P10).
-  A failure prints its exact re-run command.
-  Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
+  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, DEV-PRUNE,
+  DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES,
+  RAFT-VENDOR, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS,
+  ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM. Unknown IDs,
+  zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
+  fail (P10). A failure prints its exact re-run command.
+  The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
+  mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
+  REGISTRY-FILES fails (rule 12). W05.2 makes the file the catalogue's source.
+  `registry/requirements.toml` holds every §6 requirement; its statuses are derived
+  (rule 12), so a closure outside `./dev commit --close` applies the activation itself.
   Every check has exactly one `// check: <ID>` marker in code.
 - `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit
   wrapper (see Git Discipline). `./dev commit --close <id> -m MSG` closes a bead (§11.3

@@ -330,3 +330,257 @@ title = "Robot mode"
         assert!(parse_requirements(text).is_err_and(|e| e.contains("passed")));
     }
 }
+
+/// The committed registry files (W05.1): `requirements.toml` equals PLAN.md §6 with derived
+/// statuses, and `checks.toml` mirrors the bootstrap catalogue in `check.rs`. W05.2 turns
+/// these into the T0 registry gate's conditions; until then they hold the files in step.
+#[cfg(test)]
+mod files {
+    // check: REGISTRY-FILES
+    use super::*;
+    use crate::check::CATALOGUE;
+    use crate::test_support::workspace_root;
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    const CHECKS: &str = "registry/checks.toml";
+    const TRACKER_EXPORT: &str = ".beads/issues.jsonl";
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RequirementsFile {
+        schema: String,
+        requirement: Vec<RequirementEntry>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RequirementEntry {
+        id: String,
+        level: String,
+        status: String,
+        title: String,
+        #[serde(default)]
+        notes: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ChecksFile {
+        schema: String,
+        check: Vec<CheckEntry>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CheckEntry {
+        id: String,
+        summary: String,
+        kind: String,
+        covers: Vec<String>,
+        api: Vec<String>,
+        class: String,
+        tier: String,
+        run: String,
+        min_cases: u32,
+        status: String,
+        #[serde(default)]
+        catches: Vec<String>,
+    }
+
+    fn read(path: &str) -> String {
+        let full = workspace_root().join(path);
+        fs::read_to_string(&full).unwrap_or_else(|err| panic!("{}: {err}", full.display()))
+    }
+
+    fn requirements_file() -> RequirementsFile {
+        toml::from_str(&read(REQUIREMENTS)).unwrap_or_else(|err| panic!("{REQUIREMENTS}: {err}"))
+    }
+
+    /// PLAN.md §6's requirement rows as `(id, level)`, in plan order.
+    fn plan_section_6(plan: &str) -> Vec<(String, String)> {
+        let section = plan
+            .split("\n## 6. Requirements")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## 7.").next())
+            .unwrap_or_default();
+        section
+            .lines()
+            .filter_map(|line| {
+                let mut cells = line.strip_prefix("| ")?.split(" | ");
+                let (id, level) = (cells.next()?, cells.next()?);
+                matches!(level, "MUST" | "SHOULD" | "MAY")
+                    .then(|| (id.to_owned(), level.to_owned()))
+            })
+            .collect()
+    }
+
+    /// The work items with a closed bead in the tracker export, judged as `./dev commit
+    /// --close` judges them: any bead recorded for the item, or labelled `plan:<id>`.
+    fn closed_items(items: &[Item], export: &str) -> BTreeSet<String> {
+        let beads: Vec<serde_json::Value> = export
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        items
+            .iter()
+            .filter(|item| {
+                let label = format!("plan:{}", item.id);
+                beads.iter().any(|bead| {
+                    let labelled = bead["labels"]
+                        .as_array()
+                        .is_some_and(|labels| labels.iter().any(|l| l == label.as_str()));
+                    (bead["id"] == item.bead.as_str() || labelled) && bead["status"] == "closed"
+                })
+            })
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    /// The status §10.13 derives for requirement `id`: `active` once every work item listing
+    /// it has closed, and `planned` while one is open or none lists it (never vacuously
+    /// active, P10).
+    fn derived_status(items: &[Item], id: &str, closed: &BTreeSet<String>) -> &'static str {
+        let listing: Vec<&Item> = items
+            .iter()
+            .filter(|item| item.reqs.iter().any(|r| r == id))
+            .collect();
+        if !listing.is_empty() && listing.iter().all(|item| closed.contains(&item.id)) {
+            "active"
+        } else {
+            "planned"
+        }
+    }
+
+    #[test]
+    fn requirements_toml_equals_plan_section_6() {
+        let file = requirements_file();
+        assert_eq!(file.schema, "keyval.registry.requirements/v1");
+        let rows: Vec<(String, String)> = file
+            .requirement
+            .iter()
+            .map(|r| (r.id.clone(), r.level.clone()))
+            .collect();
+        let plan = plan_section_6(&read("PLAN.md"));
+        assert!(plan.len() >= 60, "PLAN.md §6 parsed to {} rows", plan.len());
+        assert_eq!(
+            rows, plan,
+            "rule: requirement IDs, levels and order equal PLAN.md §6; the plan wins (§0.4, \
+             §10.13 condition 1)"
+        );
+        for r in &file.requirement {
+            assert!(
+                !r.title.trim().is_empty(),
+                "rule: every row has a title; {r:?}"
+            );
+            assert!(
+                r.level == "MUST" || r.notes.as_deref().is_some_and(|n| !n.trim().is_empty()),
+                "rule: a SHOULD or MAY requirement records its disposition (§13); {r:?}"
+            );
+        }
+        assert!(
+            parse_requirements(&read(REQUIREMENTS)).is_ok(),
+            "rule: statuses are planned or active"
+        );
+    }
+
+    #[test]
+    fn requirement_statuses_are_derived_from_the_work_graph_and_the_tracker() {
+        let items = parse_workgraph(&read(WORKGRAPH)).unwrap();
+        let closed = closed_items(&items, &read(TRACKER_EXPORT));
+        let wrong: Vec<String> = requirements_file()
+            .requirement
+            .iter()
+            .filter_map(|r| {
+                let derived = derived_status(&items, &r.id, &closed);
+                (r.status != derived)
+                    .then(|| format!("{} is {} but derives {derived}", r.id, r.status))
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "rule: a requirement's status is derived from the closed work items listing it, \
+             never typed by hand (§10.13, §11.5 rule 12); a closure outside ./dev commit \
+             --close must apply the activation too: {wrong:?} (closed items: {closed:?})"
+        );
+    }
+
+    #[test]
+    fn a_requirement_activates_only_when_every_listing_item_is_closed() {
+        let items = parse_workgraph(
+            "[[item]]\nid = \"W01\"\nreqs = [\"O-8\", \"P7\"]\n\n\
+             [[item]]\nid = \"W49\"\nreqs = [\"O-8\"]\n",
+        )
+        .unwrap();
+        let none = BTreeSet::new();
+        let w01: BTreeSet<String> = ["W01".to_owned()].into();
+        let both: BTreeSet<String> = ["W01".to_owned(), "W49".to_owned()].into();
+        assert_eq!(derived_status(&items, "O-8", &none), "planned");
+        assert_eq!(
+            derived_status(&items, "O-8", &w01),
+            "planned",
+            "rule: one open listing item keeps it planned"
+        );
+        assert_eq!(derived_status(&items, "O-8", &both), "active");
+        assert_eq!(
+            derived_status(&items, "C-7", &both),
+            "planned",
+            "rule: a requirement no item lists is never vacuously active (P10)"
+        );
+        let export = "{\"id\":\"br-a\",\"status\":\"closed\",\"labels\":[\"plan:W01\"]}\n\
+                      {\"id\":\"br-b\",\"status\":\"open\",\"labels\":[\"plan:W49\"]}\n";
+        assert_eq!(closed_items(&items, export), w01);
+    }
+
+    #[test]
+    fn checks_toml_mirrors_the_bootstrap_catalogue() {
+        let file: ChecksFile =
+            toml::from_str(&read(CHECKS)).unwrap_or_else(|err| panic!("{CHECKS}: {err}"));
+        assert_eq!(file.schema, "keyval.registry.checks/v1");
+        let ids: Vec<&str> = file.check.iter().map(|c| c.id.as_str()).collect();
+        let catalogue: Vec<&str> = CATALOGUE.iter().map(|def| def.id).collect();
+        assert_eq!(
+            ids, catalogue,
+            "rule: checks.toml has one row per catalogue check, in catalogue order, until \
+             W05.2; a new check lands with its row (§11.5 rule 12)"
+        );
+        for (row, def) in file.check.iter().zip(CATALOGUE) {
+            let json = |value: serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+            let expected = (
+                def.summary.to_owned(),
+                json(serde_json::to_value(def.kind).unwrap()),
+                def.covers
+                    .iter()
+                    .map(|c| (*c).to_owned())
+                    .collect::<Vec<_>>(),
+                json(serde_json::to_value(def.class).unwrap()),
+                json(serde_json::to_value(def.tier).unwrap()),
+                format!("./dev check {}", def.id),
+                def.min_cases,
+            );
+            let observed = (
+                row.summary.clone(),
+                row.kind.clone(),
+                row.covers.clone(),
+                row.class.clone(),
+                row.tier.clone(),
+                row.run.clone(),
+                row.min_cases,
+            );
+            assert_eq!(
+                observed, expected,
+                "rule: checks.toml row {} mirrors check.rs",
+                def.id
+            );
+            assert!(
+                row.min_cases > 0 && row.status == "implemented",
+                "rule: min_cases is never zero, and every catalogue check is implemented \
+                 (D-56); {row:?}"
+            );
+            assert!(
+                row.api.is_empty() && row.catches.is_empty(),
+                "rule: no current check names API operations or catches bug variants; {row:?}"
+            );
+        }
+    }
+}
