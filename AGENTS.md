@@ -48,13 +48,19 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
   2026-10-03 (`origin` = github.com/mistakenot/keyval, private; bead
   `br-owner-create-remote-push-trjy`). Pushes go to `origin main` and are mirrored to
   `origin main:master` (suite convention).
-- **A single coordinator agent commits for everyone until the owner launches the
-  self-serve swarm** (§11.2 step 2; §17 step 6: after W04, W06 and W07 land).
-  Coordinator since 2026-10-03: GoldenHorizon.
-  - Everyone else does not touch git. Keep your files unstaged, and ask in your bead's
-    Agent Mail thread, giving the exact paths, the parent and the expected tree ID.
-  - The coordinator re-gates exactly that tree on a frozen, git-isolated candidate
-    and commits it. The tracker export (`.beads/`) goes in separate beads-only
+- **Self-serve: every agent commits its own bead** (§11.2 step 2, §17 step 6). The owner
+  launched the self-serve swarm on 2026-10-03, after W04, W06 and W07 landed. Until
+  then a single coordinator committed for everyone.
+  - Commit your bead's work with `./dev commit --bead <id> <paths>`. Close it with
+    `./dev accept <id> --tree <tree of the work commit>` and then
+    `./dev commit --close <id>`, holding a short reservation on `.beads/issues.jsonl`
+    for the closure. Never raw `git add`/`git commit`.
+  - **Fallback committer: GoldenHorizon.** `./dev` in the shared checkout builds xtask
+    from the working tree, so another agent's unfinished edit (for example to
+    `check.rs` or `main.rs`) can break the wrapper's own build. Don't work around it.
+    Send the request in your bead's Agent Mail thread, with the exact paths, the parent
+    and the expected tree ID, and the fallback committer commits it from a frozen,
+    git-isolated candidate. The tracker export (`.beads/`) goes in separate beads-only
     commits.
 - **W07 has landed the wrapper:**
   - `./dev commit --bead <id> <path>…` (§11.10) takes the commit lock and checks:
@@ -73,8 +79,8 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
     meanwhile.
   - It commits exactly the gated tree, compare-and-swapping `main` from its parent
     (trailer `Bead: <id>`), pushes, and writes a receipt.
-  - When self-serve starts, set `AGENT_NAME` (or pass `--agent`) to your Agent Mail
-    name.
+  - Set `AGENT_NAME` (or pass `--agent`) to your Agent Mail name: the wrapper checks
+    that agent's live reservations.
 
 ---
 
@@ -447,8 +453,9 @@ Practicalities:
   in-thread. Check your inbox at natural pause points; acknowledge what you read.
 - Work selection: `bv --robot-triage` → claim in `br` → reserve → work → commit →
   `./dev accept <id> --tree <tree of the work commit>` → `./dev commit --close <id>` →
-  release reservations. Until the owner launches self-serve, the coordinator runs the
-  git steps for you (Git Discipline, above).
+  release reservations. You run every step yourself (self-serve since 2026-10-03); the
+  fallback committer takes over only when the shared-checkout build breaks (Git
+  Discipline, above).
 - The tool-managed sections below (Agent Mail, Beads, bv, ee) are appended by those
   tools; edit them only via the owning tool (`am docs`, `br agents`, `bv --agents-*`,
   `ee export agentsmd`).
