@@ -52,8 +52,8 @@ info:
     Every error has the same envelope, `{"error": {"code", "message", "details"}}`.
     `code` is one of the twelve codes below; `message` is human-readable text with no
     contract; `details` is always present, possibly empty, and its schema is fixed by
-    the code (and, for `busy`, `unavailable` and `recovering`, by whether the request
-    was a write). Write errors use exactly three `details` shapes:
+    the code (and, for `invalid_request`, `busy`, `unavailable` and `recovering`, by
+    whether the request was a write). Write errors use exactly three `details` shapes:
 
     1. **Terminal execution results** (`version_mismatch`, `capacity_exceeded`): always
        `request_id`, `index` (the first execution's log index), `replayed` and the
@@ -224,7 +224,7 @@ paths:
         '504':
           $ref: '#/components/responses/UnknownOutcome'
         '507':
-          $ref: '#/components/responses/SetCapacity'
+          $ref: '#/components/responses/VersionedWriteCapacity'
     delete:
       operationId: deleteKey
       tags: [kv]
@@ -352,7 +352,7 @@ paths:
         '504':
           $ref: '#/components/responses/UnknownOutcome'
         '507':
-          $ref: '#/components/responses/SetCapacity'
+          $ref: '#/components/responses/VersionedWriteCapacity'
   /v1/scan:
     get:
       operationId: scanKeys
@@ -710,7 +710,7 @@ components:
                       - http://127.0.0.1:7003
                       - http://127.0.0.1:7004
                       - http://127.0.0.1:7005
-    SetCapacity:
+    VersionedWriteCapacity:
       description: >-
         `capacity_exceeded`: the live-state quota (DM-6) refused the executed write, a
         committed terminal decision. `history_full`: the history capacity (DM-7)
@@ -1064,6 +1064,7 @@ components:
         node_id:
           $ref: '#/components/schemas/NodeId'
         lifecycle:
+          $ref: '#/components/schemas/Lifecycle'
           const: ready
     Role:
       description: >-
@@ -1135,7 +1136,8 @@ components:
     ErrorCode:
       description: >-
         Every error code (§8.4). The domain error type's variants match this list
-        exactly (§10.13 condition 5).
+        exactly (§10.13 condition 5). Every error schema's `code` references this enum
+        beside its `const`, so a code outside this list cannot validate.
       type: string
       enum:
         - not_leader
@@ -1161,6 +1163,7 @@ components:
       enum: [not_submitted, submitted]
     NotReadyLifecycle:
       description: A lifecycle state in which the node serves no reads and admits no writes.
+      $ref: '#/components/schemas/Lifecycle'
       type: string
       enum: [starting, recovering, failed]
     NodeList:
@@ -1196,6 +1199,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: not_leader
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1210,6 +1214,7 @@ components:
                 request_id:
                   $ref: '#/components/schemas/RequestId'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: not_submitted
     InvalidWriteRequestError:
       description: >-
@@ -1225,6 +1230,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: invalid_request
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1246,6 +1252,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: invalid_request
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1264,6 +1271,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: not_found
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1290,6 +1298,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: version_mismatch
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1323,6 +1332,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: request_id_conflict
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1349,6 +1359,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: too_large
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1370,6 +1381,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: busy
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1381,6 +1393,7 @@ components:
                 request_id:
                   $ref: '#/components/schemas/RequestId'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: not_submitted
     BusyReadError:
       description: '`429 busy` on a read or status lookup; it carries no write fields.'
@@ -1394,6 +1407,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: busy
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1414,6 +1428,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: unavailable
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1425,6 +1440,7 @@ components:
                 request_id:
                   $ref: '#/components/schemas/RequestId'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: not_submitted
                 nodes:
                   $ref: '#/components/schemas/NodeList'
@@ -1440,6 +1456,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: unavailable
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1464,6 +1481,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: recovering
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1477,6 +1495,7 @@ components:
                 request_id:
                   $ref: '#/components/schemas/RequestId'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: not_submitted
     RecoveringReadError:
       description: >-
@@ -1492,6 +1511,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: recovering
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1516,6 +1536,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: unknown_outcome
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1527,6 +1548,7 @@ components:
                 request_id:
                   $ref: '#/components/schemas/RequestId'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: submitted
                 guidance:
                   const: retry_same_request_or_query_status
@@ -1548,6 +1570,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: capacity_exceeded
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1578,6 +1601,7 @@ components:
           required: [code, message, details]
           properties:
             code:
+              $ref: '#/components/schemas/ErrorCode'
               const: history_full
             message:
               $ref: '#/components/schemas/ErrorMessage'
@@ -1591,4 +1615,5 @@ components:
                 limit:
                   $ref: '#/components/schemas/HistoryLimit'
                 attempt_state:
+                  $ref: '#/components/schemas/AttemptState'
                   const: not_submitted
