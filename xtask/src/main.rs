@@ -27,6 +27,7 @@ mod registry;
 #[cfg(test)]
 mod schemas;
 mod spec;
+mod spike;
 mod steplog;
 #[cfg(test)]
 mod test_support;

@@ -105,7 +105,6 @@ impl Cargo {
     }
 
     /// Plain local cargo.
-    #[cfg(test)]
     pub const fn local() -> Self {
         Self {
             runner: Runner::Local,
@@ -114,7 +113,6 @@ impl Cargo {
     }
 
     /// Builds into `dir` instead of the default target directory.
-    #[cfg(test)]
     pub fn with_target_dir(mut self, dir: PathBuf) -> Self {
         self.target_dir = Some(dir);
         self

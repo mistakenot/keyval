@@ -310,9 +310,9 @@ output only together with its schema, and bump the version when the change break
   DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, DEV-PRUNE, DEV-SCHEMAS,
   LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR,
   SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES,
-  PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES. Unknown IDs, zero-case selections, `#[ignore]`d
-  cases and runs below the check's minimum case count fail (P10). A failure prints its exact
-  re-run command.
+  PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM. Unknown IDs, zero-case
+  selections, `#[ignore]`d cases and runs below the check's minimum case count fail (P10).
+  A failure prints its exact re-run command.
   Until W05's `registry/checks.toml`, the catalogue is built into `xtask/src/check.rs`.
   Every check has exactly one `// check: <ID>` marker in code.
 - `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit

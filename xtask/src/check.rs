@@ -46,6 +46,8 @@ pub enum Kind {
 pub enum ClaimClass {
     /// Must hold on every execution; enforced by an assertion or checker.
     Invariant,
+    /// No violation in N runs of a stated build: evidence, not proof.
+    SimulationEvidenced,
 }
 
 /// The gate tier that runs a check (§10.10). W05 adds the other tiers.
@@ -90,6 +92,8 @@ pub enum StaticCheck {
     Spec,
     /// registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 and is acyclic (W06).
     Workgraph,
+    /// The Raft spike's traces are byte-identical across fresh processes (W02.4).
+    SpikeDeterminism,
 }
 
 impl StaticCheck {
@@ -104,6 +108,7 @@ impl StaticCheck {
             Self::RaftVendor => crate::vendor::check_vendor(root),
             Self::Spec => crate::spec::check_spec(root),
             Self::Workgraph => crate::workgraph::check_workgraph(root),
+            Self::SpikeDeterminism => crate::spike::check_spike(root),
         }
     }
 
@@ -118,6 +123,7 @@ impl StaticCheck {
             Self::RaftVendor => "RAFT-VENDOR",
             Self::Spec => "SPEC",
             Self::Workgraph => "WORKGRAPH",
+            Self::SpikeDeterminism => "SPIKE-DETERMINISM",
         }
     }
 
@@ -132,6 +138,7 @@ impl StaticCheck {
             Self::RaftVendor => "file(s)+assertion(s)",
             Self::Spec => "rule(s)+fixture(s)+mutant(s)",
             Self::Workgraph => "field(s)+edge(s)+rule(s)",
+            Self::SpikeDeterminism => "seed-process run(s)+control",
         }
     }
 }
@@ -532,6 +539,18 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["tiers::tests::"],
         },
         min_cases: 9,
+    },
+    CheckDef {
+        id: "SPIKE-DETERMINISM",
+        summary: "the Raft spike's seeded 3-node loop gives byte-identical traces for 100 seeds \
+                  x 3 fresh processes, with crash-restart and re-election, and a wall-clock \
+                  control diverges (§7.3, W02)",
+        kind: Kind::Static,
+        covers: &["P4", "T-3", "T-11"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::SpikeDeterminism),
+        min_cases: 301,
     },
 ];
 

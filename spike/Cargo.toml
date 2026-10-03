@@ -1,0 +1,37 @@
+# W02 Raft determinism spike (PLAN.md §7.3, §12.2 W02; W02.4). Area `spike`: W02 only, kept
+# as evidence (Appendix A).
+#
+# Its own workspace, not a member of the root one: DEP-RULE classifies every root member by
+# directory, and the spike is not a production tier. It depends on the patched vendored
+# raft-rs (vendor/raft, VENDOR.toml) with the only features keyval builds. The lint policy
+# restates the root [workspace.lints], because a separate workspace cannot inherit it.
+[workspace]
+
+[package]
+name = "keyval-raft-spike"
+version = "0.0.0"
+description = "W02: seeded 3-node raft-rs loop; fresh-process byte-identical traces"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[dependencies]
+raft = { path = "../vendor/raft/raft", default-features = false, features = ["protobuf-codec"] }
+# The generated eraftpb code needs exactly its generator's runtime (VENDOR.toml [codegen]).
+protobuf = "=2.28.0"
+slog = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"

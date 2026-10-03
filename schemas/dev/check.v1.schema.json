@@ -56,7 +56,7 @@
         "summary": { "type": ["string", "null"], "minLength": 1 },
         "kind": { "enum": ["test_group", "static", null] },
         "tier": { "enum": ["T0", null] },
-        "class": { "enum": ["invariant", null] },
+        "class": { "enum": ["invariant", "simulation_evidenced", null] },
         "covers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "min_cases": { "type": ["integer", "null"], "minimum": 1 },
         "selected": { "$ref": "#/$defs/count" },

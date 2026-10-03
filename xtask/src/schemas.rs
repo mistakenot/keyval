@@ -390,7 +390,7 @@ mod tests {
         assert_enum(check, "/$defs/result/properties/kind/enum", &kinds, true);
         let tiers = variants!(Tier: T0);
         assert_enum(check, "/$defs/result/properties/tier/enum", &tiers, true);
-        let classes = variants!(ClaimClass: Invariant);
+        let classes = variants!(ClaimClass: Invariant, SimulationEvidenced);
         assert_enum(check, "/$defs/result/properties/class/enum", &classes, true);
         let runners = variants!(Runner: Rch, Local);
         assert_enum(check, "/properties/runner/enum", &runners, false);
