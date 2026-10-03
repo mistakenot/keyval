@@ -1,0 +1,747 @@
+openapi: 3.1.0
+info:
+  title: keyval HTTP API
+  version: 1.0.0
+  summary: Strongly consistent key-value store — public client API, v1.
+  description: |
+    The precise HTTP contract for keyval's public client API. It MUST match PLAN.md §8;
+    on any conflict, PLAN.md wins (§0.4).
+
+    ## Conventions (PLAN.md §8.1)
+
+    - **Base path** `/v1`. Request and response bodies are JSON, encoded as UTF-8.
+      A request with a body MUST send `Content-Type: application/json`.
+    - **Strict JSON.** Unknown fields, duplicate member names, malformed UTF-8 and
+      malformed numbers are rejected with `400 invalid_request`. Every request-body
+      schema is closed (`additionalProperties: false`); the other three rules cannot
+      be expressed in JSON Schema and are stated here.
+    - **Keys are query parameters, never path segments.** A key may contain `/`, `?`
+      and `&`, so it travels in the query string, percent-encoded.
+    - **Query decoding.** `key`, `start`, `end` and `after` are percent-decoded per
+      RFC 3986. An **unescaped `+`** anywhere in a query value is rejected with
+      `400 invalid_request`: form-encoding libraries send a space as `+`, so treating
+      `+` as either a plus or a space would silently corrupt keys. Send a literal plus
+      as `%2B` and a space as `%20`. An invalid percent escape, invalid UTF-8 after
+      decoding, or a repeated parameter is also `400 invalid_request`. A `307`
+      `Location` re-encodes exactly the same decoded bytes.
+    - **No caching.** Every response, including reads, status lookups and health,
+      carries `Cache-Control: no-store`, so no intermediary can serve a stale
+      `served_by`, lifecycle or result.
+    - **Byte limits** (DM-1, DM-2) apply to the decoded UTF-8 bytes. JSON Schema's
+      `minLength`/`maxLength` count characters, not bytes, so each byte limit is
+      recorded in an `x-maxUtf8Bytes` extension on the schema it bounds. Where a
+      schema also carries `maxLength`, it is only a necessary condition (one character
+      is at least one byte); `x-maxUtf8Bytes` is the limit.
+    - **Writes** (PUT, DELETE, compare-and-swap) MUST carry an `Idempotency-Key` header
+      of exactly 32 lowercase hexadecimal characters (128 bits) (F-6). Its value is the
+      request ID.
+    - **Integers** (versions, indices, terms, node IDs) are plain JSON numbers, always
+      below 2^53, so every JSON client handles them exactly. A request integer at or
+      above 2^53 (for example a compare-and-swap `expected.version`) is
+      `400 invalid_request`.
+    - **Terminal results are immutable.** `request_id`, `index` and the decision never
+      change across retries or status lookups; only `served_by` and `replayed` may.
+
+    The peer channel (`POST /raft` on each node's peer address) is internal to the
+    cluster and is not part of this contract.
+servers:
+  - url: http://{address}
+    description: >-
+      One keyval node's client address. Every node accepts every request (F-7). The
+      local cluster's addresses come from `config/local.toml`; addresses default to
+      loopback, and the API is unauthenticated (O-9).
+    variables:
+      address:
+        default: 127.0.0.1:7001
+        description: The node's configured `client_address` (host:port).
+tags:
+  - name: kv
+    description: Reads and writes of keys.
+  - name: requests
+    description: Status of earlier write requests.
+  - name: health
+    description: Process liveness and read readiness.
+  - name: cluster
+    description: This node's view of the Raft group.
+paths:
+  /v1/kv:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    get:
+      operationId: getKey
+      tags: [kv]
+      summary: Read one key.
+      description: |
+        Returns the key's value and version from this node's current published view,
+        with no leader round-trip and no quorum (§7.9). The read reflects exactly the
+        committed prefix `[1..served_by.applied_index]`, which this node had applied
+        when it answered (C-3). Reads may be stale (C-7); `served_by` makes the
+        staleness visible.
+      x-requirements: [F-2]
+      responses:
+        '200':
+          description: The key is present.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadResult'
+    put:
+      operationId: putKey
+      tags: [kv]
+      summary: Set a key's value.
+      description: |
+        Sets the key to the value. A successful PUT executed at log index *i* gives
+        the key version *i*, so `version == index` (DM-3); a same-value PUT still gets
+        a new version. A repeated `Idempotency-Key` with the same command returns the
+        original terminal result without re-executing (`replayed: true`) (F-6).
+      x-requirements: [F-1, F-6]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutRequest'
+      responses:
+        '200':
+          description: The write executed, or this is a replay of its first execution.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionedWriteResult'
+    delete:
+      operationId: deleteKey
+      tags: [kv]
+      summary: Delete a key.
+      description: |
+        Removes the key and reports whether it existed. Deleting an absent key
+        succeeds with `existed: false` (F-3). DELETE assigns no version (DM-3). A
+        repeated `Idempotency-Key` with the same command returns the original terminal
+        result without re-executing (`replayed: true`) (F-6).
+      x-requirements: [F-3, F-6]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The delete executed, or this is a replay of its first execution.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResult'
+  /v1/cas:
+    post:
+      operationId: compareAndSwap
+      tags: [kv]
+      summary: Set a key only if its current state matches an expectation.
+      description: |
+        Sets the key only if, when the entry is applied (never at admission, C-5), the
+        key is absent (`expected.kind: absent`) or has exactly the expected version
+        (`expected.kind: version`). On success `version == index` (DM-3). A mismatch
+        changes nothing and is a committed, terminal result that consumes the request
+        ID; comparing again against newer state needs a new request ID (F-5). A
+        repeated `Idempotency-Key` with the same command returns the original terminal
+        result without re-executing (`replayed: true`) (F-6).
+      x-requirements: [F-5, F-6]
+      parameters:
+        - $ref: '#/components/parameters/Key'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CasRequest'
+      responses:
+        '200':
+          description: >-
+            The expectation matched and the write executed, or this is a replay of its
+            first execution.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionedWriteResult'
+  /v1/scan:
+    get:
+      operationId: scanKeys
+      tags: [kv]
+      summary: Read one page of keys in a range.
+      description: |
+        Returns keys in `[start, end)`, in ascending byte-wise order of their UTF-8
+        encoding (DM-4), with their values and versions (F-4, §8.5).
+
+        - Omitted bounds are unbounded. `start > end` is `400 invalid_request`; equal
+          bounds give an empty page. An empty key is invalid even as a bound: omit the
+          parameter instead.
+        - `after` is an exclusive lower continuation bound, intersected with the
+          range. `after ≥ end` gives an empty page.
+        - A page holds at most `limit` items and at most 1 MiB (1,048,576 bytes) of
+          decoded key+value bytes. Items are taken in order, summing
+          `len(key) + len(value)` in decoded bytes; the page stops before the item
+          that would exceed either cap, and the first item is always returned, so one
+          maximum-size item always fits (§7.11).
+        - Each page is copied from **one** applied prefix, the one reported in
+          `served_by` (C-8). `has_more` is true when another key in range existed
+          beyond the returned items in that view; then `next_after` is exactly the
+          last returned key, otherwise it is null.
+        - To continue, repeat the same range with `after=next_after`. Pages may come
+          from different prefixes or nodes, so keys inserted or deleted between pages
+          may be missed or appear, but a normally continued traversal never returns the
+          same key twice. There is no server-side cursor and no multi-page snapshot.
+      x-requirements: [F-4]
+      parameters:
+        - $ref: '#/components/parameters/ScanStart'
+        - $ref: '#/components/parameters/ScanEnd'
+        - $ref: '#/components/parameters/ScanAfter'
+        - $ref: '#/components/parameters/ScanLimit'
+      responses:
+        '200':
+          description: One page of the range.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanPage'
+  /v1/requests/{request_id}:
+    get:
+      operationId: getRequestStatus
+      tags: [requests]
+      summary: Look up the terminal result of an earlier write.
+      description: |
+        Returns the original terminal result if this node has applied the request, or
+        `unknown` otherwise (F-9). It never proposes anything. `unknown` never means
+        "did not happen": the request may still be in flight, or committed but not yet
+        applied here. The lookup is `200` whatever the stored decision was; the
+        embedded result says what happened (§8.3).
+      x-requirements: [F-9]
+      parameters:
+        - $ref: '#/components/parameters/RequestIdPath'
+      responses:
+        '200':
+          description: The request's state as known to this node.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestStatus'
+  /v1/health/live:
+    get:
+      operationId: getLiveness
+      tags: [health]
+      summary: Report that the process can answer, and its lifecycle state.
+      description: |
+        Answers whenever the process can answer at all, in every lifecycle state
+        (O-1). Recovery is visible here as `recovering` (§7.7).
+      x-requirements: [O-1]
+      responses:
+        '200':
+          description: The process is answering.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveHealth'
+  /v1/health/ready:
+    get:
+      operationId: getReadiness
+      tags: [health]
+      summary: Report whether a complete committed read view is available.
+      description: |
+        Returns `200` only when this node is `ready`, that is, a complete committed
+        read view is available and reads are served (O-1, §7.7 step 7).
+      x-requirements: [O-1]
+      responses:
+        '200':
+          description: The node is ready.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyHealth'
+  /v1/cluster:
+    get:
+      operationId: getClusterStatus
+      tags: [cluster]
+      summary: Report this node's view of the Raft group.
+      description: |
+        Reports this node's identity, Raft role and term, the leader it believes in
+        (if any), its durable last, commit and applied indices, and the configured
+        voters with replication progress where this node knows it (O-1). Every value
+        is this node's local view at the moment it answered.
+      x-requirements: [O-1]
+      responses:
+        '200':
+          description: This node's view of the group.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterStatus'
+components:
+  parameters:
+    Key:
+      name: key
+      in: query
+      required: true
+      description: >-
+        The key, percent-encoded per RFC 3986 (an unescaped `+` is rejected; see the
+        query-decoding convention). Its limits apply after decoding (DM-1).
+      schema:
+        $ref: '#/components/schemas/Key'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        The request ID: 32 lowercase hexadecimal characters (F-6). Every attempt of
+        one logical write, including retries and redirects, carries the same ID.
+      schema:
+        $ref: '#/components/schemas/RequestId'
+    RequestIdPath:
+      name: request_id
+      in: path
+      required: true
+      description: The request ID of the write to look up.
+      schema:
+        $ref: '#/components/schemas/RequestId'
+    ScanStart:
+      name: start
+      in: query
+      required: false
+      description: >-
+        Inclusive lower bound of the range, percent-encoded like `key`. Omit for an
+        unbounded start.
+      schema:
+        $ref: '#/components/schemas/Key'
+    ScanEnd:
+      name: end
+      in: query
+      required: false
+      description: >-
+        Exclusive upper bound of the range, percent-encoded like `key`. Omit for an
+        unbounded end.
+      schema:
+        $ref: '#/components/schemas/Key'
+    ScanAfter:
+      name: after
+      in: query
+      required: false
+      description: >-
+        Exclusive continuation bound, percent-encoded like `key`: pass the previous
+        page's `next_after`.
+      schema:
+        $ref: '#/components/schemas/Key'
+    ScanLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items in the page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 128
+        default: 32
+  headers:
+    CacheControl:
+      description: >-
+        Present on every response, with exactly this value, so that no intermediary
+        caches a read, status, health or error response (§8.1).
+      required: true
+      schema:
+        type: string
+        const: no-store
+  schemas:
+    Key:
+      description: |
+        A key (DM-1): a UTF-8 string of 1–256 bytes, measured after decoding (not
+        characters, not JSON-escaped length). Keys are stored exactly, with no case or
+        Unicode normalisation, so composed and decomposed forms are different keys.
+        Keys are ordered by the byte-wise lexicographic order of their UTF-8 encoding
+        (DM-4).
+      type: string
+      minLength: 1
+      maxLength: 256
+      x-maxUtf8Bytes: 256
+    Value:
+      description: |
+        A value (DM-2): a UTF-8 string of 0–65,536 bytes (64 KiB), measured after
+        decoding.
+      type: string
+      maxLength: 65536
+      x-maxUtf8Bytes: 65536
+    RequestId:
+      description: >-
+        A request ID: exactly 32 lowercase hexadecimal characters (128 bits) (F-6).
+        It identifies one logical write for the lifetime of the cluster; there is no
+        retention window (DM-5).
+      type: string
+      pattern: '^[0-9a-f]{32}$'
+    NodeId:
+      description: A configured node ID, nonzero and below 2^53.
+      type: integer
+      minimum: 1
+      maximum: 9007199254740991
+    EntryIndex:
+      description: >-
+        The log index of an entry. Raft log indices start at 1. Below 2^53.
+      type: integer
+      minimum: 1
+      maximum: 9007199254740991
+    ProgressIndex:
+      description: >-
+        A log position reported as progress (applied, committed, durable or matched).
+        It is 0 before any entry has reached that state. Below 2^53.
+      type: integer
+      minimum: 0
+      maximum: 9007199254740991
+    Version:
+      description: >-
+        A key version: the log index at which the PUT or compare-and-swap that set it
+        executed (DM-3). Versions strictly increase per key, including across delete
+        and re-create, and have gaps. Below 2^53.
+      type: integer
+      minimum: 1
+      maximum: 9007199254740991
+    Term:
+      description: A Raft term. Below 2^53.
+      type: integer
+      minimum: 0
+      maximum: 9007199254740991
+    NodeUrl:
+      description: >-
+        A node's client address as a base URL: scheme `http`, host and port, no path,
+        for example `http://127.0.0.1:7001`.
+      type: string
+      format: uri
+      pattern: '^http://[^/?#]+$'
+    ServedBy:
+      description: >-
+        Which node answered, and the applied prefix `[1..applied_index]` its answer
+        reflects (C-3). For a write result, `applied_index` is at least the write's
+        `index`, because a node acknowledges a write only after applying it (DUR-1).
+      type: object
+      additionalProperties: false
+      required: [node_id, applied_index]
+      properties:
+        node_id:
+          $ref: '#/components/schemas/NodeId'
+        applied_index:
+          $ref: '#/components/schemas/ProgressIndex'
+    PutRequest:
+      description: The body of a PUT.
+      type: object
+      additionalProperties: false
+      required: [value]
+      properties:
+        value:
+          $ref: '#/components/schemas/Value'
+    CasRequest:
+      description: The body of a compare-and-swap.
+      type: object
+      additionalProperties: false
+      required: [expected, value]
+      properties:
+        expected:
+          $ref: '#/components/schemas/CasExpectation'
+        value:
+          $ref: '#/components/schemas/Value'
+    CasExpectation:
+      description: >-
+        What the key's state must be when the entry is applied: absent, or present
+        with exactly this version (F-5).
+      oneOf:
+        - $ref: '#/components/schemas/ExpectAbsent'
+        - $ref: '#/components/schemas/ExpectVersion'
+      discriminator:
+        propertyName: kind
+        mapping:
+          absent: '#/components/schemas/ExpectAbsent'
+          version: '#/components/schemas/ExpectVersion'
+    ExpectAbsent:
+      description: The key must be absent.
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          const: absent
+    ExpectVersion:
+      description: The key must be present with exactly this version.
+      type: object
+      additionalProperties: false
+      required: [kind, version]
+      properties:
+        kind:
+          const: version
+        version:
+          $ref: '#/components/schemas/Version'
+    VersionedWriteResult:
+      description: >-
+        The result of a successful PUT or compare-and-swap. `index` is the log index
+        of the request's first execution, and `version == index` (§8.3).
+      type: object
+      additionalProperties: false
+      required: [request_id, index, version, replayed, served_by]
+      properties:
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+        index:
+          $ref: '#/components/schemas/EntryIndex'
+        version:
+          $ref: '#/components/schemas/Version'
+        replayed:
+          description: >-
+            True when this response returns a result recorded earlier (a retry or a
+            duplicate entry); the decision is the original one (§8.3).
+          type: boolean
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+    DeleteResult:
+      description: >-
+        The result of a DELETE. `index` is the log index of the request's first
+        execution; DELETE has no version (§8.3).
+      type: object
+      additionalProperties: false
+      required: [request_id, index, existed, replayed, served_by]
+      properties:
+        request_id:
+          $ref: '#/components/schemas/RequestId'
+        index:
+          $ref: '#/components/schemas/EntryIndex'
+        existed:
+          description: Whether the key existed when the delete was applied (F-3).
+          type: boolean
+        replayed:
+          description: >-
+            True when this response returns a result recorded earlier (a retry or a
+            duplicate entry); the decision is the original one (§8.3).
+          type: boolean
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+    ReadResult:
+      description: A present key, as of the applied prefix in `served_by` (F-2).
+      type: object
+      additionalProperties: false
+      required: [key, value, version, served_by]
+      properties:
+        key:
+          $ref: '#/components/schemas/Key'
+        value:
+          $ref: '#/components/schemas/Value'
+        version:
+          $ref: '#/components/schemas/Version'
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+    ScanItem:
+      description: One key in a SCAN page.
+      type: object
+      additionalProperties: false
+      required: [key, value, version]
+      properties:
+        key:
+          $ref: '#/components/schemas/Key'
+        value:
+          $ref: '#/components/schemas/Value'
+        version:
+          $ref: '#/components/schemas/Version'
+    ScanPage:
+      description: >-
+        One SCAN page, copied from the single applied prefix in `served_by` (C-8).
+        Items are unique and in ascending key order. When `has_more` is true,
+        `next_after` is exactly the last returned key; otherwise it is null.
+      type: object
+      additionalProperties: false
+      required: [items, has_more, next_after, served_by]
+      properties:
+        items:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/ScanItem'
+        has_more:
+          type: boolean
+        next_after:
+          oneOf:
+            - $ref: '#/components/schemas/Key'
+            - type: 'null'
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+      if:
+        required: [has_more]
+        properties:
+          has_more:
+            const: true
+      then:
+        properties:
+          items:
+            minItems: 1
+          next_after:
+            $ref: '#/components/schemas/Key'
+      else:
+        properties:
+          next_after:
+            type: 'null'
+    TerminalResult:
+      description: |
+        A write's stored terminal result, exactly as the body a retry of the same
+        request (same ID, same command) would receive from this node now: its
+        `request_id`, `index` and decision are the original's, `replayed` is `true`,
+        and its `served_by` equals the lookup's.
+      oneOf:
+        - $ref: '#/components/schemas/VersionedWriteResult'
+        - $ref: '#/components/schemas/DeleteResult'
+    RequestStatus:
+      description: The state of a request ID as known to the serving node (F-9).
+      oneOf:
+        - $ref: '#/components/schemas/KnownRequestStatus'
+        - $ref: '#/components/schemas/UnknownRequestStatus'
+      discriminator:
+        propertyName: state
+        mapping:
+          known: '#/components/schemas/KnownRequestStatus'
+          unknown: '#/components/schemas/UnknownRequestStatus'
+    KnownRequestStatus:
+      description: This node has applied the request; `result` is its terminal result.
+      type: object
+      additionalProperties: false
+      required: [state, result, served_by]
+      properties:
+        state:
+          const: known
+        result:
+          $ref: '#/components/schemas/TerminalResult'
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+    UnknownRequestStatus:
+      description: >-
+        This node has not applied the request as of `served_by.applied_index`. This is
+        not a failure: the request may be in flight, or committed but not yet applied
+        here (F-9).
+      type: object
+      additionalProperties: false
+      required: [state, served_by]
+      properties:
+        state:
+          const: unknown
+        served_by:
+          $ref: '#/components/schemas/ServedBy'
+    Lifecycle:
+      description: >-
+        A node's lifecycle state (O-1). Reads are served only when `ready`; a
+        `failed` node has stopped appending (for example at the journal hard stop,
+        DM-7) and is visible as such here.
+      type: string
+      enum: [starting, recovering, ready, failed]
+    LiveHealth:
+      description: The process is answering, in the given lifecycle state.
+      type: object
+      additionalProperties: false
+      required: [status, node_id, lifecycle]
+      properties:
+        status:
+          const: ok
+        node_id:
+          $ref: '#/components/schemas/NodeId'
+        lifecycle:
+          $ref: '#/components/schemas/Lifecycle'
+    ReadyHealth:
+      description: The node is ready; the body mirrors `LiveHealth` with `lifecycle` fixed.
+      type: object
+      additionalProperties: false
+      required: [status, node_id, lifecycle]
+      properties:
+        status:
+          const: ok
+        node_id:
+          $ref: '#/components/schemas/NodeId'
+        lifecycle:
+          const: ready
+    Role:
+      description: >-
+        This node's Raft role. `pre_candidate` is the pre-vote phase of an election
+        (pre-vote is on, §7.10).
+      type: string
+      enum: [leader, follower, candidate, pre_candidate]
+    ClusterStatus:
+      description: This node's local view of the Raft group (O-1).
+      type: object
+      additionalProperties: false
+      required:
+        - node_id
+        - cluster_id
+        - role
+        - term
+        - leader_id
+        - durable_last_index
+        - commit_index
+        - applied_index
+        - peers
+      properties:
+        node_id:
+          $ref: '#/components/schemas/NodeId'
+        cluster_id:
+          description: The configured, human-readable cluster ID (for example `keyval-local-v1`).
+          type: string
+          minLength: 1
+        role:
+          $ref: '#/components/schemas/Role'
+        term:
+          $ref: '#/components/schemas/Term'
+        leader_id:
+          description: The leader this node believes in, or null when none is known.
+          oneOf:
+            - $ref: '#/components/schemas/NodeId'
+            - type: 'null'
+        durable_last_index:
+          description: The last log index this node has synced to its journal.
+          $ref: '#/components/schemas/ProgressIndex'
+        commit_index:
+          description: The highest log index this node knows to be committed.
+          $ref: '#/components/schemas/ProgressIndex'
+        applied_index:
+          description: The highest log index this node has applied and published.
+          $ref: '#/components/schemas/ProgressIndex'
+        peers:
+          description: >-
+            Every configured voter, this node included, in ascending `id` order.
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Peer'
+    Peer:
+      description: >-
+        One configured voter. `match_index` is present only where this node knows the
+        voter's replication progress (as leader).
+      type: object
+      additionalProperties: false
+      required: [id, client_address]
+      properties:
+        id:
+          $ref: '#/components/schemas/NodeId'
+        client_address:
+          $ref: '#/components/schemas/NodeUrl'
+        match_index:
+          $ref: '#/components/schemas/ProgressIndex'
