@@ -1,0 +1,10 @@
+# Fixture for xtask's `./dev check` runner tests (xtask/src/check.rs). Not a workspace
+# member: the empty [workspace] table makes it its own workspace root. Its tests
+# deliberately include a failing and an ignored case; never run them as real checks.
+[package]
+name = "libtest-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]

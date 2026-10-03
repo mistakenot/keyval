@@ -29,6 +29,7 @@ Rules:
 | `clap` | 4.6.7 | tools | `xtask` | Typed command-line parsing for `./dev`: subcommands, flags, usage errors (parse at the boundary, CD-3). Default features off; only `std`, `derive`, `help`, `usage`, `error-context`, `suggestions` (no colour stack). | MIT OR Apache-2.0 | crates.io | n/a: tools only |
 | `serde` | 1.0.229 | tools | `xtask` | Derived serialisation for the versioned `--json` robot output of every `./dev` command (O-6). | MIT OR Apache-2.0 | crates.io | n/a: tools only |
 | `serde_json` | 1.0.151 | tools | `xtask` | JSON encoding of robot output, and decoding of other tools' `--json` output (`br`, `cargo metadata`, clippy diagnostics; §11.5 rule 14). | MIT OR Apache-2.0 | crates.io | n/a: tools only |
+| `toml` | 1.1.6+spec-1.1.0 | tools | `xtask` | Parsing TOML: the toolchain pin in `rust-toolchain.toml` (`./dev doctor`), and later the `registry/*.toml` files (W05, W06). Default features off; only `std`, `serde`, `parse` (no writer). | MIT OR Apache-2.0 | crates.io | n/a: tools only |
 
 *Scope* is one of: `deterministic` (may be used by deterministic crates; needs a purity
 argument), `adapter` (adapters and composition roots), `oracle` (model, checker,

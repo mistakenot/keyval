@@ -80,6 +80,8 @@ impl Status {
 pub enum ErrorKind {
     /// The arguments were invalid.
     Usage,
+    /// The command could not complete, e.g. the workspace root was not found.
+    Internal,
 }
 
 impl ErrorKind {
@@ -87,6 +89,7 @@ impl ErrorKind {
     pub const fn status(self) -> Status {
         match self {
             Self::Usage => Status::Usage,
+            Self::Internal => Status::Failed,
         }
     }
 }
@@ -135,6 +138,32 @@ pub fn report_error(format: Format, kind: ErrorKind, message: &str, detail: &str
     }
 }
 
+/// A command's result: rendered for people, or serialised as its JSON report.
+pub trait Report: Serialize {
+    /// Whether everything the command checked passed.
+    fn ok(&self) -> bool;
+    /// The human-readable rendering (no trailing newline needed).
+    fn render_human(&self) -> String;
+}
+
+/// Prints `report` to stdout in `format` and returns the matching exit status.
+pub fn emit(format: Format, report: &impl Report) -> Status {
+    let text = match format {
+        Format::Human => report.render_human(),
+        Format::Json => match serde_json::to_string(report) {
+            Ok(json) => json,
+            Err(err) => {
+                let message = format!("cannot encode the report as JSON: {err}");
+                return report_error(format, ErrorKind::Internal, &message, &message);
+            }
+        },
+    };
+    match write_line(&mut io::stdout().lock(), text.trim_end()) {
+        Ok(()) if report.ok() => Status::Ok,
+        Ok(()) | Err(_) => Status::Failed,
+    }
+}
+
 /// Writes `text` and a newline, returning I/O errors instead of panicking the way
 /// `println!` does on a closed pipe (CD-8).
 pub fn write_line(out: &mut impl Write, text: &str) -> io::Result<()> {
@@ -178,8 +207,9 @@ mod tests {
     }
 
     #[test]
-    fn usage_errors_exit_2() {
+    fn usage_errors_exit_2_and_internal_errors_exit_1() {
         assert_eq!(ErrorKind::Usage.status(), Status::Usage);
+        assert_eq!(ErrorKind::Internal.status(), Status::Failed);
     }
 
     #[test]
