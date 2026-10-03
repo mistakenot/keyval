@@ -315,10 +315,10 @@ output only together with its schema, and bump the version when the change break
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
   DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, DEV-PRUNE,
   DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES,
-  RAFT-VENDOR, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS,
-  ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM. Unknown IDs,
-  zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
-  fail (P10). A failure prints its exact re-run command.
+  RAFT-VENDOR, RAFT-AUDIT, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE,
+  DOMAIN-ENUMS, ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM.
+  Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the check's minimum
+  case count fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
   REGISTRY-FILES fails (rule 12). W05.2 makes the file the catalogue's source.

@@ -23,6 +23,7 @@ mod metadata;
 mod output;
 mod process;
 mod prune;
+mod raft_audit;
 mod registry;
 #[cfg(test)]
 mod schemas;

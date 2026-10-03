@@ -88,6 +88,9 @@ pub enum StaticCheck {
     AgentsRules,
     /// The vendored Raft library matches VENDOR.toml and its codegen stays pinned (W02).
     RaftVendor,
+    /// The vendored Raft library keeps the W02.2 audit's verdicts: no clocks, threads,
+    /// unexpected entropy, randomly seeded std hash collections or pointer formatting.
+    RaftAudit,
     /// `api/openapi.yaml` meets PLAN.md §8, judged with the fixtures in `api/fixtures/` (W03.3).
     Spec,
     /// registry/workgraph.toml mirrors PLAN.md §12.2/§12.3 and is acyclic (W06).
@@ -106,6 +109,7 @@ impl StaticCheck {
             Self::DepLedger => crate::ledger::check_ledger(root),
             Self::AgentsRules => crate::agents::check_agents_rules(root),
             Self::RaftVendor => crate::vendor::check_vendor(root),
+            Self::RaftAudit => crate::raft_audit::check_raft_audit(root),
             Self::Spec => crate::spec::check_spec(root),
             Self::Workgraph => crate::workgraph::check_workgraph(root),
             Self::SpikeDeterminism => crate::spike::check_spike(root),
@@ -121,6 +125,7 @@ impl StaticCheck {
             Self::DepLedger => "DEP-LEDGER",
             Self::AgentsRules => "AGENTS-RULES",
             Self::RaftVendor => "RAFT-VENDOR",
+            Self::RaftAudit => "RAFT-AUDIT",
             Self::Spec => "SPEC",
             Self::Workgraph => "WORKGRAPH",
             Self::SpikeDeterminism => "SPIKE-DETERMINISM",
@@ -136,6 +141,7 @@ impl StaticCheck {
             Self::DepLedger => "edge(s)+row(s)",
             Self::AgentsRules => "rule(s)+statement(s)",
             Self::RaftVendor => "file(s)+assertion(s)",
+            Self::RaftAudit => "file(s)+rule(s)",
             Self::Spec => "rule(s)+fixture(s)+mutant(s)",
             Self::Workgraph => "field(s)+edge(s)+rule(s)",
             Self::SpikeDeterminism => "seed-process run(s)+control",
@@ -289,6 +295,18 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::RaftVendor),
         min_cases: 83,
+    },
+    CheckDef {
+        id: "RAFT-AUDIT",
+        summary: "vendored raft-rs keeps the W02.2 audit's verdicts outside test code: no \
+                  unexpected entropy, clock, thread, randomly seeded std hash collection or \
+                  pointer formatting",
+        kind: Kind::Static,
+        covers: &["P4", "T-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::RaftAudit),
+        min_cases: 32,
     },
     CheckDef {
         id: "SPEC",

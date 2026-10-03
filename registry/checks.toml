@@ -130,6 +130,18 @@ min_cases = 83
 status = "implemented"
 
 [[check]]
+id = "RAFT-AUDIT"
+summary = "vendored raft-rs keeps the W02.2 audit's verdicts outside test code: no unexpected entropy, clock, thread, randomly seeded std hash collection or pointer formatting"
+kind = "static"
+covers = ["P4", "T-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check RAFT-AUDIT"
+min_cases = 32
+status = "implemented"
+
+[[check]]
 id = "SPEC"
 summary = "api/openapi.yaml meets PLAN.md §8 (OpenAPI 3.1, operations, codes, no-store, byte limits, §8.6 examples); instance fixtures hold; every mutant breaks its rule"
 kind = "static"
