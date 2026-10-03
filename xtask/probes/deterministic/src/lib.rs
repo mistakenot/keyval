@@ -42,3 +42,35 @@ pub mod allow_under_forbid;
 
 #[cfg(keyval_probe = "disallowed")]
 pub mod disallowed;
+
+// Compile-fail fixtures (W04.4): each forges a `types` value its invariants forbid.
+
+#[cfg(keyval_probe = "forge_key")]
+pub mod forge_key;
+
+#[cfg(keyval_probe = "forge_value")]
+pub mod forge_value;
+
+#[cfg(keyval_probe = "forge_node_id")]
+pub mod forge_node_id;
+
+#[cfg(keyval_probe = "forge_version")]
+pub mod forge_version;
+
+#[cfg(keyval_probe = "forge_page_size")]
+pub mod forge_page_size;
+
+#[cfg(keyval_probe = "forge_terminal_result")]
+pub mod forge_terminal_result;
+
+#[cfg(keyval_probe = "forge_scan_range")]
+pub mod forge_scan_range;
+
+#[cfg(keyval_probe = "version_vs_index")]
+pub mod version_vs_index;
+
+#[cfg(keyval_probe = "submitted_with_result")]
+pub mod submitted_with_result;
+
+#[cfg(keyval_probe = "ready_and_failed")]
+pub mod ready_and_failed;

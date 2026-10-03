@@ -505,6 +505,34 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 11,
     },
+    CheckDef {
+        id: "COMPILE-FAIL",
+        summary: "forging a types value past its constructor, or comparing a Version with a \
+                  LogIndex, does not compile (CD-2, CD-3, CD-4)",
+        kind: Kind::TestGroup,
+        covers: &["CD-2", "CD-3", "CD-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["lint::probes::compile_fail::"],
+        },
+        min_cases: 10,
+    },
+    CheckDef {
+        id: "DEP-RULE-FIXTURES",
+        summary: "the dependency rule rejects each forbidden edge, including a deterministic \
+                  crate on an adapter crate (CD-1, T-12)",
+        kind: Kind::TestGroup,
+        covers: &["CD-1", "T-12"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["tiers::tests::"],
+        },
+        min_cases: 9,
+    },
 ];
 
 /// Outcome of one requested check.

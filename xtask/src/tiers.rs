@@ -216,6 +216,10 @@ fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
 
 #[cfg(test)]
 mod tests {
+    // check: DEP-RULE-FIXTURES
+    // The dependency rule's own fixtures: each forbidden edge (a deterministic crate on an
+    // adapter, an oracle on production code, …) is rejected (CD-1, T-12; W04 acceptance).
+
     use super::*;
     use crate::metadata::{Dependency, Target};
     use std::path::PathBuf;

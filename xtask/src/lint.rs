@@ -1378,4 +1378,74 @@ mod probes {
             );
         }
     }
+
+    mod compile_fail {
+        //! Compile-fail fixtures for the `types` crate (W04.4, CD-2, CD-3, CD-4): each one
+        //! forges a value that its invariants forbid, from outside the crate, and must be
+        //! refused by rustc with the expected error. The control build (`controls_pass_the_full_policy`)
+        //! proves the probe crate compiles without them, so a pass is never vacuous.
+
+        // check: COMPILE-FAIL
+        use super::{Tier, assert_rejected};
+
+        /// Asserts that fixture `name` (in `src/<name>.rs`) fails with `code`.
+        fn refused(name: &str, code: &str) {
+            assert_rejected(
+                Tier::Deterministic,
+                name,
+                &format!("src/{name}.rs"),
+                &[code],
+            );
+        }
+
+        #[test]
+        fn forge_key() {
+            refused("forge_key", "E0423");
+        }
+
+        #[test]
+        fn forge_value() {
+            refused("forge_value", "E0423");
+        }
+
+        #[test]
+        fn forge_node_id() {
+            refused("forge_node_id", "E0423");
+        }
+
+        #[test]
+        fn forge_version() {
+            refused("forge_version", "E0423");
+        }
+
+        #[test]
+        fn forge_page_size() {
+            refused("forge_page_size", "E0423");
+        }
+
+        #[test]
+        fn forge_terminal_result() {
+            refused("forge_terminal_result", "E0451");
+        }
+
+        #[test]
+        fn forge_scan_range() {
+            refused("forge_scan_range", "E0451");
+        }
+
+        #[test]
+        fn version_vs_index() {
+            refused("version_vs_index", "E0308");
+        }
+
+        #[test]
+        fn submitted_with_result() {
+            refused("submitted_with_result", "E0618");
+        }
+
+        #[test]
+        fn ready_and_failed() {
+            refused("ready_and_failed", "E0559");
+        }
+    }
 }
