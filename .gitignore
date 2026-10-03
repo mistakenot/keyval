@@ -74,3 +74,5 @@ gemini.mcp.json
 /target/
 /.local/
 /artifacts/
+# reports/ is rendered on demand (./dev report traceability; §10.13), never committed.
+/reports/

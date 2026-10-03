@@ -25,6 +25,7 @@
 //! requires an accept receipt.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -351,7 +352,10 @@ impl TrackerStep<'_> {
     }
 }
 
-/// The activation that closing `bead` derives from the registry as committed at HEAD.
+/// The activation that closing `bead` derives from the registry as committed at HEAD:
+/// every planned requirement whose listing items are now all closed, so a missed earlier
+/// activation is caught up too (W05.3). A scoped subtask or discovered-work bead activates
+/// nothing.
 /// The working copy of `registry/requirements.toml` must hold either HEAD's text or
 /// exactly this activation (left by an interrupted run); anything else is somebody's
 /// uncommitted edit, which a closure must not commit.
@@ -382,7 +386,14 @@ fn plan_activation(
             (b.id == listed.bead || b.labels.contains(&plan_label)) && b.status == "closed"
         })
     };
-    let ids = registry::newly_active(&items, &requirements, &item.id, &is_closed);
+    // Recompute every requirement against all closed items, this one included (W05.3).
+    let mut closed: BTreeSet<String> = items
+        .iter()
+        .map(|i| i.id.clone())
+        .filter(|id| is_closed(id))
+        .collect();
+    closed.insert(item.id.clone());
+    let ids = registry::to_activate(&items, &requirements, &closed);
     if ids.is_empty() {
         return Ok(Activation::default());
     }
@@ -601,11 +612,15 @@ status = \"planned\"
     }
 
     fn world(name: &str) -> World {
+        world_with(name, WORKGRAPH, REQUIREMENTS)
+    }
+
+    fn world_with(name: &str, workgraph: &str, requirements: &str) -> World {
         let git = fixture::repo(
             name,
             &[
-                ("registry/workgraph.toml", WORKGRAPH),
-                ("registry/requirements.toml", REQUIREMENTS),
+                ("registry/workgraph.toml", workgraph),
+                ("registry/requirements.toml", requirements),
                 (BEADS_EXPORT, "{}\n"),
             ],
         );
@@ -757,6 +772,62 @@ status = \"planned\"
              report={report:#?}"
         );
         assert_eq!(w.tracker.status("br-w01-3"), "in_progress");
+    }
+
+    const CATCH_UP_WORKGRAPH: &str = "\
+[[item]]
+id = \"W01\"
+reqs = [\"O-8\"]
+accept = [\"./dev check XTASK\"]
+bead = \"\"
+
+[[item]]
+id = \"W49\"
+reqs = [\"O-6\"]
+accept = [\"./dev check STATUS\"]
+bead = \"\"
+";
+
+    const CATCH_UP_REQUIREMENTS: &str = "\
+[[requirement]]
+id = \"O-8\"
+level = \"MUST\"
+status = \"planned\"
+
+[[requirement]]
+id = \"O-6\"
+level = \"MUST\"
+status = \"planned\"
+";
+
+    #[test]
+    fn a_canonical_closure_catches_up_an_activation_an_override_close_missed() {
+        let w = world_with("close-catch-up", CATCH_UP_WORKGRAPH, CATCH_UP_REQUIREMENTS);
+        // W49, the only item listing O-6, closes outside the wrapper (an owner override),
+        // so nothing flips O-6.
+        w.tracker.close("br-w49", "owner override").unwrap();
+        // A subtask's closure catches nothing up: subtasks never activate (§10.13).
+        let sub = w.work("br-w01-3", "probe.rs");
+        w.accept("br-w01-3", &sub);
+        let child = w.close("br-w01-3");
+        assert!(child.ok && child.activated.is_empty(), "child={child:#?}");
+        // The next canonical closure recomputes every requirement.
+        let w01 = w.work("br-w01", "w01.rs");
+        w.accept("br-w01", &w01);
+        let report = w.close("br-w01");
+        assert_eq!(
+            report.activated,
+            ["O-8", "O-6"],
+            "rule: W01's closure activates its own O-8 and catches up O-6 (W05.3); \
+             report={report:#?}"
+        );
+        let text = fs::read_to_string(w.git.root().join(registry::REQUIREMENTS)).unwrap();
+        let statuses: Vec<String> = registry::parse_requirements(&text)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.status)
+            .collect();
+        assert_eq!(statuses, ["active", "active"], "requirements.toml=\n{text}");
     }
 
     #[test]

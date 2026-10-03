@@ -50,6 +50,7 @@ const IDS: &[&str] = &[
     crate::beads::SCHEMA,
     crate::prune::SCHEMA,
     crate::steplog::SCHEMA,
+    crate::traceability::SCHEMA,
 ];
 
 /// The file stem for an identifier: `keyval.dev.<name>/v<n>` becomes `<name>.v<n>`.
@@ -183,6 +184,7 @@ mod tests {
     use crate::prune::{self, Action, Layout, Reason};
     use crate::steplog::{self, Outcome as StepOutcome, StepLog};
     use crate::test_support::{nested_cargo, scratch_dir};
+    use crate::traceability::{self, Source as EvidenceSource};
     use crate::tracker::{Bead, Tracker};
     use crate::{beads, vendor};
 
@@ -430,6 +432,13 @@ mod tests {
             steplog::SCHEMA,
             "/properties/outcome/enum",
             &outcomes,
+            false,
+        );
+        let sources = variants!(EvidenceSource: Accept, Gate);
+        assert_enum(
+            traceability::SCHEMA,
+            "/$defs/evidence/properties/source/enum",
+            &sources,
             false,
         );
     }
@@ -872,6 +881,48 @@ mod tests {
                 validators.assert_matches(&read_json(Path::new(path)), &format!("{case}: receipt"));
             }
         }
+    }
+
+    #[test]
+    fn traceability_reports_match_their_schema() {
+        let validators = Validators::load();
+        let artifacts = scratch_dir("schemas-traceability-artifacts");
+        let receipts = artifacts.join("receipts");
+        fs::create_dir_all(&receipts).unwrap();
+        // A real accept receipt, so a covering check has evidence on the judged tree.
+        let tree = "0123456789abcdef0123456789abcdef01234567";
+        let accept = json!({
+            "schema": accept::SCHEMA, "ok": true, "tree": tree,
+            "finished_at": "2026-10-03T22:00:00Z",
+            "selectors": [{ "checks": ["DEV-SCHEMAS passed (18 cases)"] }],
+        });
+        fs::write(receipts.join("accept-x.json"), accept.to_string()).unwrap();
+        let layout = traceability::Layout {
+            root: workspace_root(),
+            artifacts,
+            out: scratch_dir("schemas-traceability").join("traceability.md"),
+        };
+        let report = traceability::run(&layout, Some(tree.to_owned())).unwrap();
+        validators.assert_matches(&report, "traceability::run on the real registry");
+        // Without a tree (a git-isolated candidate), nothing is judged.
+        let mut untreed = traceability::build(&traceability::Inputs {
+            requirements: vec![traceability::RequirementRow {
+                id: "O-6".to_owned(),
+                level: "MUST".to_owned(),
+                status: "active".to_owned(),
+                title: "Robot mode".to_owned(),
+                notes: None,
+            }],
+            checks: Vec::new(),
+            items: Vec::new(),
+            closed: BTreeSet::new(),
+            evidence: Vec::new(),
+            tree: None,
+            registry: traceability::RegistryVerdict::default(),
+        });
+        untreed.ok = true;
+        traceability::REPORT.clone_into(&mut untreed.path);
+        validators.assert_matches(&untreed, "traceability::build without a tree");
     }
 
     #[test]

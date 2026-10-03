@@ -274,6 +274,18 @@ min_cases = 11
 status = "implemented"
 
 [[check]]
+id = "TRACEABILITY"
+summary = "./dev report traceability renders every requirement with its derived status, covering checks, latest receipts and pass on a tree"
+kind = "test_group"
+covers = ["P5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check TRACEABILITY"
+min_cases = 6
+status = "implemented"
+
+[[check]]
 id = "DEV-PRUNE"
 summary = "./dev prune keeps the newest accept trees and every failing run, removes the rest with their target dirs, and logs every removal"
 kind = "test_group"
@@ -294,7 +306,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check DEV-SCHEMAS"
-min_cases = 18
+min_cases = 19
 status = "implemented"
 
 [[check]]

@@ -111,31 +111,21 @@ pub fn parse_requirements(text: &str) -> Result<Vec<Requirement>, String> {
         .collect()
 }
 
-/// The requirements that become active when `closed` (a canonical item's ID) closes,
-/// given every item's closed-ness after the closure (`is_closed(item_id)`).
-pub fn newly_active(
+/// The activation recomputation hook that `./dev commit --close` runs for a canonical
+/// closure (W05.3): every requirement still declared `planned` whose derived status is
+/// `active`, given `closed`, the closed work items with the closing one included. It
+/// recomputes every requirement, not just the closing item's, so a closure also catches up
+/// an activation that a closure outside the wrapper (an owner override) missed. It only
+/// promotes: an `active` requirement is never demoted here. Results are in registry order.
+pub fn to_activate(
     items: &[Item],
     requirements: &[Requirement],
-    closed: &str,
-    is_closed: &dyn Fn(&str) -> bool,
+    closed: &BTreeSet<String>,
 ) -> Vec<String> {
-    let Some(item) = items.iter().find(|item| item.id == closed) else {
-        return Vec::new();
-    };
-    item.reqs
+    requirements
         .iter()
-        .filter(|req| {
-            requirements
-                .iter()
-                .any(|r| &r.id == *req && r.status == "planned")
-        })
-        .filter(|req| {
-            items
-                .iter()
-                .filter(|other| other.reqs.contains(req))
-                .all(|other| other.id == closed || is_closed(&other.id))
-        })
-        .cloned()
+        .filter(|r| r.status == "planned" && derived_status(items, &r.id, closed) == "active")
+        .map(|r| r.id.clone())
         .collect()
 }
 
@@ -324,18 +314,20 @@ title = "Robot mode"
         );
     }
 
+    fn closed(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|&id| id.to_owned()).collect()
+    }
+
     #[test]
     fn a_requirement_activates_only_when_its_last_listing_item_closes() {
         let (items, reqs) = (items(), requirements());
-        let w49_open = |id: &str| id != "W49";
         assert_eq!(
-            newly_active(&items, &reqs, "W01", &w49_open),
+            to_activate(&items, &reqs, &closed(&["W01"])),
             Vec::<String>::new(),
             "rule: O-8 stays planned while W49, which also lists it, is open (§10.13)"
         );
-        let all_closed = |_: &str| true;
         assert_eq!(
-            newly_active(&items, &reqs, "W49", &all_closed),
+            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
             ["O-8"],
             "rule: the last listing item's closure activates it"
         );
@@ -344,17 +336,40 @@ title = "Robot mode"
     #[test]
     fn only_section_6_requirements_activate_and_unknown_items_activate_nothing() {
         let (items, reqs) = (items(), requirements());
-        let all_closed = |_: &str| true;
-        let activated = newly_active(&items, &reqs, "W01", &all_closed);
         assert_eq!(
-            activated,
+            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
             ["O-8"],
-            "rule: P7 and CD-8 are principles, not §6 rows, so they never activate"
+            "rule: P7 and CD-8 are principles, not §6 rows, so they never activate; O-6, \
+             which no item lists, is never vacuously active (P10)"
         );
         assert_eq!(
-            newly_active(&items, &reqs, "W01.3", &all_closed),
+            to_activate(&items, &reqs, &closed(&["W01.3"])),
             Vec::<String>::new(),
-            "rule: a subtask closing before its parent activates nothing"
+            "rule: a subtask is no work item, so its closure activates nothing"
+        );
+    }
+
+    #[test]
+    fn the_recompute_catches_up_a_missed_activation_and_never_demotes() {
+        let items = parse_workgraph(
+            "[[item]]\nid = \"W01\"\nreqs = [\"O-8\"]\n\n\
+             [[item]]\nid = \"W49\"\nreqs = [\"O-6\"]\n",
+        )
+        .unwrap();
+        let reqs = requirements();
+        assert_eq!(
+            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
+            ["O-8", "O-6"],
+            "rule: W49 closed earlier outside the wrapper; the next closure (W01's) also \
+             activates O-6, in registry order (W05.3)"
+        );
+        let active =
+            parse_requirements(&activate(REQUIREMENTS_FIXTURE, &["O-8".to_owned()]).unwrap())
+                .unwrap();
+        assert_eq!(
+            to_activate(&items, &active, &closed(&[])),
+            Vec::<String>::new(),
+            "rule: the hook only promotes; an active requirement is never demoted"
         );
     }
 

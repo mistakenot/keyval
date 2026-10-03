@@ -34,6 +34,7 @@ mod steplog;
 #[cfg(test)]
 mod test_support;
 mod tiers;
+mod traceability;
 mod tracker;
 mod vendor;
 mod workgraph;
@@ -158,6 +159,26 @@ enum Command {
         #[command(subcommand)]
         action: BeadsAction,
     },
+    /// Render a report from the verification registry (§10.13).
+    Report {
+        #[command(subcommand)]
+        report: ReportKind,
+    },
+}
+
+/// `./dev report` kinds.
+#[derive(Clone, Debug, Subcommand)]
+enum ReportKind {
+    /// reports/traceability.md: each requirement, its status, covering checks with claim
+    /// classes and latest receipts, and whether it passed on a tree (§10.13).
+    Traceability {
+        /// The tree "passed" is judged on (default: this checkout's `HEAD^{tree}`).
+        #[arg(long, value_name = "TREE_ID")]
+        tree: Option<String>,
+        /// Directory holding receipts/ (default: <root>/artifacts).
+        #[arg(long, value_name = "DIR")]
+        artifacts: Option<PathBuf>,
+    },
 }
 
 /// `./dev beads` actions.
@@ -266,6 +287,7 @@ fn run(cli: Cli) -> Status {
             }
         }
         Command::Beads { action } => run_beads(&root, format, action),
+        Command::Report { report } => run_report(&root, format, report),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
@@ -289,6 +311,22 @@ fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {
                 root: root.to_path_buf(),
             };
             output::emit(format, &beads::run(root, &graph, dry_run))
+        }
+    }
+}
+
+fn run_report(root: &Path, format: Format, report: ReportKind) -> Status {
+    match report {
+        ReportKind::Traceability { tree, artifacts } => {
+            let layout = traceability::Layout {
+                root: root.to_path_buf(),
+                artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
+                out: root.join(traceability::REPORT),
+            };
+            match traceability::run(&layout, tree) {
+                Ok(report) => output::emit(format, &report),
+                Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
+            }
         }
     }
 }

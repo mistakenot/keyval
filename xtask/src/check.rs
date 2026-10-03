@@ -478,6 +478,20 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 11,
     },
     CheckDef {
+        id: "TRACEABILITY",
+        summary: "./dev report traceability renders every requirement with its derived status, \
+                  covering checks, latest receipts and pass on a tree",
+        kind: Kind::TestGroup,
+        covers: &["P5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["traceability::"],
+        },
+        min_cases: 6,
+    },
+    CheckDef {
         id: "DEV-PRUNE",
         summary: "./dev prune keeps the newest accept trees and every failing run, removes \
                   the rest with their target dirs, and logs every removal",
@@ -503,7 +517,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["schemas::"],
         },
-        min_cases: 18,
+        min_cases: 19,
     },
     CheckDef {
         id: "INVARIANT",

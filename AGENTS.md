@@ -314,18 +314,18 @@ output only together with its schema, and bump the version when the change break
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
   DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, REGISTRY,
-  REGISTRY-FIXTURES, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS, LINT-TIERS, DEP-RULE,
-  DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC, WORKGRAPH, DEV-BEADS, INVARIANT,
-  NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES,
-  SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE, CONFIG-RULES. Unknown IDs, zero-case
-  selections, `#[ignore]`d cases and runs below the check's minimum case count fail
-  (P10). A failure prints its exact re-run command.
+  REGISTRY-FIXTURES, TRACEABILITY, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS,
+  LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC,
+  WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS,
+  COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE,
+  CONFIG-RULES. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
+  check's minimum case count fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
   REGISTRY-FILES fails (rule 12). W05.4 makes `./dev gate fast` run the file's
   implemented T0 rows. `registry/requirements.toml` holds every §6 requirement; its
   statuses are derived (rule 12), so a closure outside `./dev commit --close` applies
-  the activation itself.
+  the activation itself; the next canonical closure also catches up any it missed (W05.3).
 - **The registry gate** (check REGISTRY, §10.13, W05.2) judges the registry against the
   plan, the code, the spec, the tests and the work graph. REGISTRY-FIXTURES gives each of
   its eight conditions a fixture that makes it fail. It also runs in every gate's xtask
@@ -367,6 +367,13 @@ output only together with its schema, and bump the version when the change break
   - Each selector runs through the tree's own `./dev`, so the judge is that tree's
     xtask, never the shared checkout's. A check that does not exist in the tree fails.
   - Each new accept tree is a cold build: about 1 minute and about 470 MB of target dir.
+- `./dev report traceability [--tree <id>] [--artifacts <dir>]` — renders
+  `reports/traceability.md` (generated, gitignored; §10.13 "Reports", W05.3): each
+  requirement with its declared and derived status, owner disposition, listing work items,
+  covering checks with claim class and latest receipt, and whether it is passed on the
+  judged tree (default `HEAD^{tree}`): active, with every covering check's latest receipt
+  on that tree passed. It also lists the registry gate's violations and the conditions it
+  only reports (5 and 6 until W32). `--json` prints `keyval.dev.traceability/v1`.
 - `./dev prune [--dry-run]` — the `.local/` retention rule (§10.10, Q9) for accept
   trees, and the only sanctioned deleter of generated `.local/` artifacts:
   - keeps the newest 5 accept trees, and every tree with a failing or interrupted run
