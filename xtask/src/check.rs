@@ -38,6 +38,8 @@ pub enum Kind {
     TestGroup,
     /// An in-process static check of the workspace's files or manifests.
     Static,
+    /// A checker of §10.5 (K-…): libtest cases that judge a property of runs.
+    Checker,
 }
 
 /// The claim class a check supports (§10.15). W05 adds the other classes.
@@ -680,6 +682,22 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["trace::", "god_view::"],
         },
         min_cases: 17,
+    },
+    CheckDef {
+        id: "K-14",
+        summary: "replay identity: the same binary running the same seed in fresh OS processes \
+                  gives byte-identical canonical traces and event counts (T0: 2 seeds x 2 \
+                  processes); a mismatch fails, reporting its first differing event and \
+                  keeping both traces, and a changing-counter control is caught (§10.5, §10.7)",
+        kind: Kind::Checker,
+        covers: &["T-3", "T-11", "P4"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["replay::"],
+        },
+        min_cases: 8,
     },
     CheckDef {
         id: "CONFIG-RULES",

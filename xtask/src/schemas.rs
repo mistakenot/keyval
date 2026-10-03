@@ -388,7 +388,7 @@ mod tests {
             &statuses,
             false,
         );
-        let kinds = variants!(Kind: TestGroup, Static);
+        let kinds = variants!(Kind: TestGroup, Static, Checker);
         assert_enum(check, "/$defs/result/properties/kind/enum", &kinds, true);
         let tiers = variants!(Tier: T0);
         assert_enum(check, "/$defs/result/properties/tier/enum", &tiers, true);

@@ -320,7 +320,7 @@ output only together with its schema, and bump the version when the change break
   REGISTRY-FIXTURES, TRACEABILITY, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS,
   LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC,
   WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS,
-  COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE,
+  COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE, K-14,
   CONFIG-RULES, CONFIG-FINGERPRINT. Unknown IDs, zero-case selections, `#[ignore]`d cases
   and runs below the check's minimum case count fail (P10). A failure prints its exact
   re-run command.

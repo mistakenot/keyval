@@ -442,6 +442,18 @@ min_cases = 17
 status = "implemented"
 
 [[check]]
+id = "K-14"
+summary = "replay identity: the same binary running the same seed in fresh OS processes gives byte-identical canonical traces and event counts (T0: 2 seeds x 2 processes); a mismatch fails, reporting its first differing event and keeping both traces, and a changing-counter control is caught (§10.5, §10.7)"
+kind = "checker"
+covers = ["T-3", "T-11", "P4"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check K-14"
+min_cases = 8
+status = "implemented"
+
+[[check]]
 id = "CONFIG-RULES"
 summary = "the config parser refuses each §7.10 inconsistency with a specific error, reads only its strict grammar, and accepts config/local.toml and every config/fixtures file (O-5, D-78, D-79)"
 kind = "test_group"

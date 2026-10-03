@@ -190,7 +190,7 @@ deps = ["W04"]
 reqs = ["T-3", "T-5", "T-11", "P4"]
 area = ["sim"]
 milestone = "m1"
-accept = ["./dev check SIM-SCHEDULER", "./dev check SIM-TRACE"]
+accept = ["./dev check SIM-SCHEDULER", "./dev check SIM-TRACE", "./dev check K-14"]
 bead = "br-w15-sim-scheduler-trace-ukp"
 
 [[item]]

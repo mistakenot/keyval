@@ -12,17 +12,23 @@
 //! - [`trace`]: the canonical trace, its hash and the first-difference comparison.
 //! - [`god_view`]: every node's Raft, journal and applied state after every step, and
 //!   the trace records for what changed.
+//! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
+//!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
-//! Replay identity (W15.3), the simulated network (W16) and disk (W12), and the
-//! composition of the cores (W17) build on these.
+//! The simulated network (W16) and disk (W12), and the composition of the cores (W17),
+//! build on these.
 
 pub mod entropy;
 pub mod god_view;
+pub mod replay;
 pub mod scheduler;
 pub mod trace;
 
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};
+pub use replay::{
+    Divergence, MachineryRun, ReplayError, Report, RunError, fresh_processes, machinery, trace_path,
+};
 pub use scheduler::{
     Event, EventBudget, EventSeq, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step,
     VirtualTime,
