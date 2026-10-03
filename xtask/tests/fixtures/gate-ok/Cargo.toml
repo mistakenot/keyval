@@ -1,0 +1,9 @@
+# Fixture for xtask's gate tests (xtask/src/gate.rs): a clean, formatted crate with tests.
+# Its own workspace root; never a member of the keyval workspace.
+[package]
+name = "gate-ok"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]

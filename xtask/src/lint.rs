@@ -15,17 +15,10 @@ use std::path::{Path, PathBuf};
 
 use crate::check::StaticOutcome;
 use crate::metadata::{self, Package};
+use crate::tiers;
 
-/// The deterministic crates (§5.2, Appendix A), plus the probe crate that proves their
-/// configuration.
-pub const DETERMINISTIC_CRATES: &[&str] = &[
-    "types",
-    "statemachine",
-    "node",
-    "journal",
-    "raft_adapter",
-    "lint-probe-deterministic",
-];
+/// The probe crate that proves the deterministic configuration carries it too.
+const DETERMINISTIC_PROBE_DIR: &str = "xtask/probes/deterministic";
 
 /// The canonical clippy configuration of deterministic crates, relative to the root.
 pub const CANONICAL_CLIPPY: &str = "xtask/lint/deterministic.clippy.toml";
@@ -80,13 +73,21 @@ pub fn check_tiers(root: &Path) -> Result<StaticOutcome, String> {
         .map_err(|err| format!("cannot read {CANONICAL_CLIPPY}: {err}"))?;
     let canonical_block = fs::read_to_string(root.join(CANONICAL_BLOCK))
         .map_err(|err| format!("cannot read {CANONICAL_BLOCK}: {err}"))?;
+    let root = &metadata.workspace_root;
     let members = metadata.members();
     let violations = members
         .iter()
         .flat_map(|package| {
+            let dir = package
+                .dir()
+                .strip_prefix(root)
+                .unwrap_or_else(|_| package.dir());
+            let deterministic = dir == Path::new(DETERMINISTIC_PROBE_DIR)
+                || tiers::classify(dir).is_some_and(tiers::Tier::is_deterministic);
             tier_violations(
                 package,
-                &metadata.workspace_root,
+                deterministic,
+                root,
                 &canonical_clippy,
                 &canonical_block,
             )
@@ -98,8 +99,10 @@ pub fn check_tiers(root: &Path) -> Result<StaticOutcome, String> {
     })
 }
 
+/// `deterministic`: whether the crate must carry the canonical deterministic config.
 fn tier_violations(
     package: &Package,
+    deterministic: bool,
     root: &Path,
     canonical_clippy: &[u8],
     canonical_block: &str,
@@ -110,7 +113,7 @@ fn tier_violations(
         violations.push(format!("{name}: {why}"));
     }
     let effective = nearest_clippy_config(package.dir(), root);
-    if DETERMINISTIC_CRATES.contains(&name.as_str()) {
+    if deterministic {
         let own = package.dir().join("clippy.toml");
         if effective.as_deref() != Some(own.as_path()) {
             violations.push(format!(
@@ -644,33 +647,31 @@ mod tests {
         let canonical_clippy = fs::read(root.join(CANONICAL_CLIPPY)).unwrap();
         let canonical_block = fs::read_to_string(root.join(CANONICAL_BLOCK)).unwrap();
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lint-tiers");
-        let package = |dir: &str, name: &str| Package {
-            name: name.to_owned(),
-            id: name.to_owned(),
+        let package = |dir: &str| Package {
+            name: dir.to_owned(),
+            id: dir.to_owned(),
             manifest_path: fixtures.join(dir).join("Cargo.toml"),
             targets: vec![crate::metadata::Target {
                 kind: vec!["lib".to_owned()],
                 src_path: fixtures.join(dir).join("src/lib.rs"),
             }],
+            dependencies: Vec::new(),
         };
         let cases = [
-            ("no-workspace-lints", "adapter", "[lints] workspace = true"),
+            ("no-workspace-lints", false, "[lints] workspace = true"),
             (
                 "own-clippy-config",
-                "adapter",
+                false,
                 "must use the workspace clippy.toml",
             ),
-            ("det-missing-config", "journal", "needs its own clippy.toml"),
-            ("det-drifted-config", "journal", "differs from"),
-            (
-                "det-missing-block",
-                "journal",
-                "must start with the exact block",
-            ),
+            ("det-missing-config", true, "needs its own clippy.toml"),
+            ("det-drifted-config", true, "differs from"),
+            ("det-missing-block", true, "must start with the exact block"),
         ];
-        for (dir, name, expected) in cases {
+        for (dir, deterministic, expected) in cases {
             let found = tier_violations(
-                &package(dir, name),
+                &package(dir),
+                deterministic,
                 &fixtures,
                 &canonical_clippy,
                 &canonical_block,

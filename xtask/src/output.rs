@@ -82,6 +82,10 @@ pub enum ErrorKind {
     Usage,
     /// The command could not complete, e.g. the workspace root was not found.
     Internal,
+    /// Preconditions were not met, e.g. a gate asked to judge a dirty checkout.
+    Refused,
+    /// Part of the plan's command surface that is not implemented yet. Never a pass (P10).
+    NotImplemented,
 }
 
 impl ErrorKind {
@@ -89,7 +93,7 @@ impl ErrorKind {
     pub const fn status(self) -> Status {
         match self {
             Self::Usage => Status::Usage,
-            Self::Internal => Status::Failed,
+            Self::Internal | Self::Refused | Self::NotImplemented => Status::Failed,
         }
     }
 }
@@ -210,6 +214,8 @@ mod tests {
     fn usage_errors_exit_2_and_internal_errors_exit_1() {
         assert_eq!(ErrorKind::Usage.status(), Status::Usage);
         assert_eq!(ErrorKind::Internal.status(), Status::Failed);
+        assert_eq!(ErrorKind::Refused.status(), Status::Failed);
+        assert_eq!(ErrorKind::NotImplemented.status(), Status::Failed);
     }
 
     #[test]

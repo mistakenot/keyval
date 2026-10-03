@@ -32,6 +32,8 @@ pub struct Package {
     pub manifest_path: PathBuf,
     /// Its build targets.
     pub targets: Vec<Target>,
+    /// Its direct dependencies, as declared.
+    pub dependencies: Vec<Dependency>,
 }
 
 /// One build target of a package.
@@ -41,6 +43,15 @@ pub struct Target {
     pub kind: Vec<String>,
     /// Absolute path of the target's root source file.
     pub src_path: PathBuf,
+}
+
+/// One declared dependency.
+#[derive(Debug, Deserialize)]
+pub struct Dependency {
+    /// The depended-on package's name. Every kind (normal, dev, build) is listed.
+    pub name: String,
+    /// The local path, for path dependencies; `None` for registry and git ones.
+    pub path: Option<PathBuf>,
 }
 
 impl Metadata {

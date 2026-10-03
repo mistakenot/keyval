@@ -6,7 +6,10 @@
 
 mod cargo;
 mod check;
+mod clock;
 mod doctor;
+mod gate;
+mod ledger;
 mod libtest;
 mod lint;
 mod metadata;
@@ -14,10 +17,12 @@ mod output;
 mod process;
 #[cfg(test)]
 mod test_support;
+mod tiers;
 mod workspace;
 
 use std::env;
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::error::ErrorKind as ClapErrorKind;
@@ -58,6 +63,22 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         case: Option<String>,
     },
+    /// Run a gate tier on an exact tree and write a receipt (§10.10).
+    Gate {
+        /// The tier; only `fast` exists before W46.
+        #[arg(value_enum)]
+        tier: gate::GateTier,
+        /// Candidate mode: the tree ID of this directory's content, recorded by the commit
+        /// wrapper that materialised it. Without it, the checkout must be clean.
+        #[arg(long, value_name = "TREE_ID")]
+        tree: Option<String>,
+        /// Candidate mode: a changed (staged) path for UBS to scan; repeatable.
+        #[arg(long, value_name = "PATH", requires = "tree")]
+        changed: Vec<String>,
+        /// Directory for receipts and logs (default: <root>/artifacts).
+        #[arg(long, value_name = "DIR")]
+        artifacts: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -97,6 +118,44 @@ fn run(cli: Cli) -> Status {
             );
             output::emit(format, &report)
         }
+        Command::Gate {
+            tier,
+            tree,
+            changed,
+            artifacts,
+        } => run_gate(&root, format, tier, tree.as_deref(), changed, artifacts),
+    }
+}
+
+fn run_gate(
+    root: &Path,
+    format: Format,
+    tier: gate::GateTier,
+    tree: Option<&str>,
+    changed: Vec<String>,
+    artifacts: Option<PathBuf>,
+) -> Status {
+    if tier != gate::GateTier::Fast {
+        let message = format!(
+            "gate tier `{}` is not implemented yet (W46); a missing tier never counts as a \
+             pass (P10)",
+            gate::tier_name(tier)
+        );
+        return output::report_error(format, ErrorKind::NotImplemented, &message, &message);
+    }
+    let tree = match gate::resolve_tree(root, tree, changed) {
+        Ok(tree) => tree,
+        Err(why) => return output::report_error(format, ErrorKind::Refused, &why, &why),
+    };
+    let ctx = gate::Context {
+        root,
+        tree,
+        artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
+        cargo: cargo::Cargo::detect(),
+    };
+    match gate::run(&ctx, tier, gate::BOOTSTRAP_SET) {
+        Ok(report) => output::emit(format, &report),
+        Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
     }
 }
 

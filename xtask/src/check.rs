@@ -77,13 +77,40 @@ pub enum StaticCheck {
     /// Every crate inherits the workspace lints; deterministic crates carry the
     /// canonical deterministic configuration.
     LintTiers,
+    /// Dependencies point inward only (CD-1, T-12).
+    DepRule,
+    /// Every direct third-party dependency is ledgered in DEPENDENCIES.md (CD-12).
+    DepLedger,
 }
 
 impl StaticCheck {
-    fn run(self, root: &Path) -> Result<StaticOutcome, String> {
+    /// Runs the check against the workspace at `root`.
+    pub fn run(self, root: &Path) -> Result<StaticOutcome, String> {
         match self {
             Self::LintAllows => crate::lint::check_allows(root),
             Self::LintTiers => crate::lint::check_tiers(root),
+            Self::DepRule => crate::tiers::check_dependency_rule(root),
+            Self::DepLedger => crate::ledger::check_ledger(root),
+        }
+    }
+
+    /// The check's catalogue ID.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::LintAllows => "LINT-ALLOWS",
+            Self::LintTiers => "LINT-TIERS",
+            Self::DepRule => "DEP-RULE",
+            Self::DepLedger => "DEP-LEDGER",
+        }
+    }
+
+    /// What one case is.
+    pub const fn unit(self) -> &'static str {
+        match self {
+            Self::LintAllows => "source file(s)",
+            Self::LintTiers => "crate(s)",
+            Self::DepRule => "crate(s)+edge(s)",
+            Self::DepLedger => "edge(s)+row(s)",
         }
     }
 }
@@ -192,6 +219,39 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::Static(StaticCheck::LintTiers),
         min_cases: 4,
+    },
+    CheckDef {
+        id: "DEP-RULE",
+        summary: "dependencies point inward only; oracles depend on no production crate",
+        kind: Kind::Static,
+        covers: &["CD-1", "P3", "T-12", "P4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::DepRule),
+        min_cases: 4,
+    },
+    CheckDef {
+        id: "DEP-LEDGER",
+        summary: "every direct dependency is in DEPENDENCIES.md at its locked version",
+        kind: Kind::Static,
+        covers: &["CD-12"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::DepLedger),
+        min_cases: 5,
+    },
+    CheckDef {
+        id: "DEV-GATE",
+        summary: "./dev gate judges an exact tree, fails vacuous steps and writes a receipt",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10", "P11"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filter: Some("gate::"),
+        },
+        min_cases: 8,
     },
     CheckDef {
         id: "INVARIANT",
