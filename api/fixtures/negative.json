@@ -1,0 +1,2194 @@
+{
+  "schema": "keyval.spec.fixtures/v1",
+  "expect": "invalid",
+  "cases": [
+    {
+      "name": "put-result-as-delete-result",
+      "rule": "W03: a PUT result cannot validate as a DELETE result",
+      "target": {
+        "response": {
+          "operation": "deleteKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "delete-result-as-put-result",
+      "rule": "W03: per-operation response schemas",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 43,
+        "existed": true,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 43
+        }
+      }
+    },
+    {
+      "name": "mismatch-as-put-409",
+      "rule": "§8.4: a PUT never gets version_mismatch",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "version_mismatch",
+          "message": "expected 41, current 57",
+          "details": {
+            "current_version": 57,
+            "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+            "index": 58,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "capacity-as-delete-507",
+      "rule": "DM-6: DELETE is never refused by the live-state quota",
+      "target": {
+        "response": {
+          "operation": "deleteKey",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "capacity_exceeded",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_live_keys",
+            "index": 44,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "put-result-as-get-result",
+      "rule": "per-operation response schemas",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-body-unknown-field",
+      "rule": "§8.1: unknown fields are rejected",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": "x",
+        "ttl": 5
+      }
+    },
+    {
+      "name": "put-body-missing-value",
+      "rule": "§8.2: value is required",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {}
+    },
+    {
+      "name": "put-body-value-not-string",
+      "rule": "DM-2: a value is a string",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": 12
+      }
+    },
+    {
+      "name": "put-body-value-over-64KiB-ascii",
+      "rule": "DM-2: 65,537 bytes",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": {
+          "$repeat": "v",
+          "times": 65537
+        }
+      }
+    },
+    {
+      "name": "put-body-value-over-64KiB-4-byte-chars",
+      "rule": "DM-2: 16,385 four-byte characters are 65,540 bytes (only x-maxUtf8Bytes catches this)",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": {
+          "$repeat": "😀",
+          "times": 16385
+        }
+      }
+    },
+    {
+      "name": "cas-body-absent-with-version",
+      "rule": "§8.1 strict JSON, F-5",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "absent",
+          "version": 3
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "cas-body-version-without-version",
+      "rule": "F-5",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "version"
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "cas-body-unknown-kind",
+      "rule": "F-5: absent or version only",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "present"
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "cas-body-missing-expected",
+      "rule": "§8.2",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "value": "x"
+      }
+    },
+    {
+      "name": "cas-body-expected-version-0",
+      "rule": "Versions are log indices, which start at 1 (W03.1 reading 4)",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "version",
+          "version": 0
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "cas-body-expected-version-2-pow-53",
+      "rule": "D-77, §8.1: 2^53 is invalid_request",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "version",
+          "version": 9007199254740992
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "key-empty",
+      "rule": "DM-1, §8.5: an empty key is invalid",
+      "target": {
+        "parameter": {
+          "operation": "getKey",
+          "name": "key"
+        }
+      },
+      "instance": ""
+    },
+    {
+      "name": "key-257-bytes-ascii",
+      "rule": "DM-1",
+      "target": {
+        "parameter": {
+          "operation": "getKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "k",
+        "times": 257
+      }
+    },
+    {
+      "name": "key-258-bytes-2-byte-chars",
+      "rule": "DM-1: 129 characters but 258 bytes (only x-maxUtf8Bytes catches this)",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "é",
+        "times": 129
+      }
+    },
+    {
+      "name": "key-260-bytes-4-byte-chars",
+      "rule": "DM-1: 65 characters but 260 bytes (only x-maxUtf8Bytes catches this)",
+      "target": {
+        "parameter": {
+          "operation": "deleteKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "😀",
+        "times": 65
+      }
+    },
+    {
+      "name": "scan-end-empty",
+      "rule": "§8.5: an empty bound is invalid; omit it",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "end"
+        }
+      },
+      "instance": ""
+    },
+    {
+      "name": "scan-limit-0",
+      "rule": "F-4",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "limit"
+        }
+      },
+      "instance": 0
+    },
+    {
+      "name": "scan-limit-129",
+      "rule": "F-4",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "limit"
+        }
+      },
+      "instance": 129
+    },
+    {
+      "name": "idempotency-key-uppercase",
+      "rule": "F-6: lowercase only",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "D70FF69DF7084A088E4A531837CC4E5A"
+    },
+    {
+      "name": "idempotency-key-31-chars",
+      "rule": "F-6",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "d70ff69df7084a088e4a531837cc4e5"
+    },
+    {
+      "name": "idempotency-key-33-chars",
+      "rule": "F-6",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "d70ff69df7084a088e4a531837cc4e5a0"
+    },
+    {
+      "name": "idempotency-key-not-hex",
+      "rule": "F-6",
+      "target": {
+        "parameter": {
+          "operation": "deleteKey",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "gggggggggggggggggggggggggggggggg"
+    },
+    {
+      "name": "idempotency-key-uuid-with-dashes",
+      "rule": "F-6",
+      "target": {
+        "parameter": {
+          "operation": "compareAndSwap",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "d70ff69d-f708-4a08-8e4a-531837cc4e5a"
+    },
+    {
+      "name": "status-request-id-uppercase",
+      "rule": "F-6, F-9",
+      "target": {
+        "parameter": {
+          "operation": "getRequestStatus",
+          "name": "request_id"
+        }
+      },
+      "instance": "7F3C0B8E2A6D4F19B1C5E0A9D8F7C6B5"
+    },
+    {
+      "name": "put-200-index-0",
+      "rule": "Log indices start at 1",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 0,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-200-index-2-pow-53",
+      "rule": "D-77",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 9007199254740992,
+        "version": 9007199254740992,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-200-missing-version",
+      "rule": "§8.2",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-200-extra-field",
+      "rule": "closed per-operation result",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        },
+        "existed": true
+      }
+    },
+    {
+      "name": "put-200-node-id-0",
+      "rule": "§7.10: node IDs are nonzero",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 0,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-200-request-id-uppercase",
+      "rule": "F-6",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "D70FF69DF7084A088E4A531837CC4E5A",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "get-200-empty-key",
+      "rule": "DM-1",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "key": "",
+        "value": "x",
+        "version": 1,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "get-200-missing-served-by",
+      "rule": "F-2",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "key": "k",
+        "value": "x",
+        "version": 1
+      }
+    },
+    {
+      "name": "scan-200-has-more-without-next-after",
+      "rule": "§8.5",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          }
+        ],
+        "has_more": true,
+        "next_after": null,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-next-after-without-has-more",
+      "rule": "§8.5",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          }
+        ],
+        "has_more": false,
+        "next_after": "k000",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-has-more-with-no-items",
+      "rule": "§8.5: next_after is the last returned key",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [],
+        "has_more": true,
+        "next_after": "k000",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-129-items",
+      "rule": "F-4: at most 128 items",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          },
+          {
+            "key": "k001",
+            "value": "v",
+            "version": 2
+          },
+          {
+            "key": "k002",
+            "value": "v",
+            "version": 3
+          },
+          {
+            "key": "k003",
+            "value": "v",
+            "version": 4
+          },
+          {
+            "key": "k004",
+            "value": "v",
+            "version": 5
+          },
+          {
+            "key": "k005",
+            "value": "v",
+            "version": 6
+          },
+          {
+            "key": "k006",
+            "value": "v",
+            "version": 7
+          },
+          {
+            "key": "k007",
+            "value": "v",
+            "version": 8
+          },
+          {
+            "key": "k008",
+            "value": "v",
+            "version": 9
+          },
+          {
+            "key": "k009",
+            "value": "v",
+            "version": 10
+          },
+          {
+            "key": "k010",
+            "value": "v",
+            "version": 11
+          },
+          {
+            "key": "k011",
+            "value": "v",
+            "version": 12
+          },
+          {
+            "key": "k012",
+            "value": "v",
+            "version": 13
+          },
+          {
+            "key": "k013",
+            "value": "v",
+            "version": 14
+          },
+          {
+            "key": "k014",
+            "value": "v",
+            "version": 15
+          },
+          {
+            "key": "k015",
+            "value": "v",
+            "version": 16
+          },
+          {
+            "key": "k016",
+            "value": "v",
+            "version": 17
+          },
+          {
+            "key": "k017",
+            "value": "v",
+            "version": 18
+          },
+          {
+            "key": "k018",
+            "value": "v",
+            "version": 19
+          },
+          {
+            "key": "k019",
+            "value": "v",
+            "version": 20
+          },
+          {
+            "key": "k020",
+            "value": "v",
+            "version": 21
+          },
+          {
+            "key": "k021",
+            "value": "v",
+            "version": 22
+          },
+          {
+            "key": "k022",
+            "value": "v",
+            "version": 23
+          },
+          {
+            "key": "k023",
+            "value": "v",
+            "version": 24
+          },
+          {
+            "key": "k024",
+            "value": "v",
+            "version": 25
+          },
+          {
+            "key": "k025",
+            "value": "v",
+            "version": 26
+          },
+          {
+            "key": "k026",
+            "value": "v",
+            "version": 27
+          },
+          {
+            "key": "k027",
+            "value": "v",
+            "version": 28
+          },
+          {
+            "key": "k028",
+            "value": "v",
+            "version": 29
+          },
+          {
+            "key": "k029",
+            "value": "v",
+            "version": 30
+          },
+          {
+            "key": "k030",
+            "value": "v",
+            "version": 31
+          },
+          {
+            "key": "k031",
+            "value": "v",
+            "version": 32
+          },
+          {
+            "key": "k032",
+            "value": "v",
+            "version": 33
+          },
+          {
+            "key": "k033",
+            "value": "v",
+            "version": 34
+          },
+          {
+            "key": "k034",
+            "value": "v",
+            "version": 35
+          },
+          {
+            "key": "k035",
+            "value": "v",
+            "version": 36
+          },
+          {
+            "key": "k036",
+            "value": "v",
+            "version": 37
+          },
+          {
+            "key": "k037",
+            "value": "v",
+            "version": 38
+          },
+          {
+            "key": "k038",
+            "value": "v",
+            "version": 39
+          },
+          {
+            "key": "k039",
+            "value": "v",
+            "version": 40
+          },
+          {
+            "key": "k040",
+            "value": "v",
+            "version": 41
+          },
+          {
+            "key": "k041",
+            "value": "v",
+            "version": 42
+          },
+          {
+            "key": "k042",
+            "value": "v",
+            "version": 43
+          },
+          {
+            "key": "k043",
+            "value": "v",
+            "version": 44
+          },
+          {
+            "key": "k044",
+            "value": "v",
+            "version": 45
+          },
+          {
+            "key": "k045",
+            "value": "v",
+            "version": 46
+          },
+          {
+            "key": "k046",
+            "value": "v",
+            "version": 47
+          },
+          {
+            "key": "k047",
+            "value": "v",
+            "version": 48
+          },
+          {
+            "key": "k048",
+            "value": "v",
+            "version": 49
+          },
+          {
+            "key": "k049",
+            "value": "v",
+            "version": 50
+          },
+          {
+            "key": "k050",
+            "value": "v",
+            "version": 51
+          },
+          {
+            "key": "k051",
+            "value": "v",
+            "version": 52
+          },
+          {
+            "key": "k052",
+            "value": "v",
+            "version": 53
+          },
+          {
+            "key": "k053",
+            "value": "v",
+            "version": 54
+          },
+          {
+            "key": "k054",
+            "value": "v",
+            "version": 55
+          },
+          {
+            "key": "k055",
+            "value": "v",
+            "version": 56
+          },
+          {
+            "key": "k056",
+            "value": "v",
+            "version": 57
+          },
+          {
+            "key": "k057",
+            "value": "v",
+            "version": 58
+          },
+          {
+            "key": "k058",
+            "value": "v",
+            "version": 59
+          },
+          {
+            "key": "k059",
+            "value": "v",
+            "version": 60
+          },
+          {
+            "key": "k060",
+            "value": "v",
+            "version": 61
+          },
+          {
+            "key": "k061",
+            "value": "v",
+            "version": 62
+          },
+          {
+            "key": "k062",
+            "value": "v",
+            "version": 63
+          },
+          {
+            "key": "k063",
+            "value": "v",
+            "version": 64
+          },
+          {
+            "key": "k064",
+            "value": "v",
+            "version": 65
+          },
+          {
+            "key": "k065",
+            "value": "v",
+            "version": 66
+          },
+          {
+            "key": "k066",
+            "value": "v",
+            "version": 67
+          },
+          {
+            "key": "k067",
+            "value": "v",
+            "version": 68
+          },
+          {
+            "key": "k068",
+            "value": "v",
+            "version": 69
+          },
+          {
+            "key": "k069",
+            "value": "v",
+            "version": 70
+          },
+          {
+            "key": "k070",
+            "value": "v",
+            "version": 71
+          },
+          {
+            "key": "k071",
+            "value": "v",
+            "version": 72
+          },
+          {
+            "key": "k072",
+            "value": "v",
+            "version": 73
+          },
+          {
+            "key": "k073",
+            "value": "v",
+            "version": 74
+          },
+          {
+            "key": "k074",
+            "value": "v",
+            "version": 75
+          },
+          {
+            "key": "k075",
+            "value": "v",
+            "version": 76
+          },
+          {
+            "key": "k076",
+            "value": "v",
+            "version": 77
+          },
+          {
+            "key": "k077",
+            "value": "v",
+            "version": 78
+          },
+          {
+            "key": "k078",
+            "value": "v",
+            "version": 79
+          },
+          {
+            "key": "k079",
+            "value": "v",
+            "version": 80
+          },
+          {
+            "key": "k080",
+            "value": "v",
+            "version": 81
+          },
+          {
+            "key": "k081",
+            "value": "v",
+            "version": 82
+          },
+          {
+            "key": "k082",
+            "value": "v",
+            "version": 83
+          },
+          {
+            "key": "k083",
+            "value": "v",
+            "version": 84
+          },
+          {
+            "key": "k084",
+            "value": "v",
+            "version": 85
+          },
+          {
+            "key": "k085",
+            "value": "v",
+            "version": 86
+          },
+          {
+            "key": "k086",
+            "value": "v",
+            "version": 87
+          },
+          {
+            "key": "k087",
+            "value": "v",
+            "version": 88
+          },
+          {
+            "key": "k088",
+            "value": "v",
+            "version": 89
+          },
+          {
+            "key": "k089",
+            "value": "v",
+            "version": 90
+          },
+          {
+            "key": "k090",
+            "value": "v",
+            "version": 91
+          },
+          {
+            "key": "k091",
+            "value": "v",
+            "version": 92
+          },
+          {
+            "key": "k092",
+            "value": "v",
+            "version": 93
+          },
+          {
+            "key": "k093",
+            "value": "v",
+            "version": 94
+          },
+          {
+            "key": "k094",
+            "value": "v",
+            "version": 95
+          },
+          {
+            "key": "k095",
+            "value": "v",
+            "version": 96
+          },
+          {
+            "key": "k096",
+            "value": "v",
+            "version": 97
+          },
+          {
+            "key": "k097",
+            "value": "v",
+            "version": 98
+          },
+          {
+            "key": "k098",
+            "value": "v",
+            "version": 99
+          },
+          {
+            "key": "k099",
+            "value": "v",
+            "version": 100
+          },
+          {
+            "key": "k100",
+            "value": "v",
+            "version": 101
+          },
+          {
+            "key": "k101",
+            "value": "v",
+            "version": 102
+          },
+          {
+            "key": "k102",
+            "value": "v",
+            "version": 103
+          },
+          {
+            "key": "k103",
+            "value": "v",
+            "version": 104
+          },
+          {
+            "key": "k104",
+            "value": "v",
+            "version": 105
+          },
+          {
+            "key": "k105",
+            "value": "v",
+            "version": 106
+          },
+          {
+            "key": "k106",
+            "value": "v",
+            "version": 107
+          },
+          {
+            "key": "k107",
+            "value": "v",
+            "version": 108
+          },
+          {
+            "key": "k108",
+            "value": "v",
+            "version": 109
+          },
+          {
+            "key": "k109",
+            "value": "v",
+            "version": 110
+          },
+          {
+            "key": "k110",
+            "value": "v",
+            "version": 111
+          },
+          {
+            "key": "k111",
+            "value": "v",
+            "version": 112
+          },
+          {
+            "key": "k112",
+            "value": "v",
+            "version": 113
+          },
+          {
+            "key": "k113",
+            "value": "v",
+            "version": 114
+          },
+          {
+            "key": "k114",
+            "value": "v",
+            "version": 115
+          },
+          {
+            "key": "k115",
+            "value": "v",
+            "version": 116
+          },
+          {
+            "key": "k116",
+            "value": "v",
+            "version": 117
+          },
+          {
+            "key": "k117",
+            "value": "v",
+            "version": 118
+          },
+          {
+            "key": "k118",
+            "value": "v",
+            "version": 119
+          },
+          {
+            "key": "k119",
+            "value": "v",
+            "version": 120
+          },
+          {
+            "key": "k120",
+            "value": "v",
+            "version": 121
+          },
+          {
+            "key": "k121",
+            "value": "v",
+            "version": 122
+          },
+          {
+            "key": "k122",
+            "value": "v",
+            "version": 123
+          },
+          {
+            "key": "k123",
+            "value": "v",
+            "version": 124
+          },
+          {
+            "key": "k124",
+            "value": "v",
+            "version": 125
+          },
+          {
+            "key": "k125",
+            "value": "v",
+            "version": 126
+          },
+          {
+            "key": "k126",
+            "value": "v",
+            "version": 127
+          },
+          {
+            "key": "k127",
+            "value": "v",
+            "version": 128
+          },
+          {
+            "key": "k128",
+            "value": "v",
+            "version": 129
+          }
+        ],
+        "has_more": true,
+        "next_after": "k128",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-over-byte-cap",
+      "rule": "§7.11: 17 × (4 + 65,536) = 1,114,180 decoded bytes > 1 MiB (only x-maxPageUtf8Bytes catches this)",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 1
+          },
+          {
+            "key": "k001",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 2
+          },
+          {
+            "key": "k002",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 3
+          },
+          {
+            "key": "k003",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 4
+          },
+          {
+            "key": "k004",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 5
+          },
+          {
+            "key": "k005",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 6
+          },
+          {
+            "key": "k006",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 7
+          },
+          {
+            "key": "k007",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 8
+          },
+          {
+            "key": "k008",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 9
+          },
+          {
+            "key": "k009",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 10
+          },
+          {
+            "key": "k010",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 11
+          },
+          {
+            "key": "k011",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 12
+          },
+          {
+            "key": "k012",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 13
+          },
+          {
+            "key": "k013",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 14
+          },
+          {
+            "key": "k014",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 15
+          },
+          {
+            "key": "k015",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 16
+          },
+          {
+            "key": "k016",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 17
+          }
+        ],
+        "has_more": true,
+        "next_after": "k016",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-unknown-with-result",
+      "rule": "F-9",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "unknown",
+        "result": {
+          "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+          "index": 42,
+          "version": 42,
+          "replayed": false,
+          "served_by": {
+            "node_id": 2,
+            "applied_index": 42
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-without-result",
+      "rule": "F-9",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-conflict",
+      "rule": "§8.1: a conflict is never a stored result",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "error": {
+            "code": "request_id_conflict",
+            "message": "m",
+            "details": {
+              "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+              "original_index": 12
+            }
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-history-full",
+      "rule": "DM-7: history_full is a refusal, never a stored result",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "error": {
+            "code": "history_full",
+            "message": "m",
+            "details": {
+              "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+              "limit": "max_log_entries",
+              "attempt_state": "not_submitted"
+            }
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "live-200-node-id-0",
+      "rule": "§7.10",
+      "target": {
+        "response": {
+          "operation": "getLiveness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 0,
+        "lifecycle": "ready"
+      }
+    },
+    {
+      "name": "live-200-unknown-lifecycle",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getLiveness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 1,
+        "lifecycle": "paused"
+      }
+    },
+    {
+      "name": "ready-200-not-ready",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getReadiness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 1,
+        "lifecycle": "recovering"
+      }
+    },
+    {
+      "name": "cluster-200-address-without-scheme",
+      "rule": "§8.6: client addresses are http base URLs",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "leader",
+        "term": 3,
+        "leader_id": 1,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "127.0.0.1:7001"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-unknown-role",
+      "rule": "Raft roles only",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "observer",
+        "term": 3,
+        "leader_id": 1,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001",
+            "match_index": 9
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002",
+            "match_index": 9
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003",
+            "match_index": 9
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004",
+            "match_index": 9
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005",
+            "match_index": 9
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-six-peers",
+      "rule": "§7.10: at most 5 voters",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "leader",
+        "term": 3,
+        "leader_id": 1,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001"
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002"
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003"
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004"
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005"
+          },
+          {
+            "id": 6,
+            "client_address": "http://127.0.0.1:7006"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-term-2-pow-53",
+      "rule": "D-77",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "leader",
+        "term": 9007199254740992,
+        "leader_id": 1,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001",
+            "match_index": 9
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002",
+            "match_index": 9
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003",
+            "match_index": 9
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004",
+            "match_index": 9
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005",
+            "match_index": 9
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-missing-leader-id",
+      "rule": "O-1: leader_id is null when unknown, never omitted",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "leader",
+        "term": 3,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001",
+            "match_index": 9
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002",
+            "match_index": 9
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003",
+            "match_index": 9
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004",
+            "match_index": 9
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005",
+            "match_index": 9
+          }
+        ]
+      }
+    },
+    {
+      "name": "put-307-without-leader-hint",
+      "rule": "§8.4",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "307"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "not_leader",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-307-submitted",
+      "rule": "§8.4: 307 is never submitted",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "307"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "not_leader",
+          "message": "m",
+          "details": {
+            "leader_hint": 3,
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "get-400-with-request-id",
+      "rule": "reads carry no write fields",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-400-missing-details",
+      "rule": "§8.1 envelope",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": "m"
+        }
+      }
+    },
+    {
+      "name": "put-400-message-not-string",
+      "rule": "§8.1 envelope",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": 5,
+          "details": {}
+        }
+      }
+    },
+    {
+      "name": "put-400-bare-error",
+      "rule": "§8.1 envelope",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "code": "invalid_request",
+        "message": "m",
+        "details": {}
+      }
+    },
+    {
+      "name": "get-404-without-served-by",
+      "rule": "§8.4",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "404"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "not_found",
+          "message": "m",
+          "details": {}
+        }
+      }
+    },
+    {
+      "name": "cas-409-mismatch-without-index",
+      "rule": "§8.1 terminal execution shape",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "version_mismatch",
+          "message": "m",
+          "details": {
+            "current_version": 57,
+            "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "put-409-conflict-with-attempt-state",
+      "rule": "§8.1 conflict shape",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "request_id_conflict",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "original_index": 12,
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-429-without-attempt-state",
+      "rule": "§8.4",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "429"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "busy",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a"
+          }
+        }
+      }
+    },
+    {
+      "name": "get-429-with-write-fields",
+      "rule": "§8.4: reads carry no write-only fields",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "429"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "busy",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-503-unavailable-empty-nodes",
+      "rule": "§8.4: all configured addresses",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unavailable",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted",
+            "nodes": []
+          }
+        }
+      }
+    },
+    {
+      "name": "put-503-recovering-while-ready",
+      "rule": "§8.4: recovering means not ready",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "recovering",
+          "message": "m",
+          "details": {
+            "lifecycle": "ready",
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-504-not-submitted",
+      "rule": "A-5: 504 is always submitted",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "504"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unknown_outcome",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted",
+            "guidance": "retry_same_request_or_query_status",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "put-504-without-guidance",
+      "rule": "§8.4",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "504"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unknown_outcome",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "submitted",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "put-507-capacity-with-history-limit",
+      "rule": "DM-6 vs DM-7 limits",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "capacity_exceeded",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_log_entries",
+            "index": 44,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "put-507-history-full-with-index",
+      "rule": "D-54: history_full is not an execution",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "history_full",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_log_entries",
+            "attempt_state": "not_submitted",
+            "index": 44
+          }
+        }
+      }
+    },
+    {
+      "name": "put-503-code-not-in-enum",
+      "rule": "§8.4: the twelve codes only",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "conflict",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "ready-503-unavailable",
+      "rule": "§8.2: health/ready answers 503 recovering",
+      "target": {
+        "response": {
+          "operation": "getReadiness",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unavailable",
+          "message": "m",
+          "details": {
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

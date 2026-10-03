@@ -1,0 +1,405 @@
+{
+  "schema": "keyval.spec.contract/v1",
+  "source": "PLAN.md §8 (v1.7), with the per-operation readings recorded on beads br-w03-1-endpoints-schemas-nvv and br-w03-2-error-model-examples-b22",
+  "openapi": "3.1.0",
+  "cache_control": "no-store",
+  "integer_maximum": 9007199254740991,
+  "operations": [
+    {
+      "operation": "getKey",
+      "method": "get",
+      "path": "/v1/kv",
+      "requirements": [
+        "F-2"
+      ],
+      "parameters": [
+        {
+          "name": "key",
+          "in": "query",
+          "required": true
+        }
+      ],
+      "request": null,
+      "success": "ReadResult",
+      "statuses": [
+        "200",
+        "400",
+        "404",
+        "429",
+        "503"
+      ]
+    },
+    {
+      "operation": "putKey",
+      "method": "put",
+      "path": "/v1/kv",
+      "requirements": [
+        "F-1",
+        "F-6"
+      ],
+      "parameters": [
+        {
+          "name": "key",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "Idempotency-Key",
+          "in": "header",
+          "required": true
+        }
+      ],
+      "request": "PutRequest",
+      "success": "VersionedWriteResult",
+      "statuses": [
+        "200",
+        "307",
+        "400",
+        "409",
+        "413",
+        "429",
+        "503",
+        "504",
+        "507"
+      ]
+    },
+    {
+      "operation": "deleteKey",
+      "method": "delete",
+      "path": "/v1/kv",
+      "requirements": [
+        "F-3",
+        "F-6"
+      ],
+      "parameters": [
+        {
+          "name": "key",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "Idempotency-Key",
+          "in": "header",
+          "required": true
+        }
+      ],
+      "request": null,
+      "success": "DeleteResult",
+      "statuses": [
+        "200",
+        "307",
+        "400",
+        "409",
+        "429",
+        "503",
+        "504",
+        "507"
+      ]
+    },
+    {
+      "operation": "compareAndSwap",
+      "method": "post",
+      "path": "/v1/cas",
+      "requirements": [
+        "F-5",
+        "F-6"
+      ],
+      "parameters": [
+        {
+          "name": "key",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "Idempotency-Key",
+          "in": "header",
+          "required": true
+        }
+      ],
+      "request": "CasRequest",
+      "success": "VersionedWriteResult",
+      "statuses": [
+        "200",
+        "307",
+        "400",
+        "409",
+        "413",
+        "429",
+        "503",
+        "504",
+        "507"
+      ]
+    },
+    {
+      "operation": "scanKeys",
+      "method": "get",
+      "path": "/v1/scan",
+      "requirements": [
+        "F-4"
+      ],
+      "parameters": [
+        {
+          "name": "start",
+          "in": "query",
+          "required": false
+        },
+        {
+          "name": "end",
+          "in": "query",
+          "required": false
+        },
+        {
+          "name": "after",
+          "in": "query",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false
+        }
+      ],
+      "request": null,
+      "success": "ScanPage",
+      "statuses": [
+        "200",
+        "400",
+        "429",
+        "503"
+      ]
+    },
+    {
+      "operation": "getRequestStatus",
+      "method": "get",
+      "path": "/v1/requests/{request_id}",
+      "requirements": [
+        "F-9"
+      ],
+      "parameters": [
+        {
+          "name": "request_id",
+          "in": "path",
+          "required": true
+        }
+      ],
+      "request": null,
+      "success": "RequestStatus",
+      "statuses": [
+        "200",
+        "400",
+        "429",
+        "503"
+      ]
+    },
+    {
+      "operation": "getLiveness",
+      "method": "get",
+      "path": "/v1/health/live",
+      "requirements": [
+        "O-1"
+      ],
+      "parameters": [],
+      "request": null,
+      "success": "LiveHealth",
+      "statuses": [
+        "200"
+      ]
+    },
+    {
+      "operation": "getReadiness",
+      "method": "get",
+      "path": "/v1/health/ready",
+      "requirements": [
+        "O-1"
+      ],
+      "parameters": [],
+      "request": null,
+      "success": "ReadyHealth",
+      "statuses": [
+        "200",
+        "503"
+      ]
+    },
+    {
+      "operation": "getClusterStatus",
+      "method": "get",
+      "path": "/v1/cluster",
+      "requirements": [
+        "O-1"
+      ],
+      "parameters": [],
+      "request": null,
+      "success": "ClusterStatus",
+      "statuses": [
+        "200"
+      ]
+    }
+  ],
+  "codes": [
+    {
+      "code": "not_leader",
+      "status": "307"
+    },
+    {
+      "code": "invalid_request",
+      "status": "400"
+    },
+    {
+      "code": "not_found",
+      "status": "404"
+    },
+    {
+      "code": "version_mismatch",
+      "status": "409"
+    },
+    {
+      "code": "request_id_conflict",
+      "status": "409"
+    },
+    {
+      "code": "too_large",
+      "status": "413"
+    },
+    {
+      "code": "busy",
+      "status": "429"
+    },
+    {
+      "code": "unavailable",
+      "status": "503"
+    },
+    {
+      "code": "recovering",
+      "status": "503"
+    },
+    {
+      "code": "unknown_outcome",
+      "status": "504"
+    },
+    {
+      "code": "capacity_exceeded",
+      "status": "507"
+    },
+    {
+      "code": "history_full",
+      "status": "507"
+    }
+  ],
+  "byte_limits": [
+    {
+      "pointer": "/components/schemas/Key",
+      "extension": "x-maxUtf8Bytes",
+      "value": 256,
+      "source": "DM-1"
+    },
+    {
+      "pointer": "/components/schemas/Value",
+      "extension": "x-maxUtf8Bytes",
+      "value": 65536,
+      "source": "DM-2"
+    },
+    {
+      "pointer": "/paths/~1v1~1kv/put/requestBody",
+      "extension": "x-maxBodyBytes",
+      "value": 524288,
+      "source": "§7.11 HTTP request body"
+    },
+    {
+      "pointer": "/paths/~1v1~1cas/post/requestBody",
+      "extension": "x-maxBodyBytes",
+      "value": 524288,
+      "source": "§7.11 HTTP request body"
+    },
+    {
+      "pointer": "/components/schemas/ScanPage",
+      "extension": "x-maxPageUtf8Bytes",
+      "value": 1048576,
+      "source": "F-4, §7.11 SCAN page"
+    }
+  ],
+  "examples": [
+    {
+      "source": "§8.6 PUT",
+      "operation": "putKey",
+      "in": "request",
+      "name": "greeting",
+      "value": {
+        "value": "hello"
+      }
+    },
+    {
+      "source": "§8.6 PUT",
+      "operation": "putKey",
+      "in": "response",
+      "status": "200",
+      "name": "greeting",
+      "value": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "source": "§8.6 compare-and-swap",
+      "operation": "compareAndSwap",
+      "in": "request",
+      "name": "counter",
+      "value": {
+        "expected": {
+          "kind": "version",
+          "version": 41
+        },
+        "value": "12"
+      }
+    },
+    {
+      "source": "§8.6 compare-and-swap",
+      "operation": "compareAndSwap",
+      "in": "response",
+      "status": "409",
+      "name": "version-mismatch",
+      "value": {
+        "error": {
+          "code": "version_mismatch",
+          "message": "expected 41, current 57",
+          "details": {
+            "current_version": 57,
+            "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+            "index": 58,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "source": "§8.6 unknown outcome",
+      "operation": "putKey",
+      "in": "response",
+      "status": "504",
+      "name": "deadline",
+      "value": {
+        "error": {
+          "code": "unknown_outcome",
+          "message": "A committed result is not known locally.",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "submitted",
+            "guidance": "retry_same_request_or_query_status",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

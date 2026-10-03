@@ -1,0 +1,1984 @@
+{
+  "schema": "keyval.spec.fixtures/v1",
+  "expect": "valid",
+  "cases": [
+    {
+      "name": "put-body-plan-example",
+      "rule": "§8.6 PUT example",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": "hello"
+      }
+    },
+    {
+      "name": "put-body-empty-value",
+      "rule": "DM-2: a value may be 0 bytes",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": ""
+      }
+    },
+    {
+      "name": "put-body-value-64KiB-ascii",
+      "rule": "DM-2: 65,536 bytes is the largest value",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": {
+          "$repeat": "v",
+          "times": 65536
+        }
+      }
+    },
+    {
+      "name": "put-body-value-64KiB-4-byte-chars",
+      "rule": "DM-2: 16,384 four-byte characters are exactly 65,536 bytes",
+      "target": {
+        "request": "putKey"
+      },
+      "instance": {
+        "value": {
+          "$repeat": "😀",
+          "times": 16384
+        }
+      }
+    },
+    {
+      "name": "cas-body-plan-example",
+      "rule": "§8.6 compare-and-swap example",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "version",
+          "version": 41
+        },
+        "value": "12"
+      }
+    },
+    {
+      "name": "cas-body-expect-absent",
+      "rule": "F-5: expected is absent",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "absent"
+        },
+        "value": "first"
+      }
+    },
+    {
+      "name": "cas-body-expected-version-max",
+      "rule": "D-77: 2^53 - 1 is the largest valid integer",
+      "target": {
+        "request": "compareAndSwap"
+      },
+      "instance": {
+        "expected": {
+          "kind": "version",
+          "version": 9007199254740991
+        },
+        "value": "x"
+      }
+    },
+    {
+      "name": "key-1-byte",
+      "rule": "DM-1: 1 byte is the shortest key",
+      "target": {
+        "parameter": {
+          "operation": "getKey",
+          "name": "key"
+        }
+      },
+      "instance": "a"
+    },
+    {
+      "name": "key-256-bytes-ascii",
+      "rule": "DM-1: 256 bytes is the longest key",
+      "target": {
+        "parameter": {
+          "operation": "getKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "k",
+        "times": 256
+      }
+    },
+    {
+      "name": "key-256-bytes-2-byte-chars",
+      "rule": "DM-1: 128 two-byte characters are 256 bytes",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "é",
+        "times": 128
+      }
+    },
+    {
+      "name": "key-256-bytes-4-byte-chars",
+      "rule": "DM-1: 64 four-byte characters are 256 bytes",
+      "target": {
+        "parameter": {
+          "operation": "deleteKey",
+          "name": "key"
+        }
+      },
+      "instance": {
+        "$repeat": "😀",
+        "times": 64
+      }
+    },
+    {
+      "name": "key-with-reserved-characters",
+      "rule": "§8.1: keys may contain / ? & (and, once decoded, + space %)",
+      "target": {
+        "parameter": {
+          "operation": "compareAndSwap",
+          "name": "key"
+        }
+      },
+      "instance": "a/b?c&d+e f%"
+    },
+    {
+      "name": "key-decomposed-form",
+      "rule": "DM-1: no Unicode normalisation; a decomposed form is a valid key",
+      "target": {
+        "parameter": {
+          "operation": "getKey",
+          "name": "key"
+        }
+      },
+      "instance": "é"
+    },
+    {
+      "name": "scan-start-key",
+      "rule": "§8.5: start is a key",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "start"
+        }
+      },
+      "instance": "a"
+    },
+    {
+      "name": "scan-limit-1",
+      "rule": "F-4: limit 1 is the smallest",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "limit"
+        }
+      },
+      "instance": 1
+    },
+    {
+      "name": "scan-limit-128",
+      "rule": "F-4: limit 128 is the largest",
+      "target": {
+        "parameter": {
+          "operation": "scanKeys",
+          "name": "limit"
+        }
+      },
+      "instance": 128
+    },
+    {
+      "name": "idempotency-key-plan-example",
+      "rule": "F-6: 32 lowercase hex characters",
+      "target": {
+        "parameter": {
+          "operation": "putKey",
+          "name": "Idempotency-Key"
+        }
+      },
+      "instance": "d70ff69df7084a088e4a531837cc4e5a"
+    },
+    {
+      "name": "status-request-id-path",
+      "rule": "F-9: the path carries a request ID",
+      "target": {
+        "parameter": {
+          "operation": "getRequestStatus",
+          "name": "request_id"
+        }
+      },
+      "instance": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5"
+    },
+    {
+      "name": "put-200-plan-example",
+      "rule": "§8.6 PUT response",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "put-200-replayed",
+      "rule": "§8.3: a replay returns the original index and version; served_by may differ",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": true,
+        "served_by": {
+          "node_id": 4,
+          "applied_index": 90
+        }
+      }
+    },
+    {
+      "name": "put-200-integer-max",
+      "rule": "D-77: 2^53 - 1 is valid everywhere",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 9007199254740991,
+        "version": 9007199254740991,
+        "replayed": false,
+        "served_by": {
+          "node_id": 9007199254740991,
+          "applied_index": 9007199254740991
+        }
+      }
+    },
+    {
+      "name": "cas-200",
+      "rule": "F-5: a matching CAS returns the new version",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 42,
+        "version": 42,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "delete-200-existed",
+      "rule": "F-3",
+      "target": {
+        "response": {
+          "operation": "deleteKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 43,
+        "existed": true,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 43
+        }
+      }
+    },
+    {
+      "name": "delete-200-absent-key",
+      "rule": "F-3: deleting an absent key succeeds",
+      "target": {
+        "response": {
+          "operation": "deleteKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+        "index": 43,
+        "existed": false,
+        "replayed": false,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 43
+        }
+      }
+    },
+    {
+      "name": "get-200",
+      "rule": "F-2",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "key": "greeting",
+        "value": "hello",
+        "version": 42,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "get-200-empty-value",
+      "rule": "DM-2",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "key": "k",
+        "value": "",
+        "version": 7,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-empty-page",
+      "rule": "§8.5: an empty page has no continuation",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [],
+        "has_more": false,
+        "next_after": null,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-has-more",
+      "rule": "§8.5: next_after is the last returned key when has_more",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          },
+          {
+            "key": "k001",
+            "value": "v",
+            "version": 2
+          }
+        ],
+        "has_more": true,
+        "next_after": "k001",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-last-page",
+      "rule": "§8.5",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          }
+        ],
+        "has_more": false,
+        "next_after": null,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-128-items",
+      "rule": "F-4: 128 items is the item cap",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": "v",
+            "version": 1
+          },
+          {
+            "key": "k001",
+            "value": "v",
+            "version": 2
+          },
+          {
+            "key": "k002",
+            "value": "v",
+            "version": 3
+          },
+          {
+            "key": "k003",
+            "value": "v",
+            "version": 4
+          },
+          {
+            "key": "k004",
+            "value": "v",
+            "version": 5
+          },
+          {
+            "key": "k005",
+            "value": "v",
+            "version": 6
+          },
+          {
+            "key": "k006",
+            "value": "v",
+            "version": 7
+          },
+          {
+            "key": "k007",
+            "value": "v",
+            "version": 8
+          },
+          {
+            "key": "k008",
+            "value": "v",
+            "version": 9
+          },
+          {
+            "key": "k009",
+            "value": "v",
+            "version": 10
+          },
+          {
+            "key": "k010",
+            "value": "v",
+            "version": 11
+          },
+          {
+            "key": "k011",
+            "value": "v",
+            "version": 12
+          },
+          {
+            "key": "k012",
+            "value": "v",
+            "version": 13
+          },
+          {
+            "key": "k013",
+            "value": "v",
+            "version": 14
+          },
+          {
+            "key": "k014",
+            "value": "v",
+            "version": 15
+          },
+          {
+            "key": "k015",
+            "value": "v",
+            "version": 16
+          },
+          {
+            "key": "k016",
+            "value": "v",
+            "version": 17
+          },
+          {
+            "key": "k017",
+            "value": "v",
+            "version": 18
+          },
+          {
+            "key": "k018",
+            "value": "v",
+            "version": 19
+          },
+          {
+            "key": "k019",
+            "value": "v",
+            "version": 20
+          },
+          {
+            "key": "k020",
+            "value": "v",
+            "version": 21
+          },
+          {
+            "key": "k021",
+            "value": "v",
+            "version": 22
+          },
+          {
+            "key": "k022",
+            "value": "v",
+            "version": 23
+          },
+          {
+            "key": "k023",
+            "value": "v",
+            "version": 24
+          },
+          {
+            "key": "k024",
+            "value": "v",
+            "version": 25
+          },
+          {
+            "key": "k025",
+            "value": "v",
+            "version": 26
+          },
+          {
+            "key": "k026",
+            "value": "v",
+            "version": 27
+          },
+          {
+            "key": "k027",
+            "value": "v",
+            "version": 28
+          },
+          {
+            "key": "k028",
+            "value": "v",
+            "version": 29
+          },
+          {
+            "key": "k029",
+            "value": "v",
+            "version": 30
+          },
+          {
+            "key": "k030",
+            "value": "v",
+            "version": 31
+          },
+          {
+            "key": "k031",
+            "value": "v",
+            "version": 32
+          },
+          {
+            "key": "k032",
+            "value": "v",
+            "version": 33
+          },
+          {
+            "key": "k033",
+            "value": "v",
+            "version": 34
+          },
+          {
+            "key": "k034",
+            "value": "v",
+            "version": 35
+          },
+          {
+            "key": "k035",
+            "value": "v",
+            "version": 36
+          },
+          {
+            "key": "k036",
+            "value": "v",
+            "version": 37
+          },
+          {
+            "key": "k037",
+            "value": "v",
+            "version": 38
+          },
+          {
+            "key": "k038",
+            "value": "v",
+            "version": 39
+          },
+          {
+            "key": "k039",
+            "value": "v",
+            "version": 40
+          },
+          {
+            "key": "k040",
+            "value": "v",
+            "version": 41
+          },
+          {
+            "key": "k041",
+            "value": "v",
+            "version": 42
+          },
+          {
+            "key": "k042",
+            "value": "v",
+            "version": 43
+          },
+          {
+            "key": "k043",
+            "value": "v",
+            "version": 44
+          },
+          {
+            "key": "k044",
+            "value": "v",
+            "version": 45
+          },
+          {
+            "key": "k045",
+            "value": "v",
+            "version": 46
+          },
+          {
+            "key": "k046",
+            "value": "v",
+            "version": 47
+          },
+          {
+            "key": "k047",
+            "value": "v",
+            "version": 48
+          },
+          {
+            "key": "k048",
+            "value": "v",
+            "version": 49
+          },
+          {
+            "key": "k049",
+            "value": "v",
+            "version": 50
+          },
+          {
+            "key": "k050",
+            "value": "v",
+            "version": 51
+          },
+          {
+            "key": "k051",
+            "value": "v",
+            "version": 52
+          },
+          {
+            "key": "k052",
+            "value": "v",
+            "version": 53
+          },
+          {
+            "key": "k053",
+            "value": "v",
+            "version": 54
+          },
+          {
+            "key": "k054",
+            "value": "v",
+            "version": 55
+          },
+          {
+            "key": "k055",
+            "value": "v",
+            "version": 56
+          },
+          {
+            "key": "k056",
+            "value": "v",
+            "version": 57
+          },
+          {
+            "key": "k057",
+            "value": "v",
+            "version": 58
+          },
+          {
+            "key": "k058",
+            "value": "v",
+            "version": 59
+          },
+          {
+            "key": "k059",
+            "value": "v",
+            "version": 60
+          },
+          {
+            "key": "k060",
+            "value": "v",
+            "version": 61
+          },
+          {
+            "key": "k061",
+            "value": "v",
+            "version": 62
+          },
+          {
+            "key": "k062",
+            "value": "v",
+            "version": 63
+          },
+          {
+            "key": "k063",
+            "value": "v",
+            "version": 64
+          },
+          {
+            "key": "k064",
+            "value": "v",
+            "version": 65
+          },
+          {
+            "key": "k065",
+            "value": "v",
+            "version": 66
+          },
+          {
+            "key": "k066",
+            "value": "v",
+            "version": 67
+          },
+          {
+            "key": "k067",
+            "value": "v",
+            "version": 68
+          },
+          {
+            "key": "k068",
+            "value": "v",
+            "version": 69
+          },
+          {
+            "key": "k069",
+            "value": "v",
+            "version": 70
+          },
+          {
+            "key": "k070",
+            "value": "v",
+            "version": 71
+          },
+          {
+            "key": "k071",
+            "value": "v",
+            "version": 72
+          },
+          {
+            "key": "k072",
+            "value": "v",
+            "version": 73
+          },
+          {
+            "key": "k073",
+            "value": "v",
+            "version": 74
+          },
+          {
+            "key": "k074",
+            "value": "v",
+            "version": 75
+          },
+          {
+            "key": "k075",
+            "value": "v",
+            "version": 76
+          },
+          {
+            "key": "k076",
+            "value": "v",
+            "version": 77
+          },
+          {
+            "key": "k077",
+            "value": "v",
+            "version": 78
+          },
+          {
+            "key": "k078",
+            "value": "v",
+            "version": 79
+          },
+          {
+            "key": "k079",
+            "value": "v",
+            "version": 80
+          },
+          {
+            "key": "k080",
+            "value": "v",
+            "version": 81
+          },
+          {
+            "key": "k081",
+            "value": "v",
+            "version": 82
+          },
+          {
+            "key": "k082",
+            "value": "v",
+            "version": 83
+          },
+          {
+            "key": "k083",
+            "value": "v",
+            "version": 84
+          },
+          {
+            "key": "k084",
+            "value": "v",
+            "version": 85
+          },
+          {
+            "key": "k085",
+            "value": "v",
+            "version": 86
+          },
+          {
+            "key": "k086",
+            "value": "v",
+            "version": 87
+          },
+          {
+            "key": "k087",
+            "value": "v",
+            "version": 88
+          },
+          {
+            "key": "k088",
+            "value": "v",
+            "version": 89
+          },
+          {
+            "key": "k089",
+            "value": "v",
+            "version": 90
+          },
+          {
+            "key": "k090",
+            "value": "v",
+            "version": 91
+          },
+          {
+            "key": "k091",
+            "value": "v",
+            "version": 92
+          },
+          {
+            "key": "k092",
+            "value": "v",
+            "version": 93
+          },
+          {
+            "key": "k093",
+            "value": "v",
+            "version": 94
+          },
+          {
+            "key": "k094",
+            "value": "v",
+            "version": 95
+          },
+          {
+            "key": "k095",
+            "value": "v",
+            "version": 96
+          },
+          {
+            "key": "k096",
+            "value": "v",
+            "version": 97
+          },
+          {
+            "key": "k097",
+            "value": "v",
+            "version": 98
+          },
+          {
+            "key": "k098",
+            "value": "v",
+            "version": 99
+          },
+          {
+            "key": "k099",
+            "value": "v",
+            "version": 100
+          },
+          {
+            "key": "k100",
+            "value": "v",
+            "version": 101
+          },
+          {
+            "key": "k101",
+            "value": "v",
+            "version": 102
+          },
+          {
+            "key": "k102",
+            "value": "v",
+            "version": 103
+          },
+          {
+            "key": "k103",
+            "value": "v",
+            "version": 104
+          },
+          {
+            "key": "k104",
+            "value": "v",
+            "version": 105
+          },
+          {
+            "key": "k105",
+            "value": "v",
+            "version": 106
+          },
+          {
+            "key": "k106",
+            "value": "v",
+            "version": 107
+          },
+          {
+            "key": "k107",
+            "value": "v",
+            "version": 108
+          },
+          {
+            "key": "k108",
+            "value": "v",
+            "version": 109
+          },
+          {
+            "key": "k109",
+            "value": "v",
+            "version": 110
+          },
+          {
+            "key": "k110",
+            "value": "v",
+            "version": 111
+          },
+          {
+            "key": "k111",
+            "value": "v",
+            "version": 112
+          },
+          {
+            "key": "k112",
+            "value": "v",
+            "version": 113
+          },
+          {
+            "key": "k113",
+            "value": "v",
+            "version": 114
+          },
+          {
+            "key": "k114",
+            "value": "v",
+            "version": 115
+          },
+          {
+            "key": "k115",
+            "value": "v",
+            "version": 116
+          },
+          {
+            "key": "k116",
+            "value": "v",
+            "version": 117
+          },
+          {
+            "key": "k117",
+            "value": "v",
+            "version": 118
+          },
+          {
+            "key": "k118",
+            "value": "v",
+            "version": 119
+          },
+          {
+            "key": "k119",
+            "value": "v",
+            "version": 120
+          },
+          {
+            "key": "k120",
+            "value": "v",
+            "version": 121
+          },
+          {
+            "key": "k121",
+            "value": "v",
+            "version": 122
+          },
+          {
+            "key": "k122",
+            "value": "v",
+            "version": 123
+          },
+          {
+            "key": "k123",
+            "value": "v",
+            "version": 124
+          },
+          {
+            "key": "k124",
+            "value": "v",
+            "version": 125
+          },
+          {
+            "key": "k125",
+            "value": "v",
+            "version": 126
+          },
+          {
+            "key": "k126",
+            "value": "v",
+            "version": 127
+          },
+          {
+            "key": "k127",
+            "value": "v",
+            "version": 128
+          }
+        ],
+        "has_more": true,
+        "next_after": "k127",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "scan-200-under-byte-cap",
+      "rule": "§7.11: 15 × (4 + 65,536) = 983,100 decoded bytes ≤ 1 MiB",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "items": [
+          {
+            "key": "k000",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 1
+          },
+          {
+            "key": "k001",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 2
+          },
+          {
+            "key": "k002",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 3
+          },
+          {
+            "key": "k003",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 4
+          },
+          {
+            "key": "k004",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 5
+          },
+          {
+            "key": "k005",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 6
+          },
+          {
+            "key": "k006",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 7
+          },
+          {
+            "key": "k007",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 8
+          },
+          {
+            "key": "k008",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 9
+          },
+          {
+            "key": "k009",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 10
+          },
+          {
+            "key": "k010",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 11
+          },
+          {
+            "key": "k011",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 12
+          },
+          {
+            "key": "k012",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 13
+          },
+          {
+            "key": "k013",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 14
+          },
+          {
+            "key": "k014",
+            "value": {
+              "$repeat": "v",
+              "times": 65536
+            },
+            "version": 15
+          }
+        ],
+        "has_more": true,
+        "next_after": "k014",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-put",
+      "rule": "F-9, §8.3",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+          "index": 42,
+          "version": 42,
+          "replayed": true,
+          "served_by": {
+            "node_id": 2,
+            "applied_index": 42
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-delete",
+      "rule": "F-9",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+          "index": 43,
+          "existed": true,
+          "replayed": true,
+          "served_by": {
+            "node_id": 2,
+            "applied_index": 42
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-version-mismatch",
+      "rule": "§8.3: a lookup returns a stored mismatch with HTTP 200",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "error": {
+            "code": "version_mismatch",
+            "message": "m",
+            "details": {
+              "current_version": null,
+              "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+              "index": 58,
+              "replayed": true
+            }
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-known-capacity-exceeded",
+      "rule": "§8.3: a lookup returns a stored capacity result with HTTP 200",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "known",
+        "result": {
+          "error": {
+            "code": "capacity_exceeded",
+            "message": "m",
+            "details": {
+              "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+              "limit": "max_live_bytes",
+              "index": 44,
+              "replayed": true
+            }
+          }
+        },
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "status-unknown",
+      "rule": "F-9",
+      "target": {
+        "response": {
+          "operation": "getRequestStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "state": "unknown",
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 42
+        }
+      }
+    },
+    {
+      "name": "live-200-recovering",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getLiveness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 1,
+        "lifecycle": "recovering"
+      }
+    },
+    {
+      "name": "live-200-failed",
+      "rule": "O-1, DM-7",
+      "target": {
+        "response": {
+          "operation": "getLiveness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 5,
+        "lifecycle": "failed"
+      }
+    },
+    {
+      "name": "ready-200",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getReadiness",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "status": "ok",
+        "node_id": 1,
+        "lifecycle": "ready"
+      }
+    },
+    {
+      "name": "cluster-200-leader",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "leader",
+        "term": 3,
+        "leader_id": 1,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001",
+            "match_index": 9
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002",
+            "match_index": 9
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003",
+            "match_index": 9
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004",
+            "match_index": 9
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005",
+            "match_index": 9
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-follower-no-leader-1-voter",
+      "rule": "O-1: leader unknown; progress unknown on a follower; 1-voter config (§7.10)",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 2,
+        "cluster_id": "keyval-local-v1",
+        "role": "follower",
+        "term": 0,
+        "leader_id": null,
+        "durable_last_index": 0,
+        "commit_index": 0,
+        "applied_index": 0,
+        "peers": [
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster-200-pre-candidate",
+      "rule": "O-1, §7.10 pre-vote",
+      "target": {
+        "response": {
+          "operation": "getClusterStatus",
+          "status": "200"
+        }
+      },
+      "instance": {
+        "node_id": 1,
+        "cluster_id": "keyval-local-v1",
+        "role": "pre_candidate",
+        "term": 3,
+        "leader_id": null,
+        "durable_last_index": 9,
+        "commit_index": 9,
+        "applied_index": 9,
+        "peers": [
+          {
+            "id": 1,
+            "client_address": "http://127.0.0.1:7001",
+            "match_index": 9
+          },
+          {
+            "id": 2,
+            "client_address": "http://127.0.0.1:7002",
+            "match_index": 9
+          },
+          {
+            "id": 3,
+            "client_address": "http://127.0.0.1:7003",
+            "match_index": 9
+          },
+          {
+            "id": 4,
+            "client_address": "http://127.0.0.1:7004",
+            "match_index": 9
+          },
+          {
+            "id": 5,
+            "client_address": "http://127.0.0.1:7005",
+            "match_index": 9
+          }
+        ]
+      }
+    },
+    {
+      "name": "put-307",
+      "rule": "§8.4 307",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "307"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "not_leader",
+          "message": "m",
+          "details": {
+            "leader_hint": 3,
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-400-with-request-id",
+      "rule": "§8.1: request_id when a well-formed Idempotency-Key was present",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-400-without-request-id",
+      "rule": "§8.1: omitted when the ID was missing or malformed",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": "m",
+          "details": {}
+        }
+      }
+    },
+    {
+      "name": "get-400",
+      "rule": "§8.4",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "400"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "invalid_request",
+          "message": "m",
+          "details": {}
+        }
+      }
+    },
+    {
+      "name": "get-404",
+      "rule": "§8.4: not_found carries served_by",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "404"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "not_found",
+          "message": "m",
+          "details": {
+            "served_by": {
+              "node_id": 2,
+              "applied_index": 42
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cas-409-plan-example",
+      "rule": "§8.6 version_mismatch example",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "version_mismatch",
+          "message": "expected 41, current 57",
+          "details": {
+            "current_version": 57,
+            "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+            "index": 58,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "cas-409-mismatch-key-absent",
+      "rule": "§8.4: current_version is null when the key is absent",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "version_mismatch",
+          "message": "m",
+          "details": {
+            "current_version": null,
+            "request_id": "7f3c0b8e2a6d4f19b1c5e0a9d8f7c6b5",
+            "index": 58,
+            "replayed": true
+          }
+        }
+      }
+    },
+    {
+      "name": "cas-409-conflict",
+      "rule": "§8.4 request_id_conflict",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "request_id_conflict",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "original_index": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "put-409-conflict",
+      "rule": "§8.4 request_id_conflict",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "409"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "request_id_conflict",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "original_index": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "put-413",
+      "rule": "§8.4 413",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "413"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "too_large",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a"
+          }
+        }
+      }
+    },
+    {
+      "name": "put-429",
+      "rule": "§8.4 429 write",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "429"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "busy",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "get-429",
+      "rule": "§8.4 429 read: no write fields",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "429"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "busy",
+          "message": "m",
+          "details": {}
+        }
+      }
+    },
+    {
+      "name": "put-503-unavailable",
+      "rule": "§8.4 503 unavailable, write",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unavailable",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "put-503-recovering",
+      "rule": "§8.4 503 recovering, write",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "recovering",
+          "message": "m",
+          "details": {
+            "lifecycle": "recovering",
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "scan-503-recovering",
+      "rule": "§8.4 503 recovering, read",
+      "target": {
+        "response": {
+          "operation": "scanKeys",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "recovering",
+          "message": "m",
+          "details": {
+            "lifecycle": "starting"
+          }
+        }
+      }
+    },
+    {
+      "name": "get-503-unavailable",
+      "rule": "§8.4 503 unavailable, read",
+      "target": {
+        "response": {
+          "operation": "getKey",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unavailable",
+          "message": "m",
+          "details": {
+            "nodes": [
+              "http://127.0.0.1:7001"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "put-504-plan-example",
+      "rule": "§8.6 unknown_outcome example",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "504"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "unknown_outcome",
+          "message": "A committed result is not known locally.",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "attempt_state": "submitted",
+            "guidance": "retry_same_request_or_query_status",
+            "nodes": [
+              "http://127.0.0.1:7001",
+              "http://127.0.0.1:7002",
+              "http://127.0.0.1:7003",
+              "http://127.0.0.1:7004",
+              "http://127.0.0.1:7005"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "put-507-capacity-exceeded",
+      "rule": "§8.4 507 capacity_exceeded",
+      "target": {
+        "response": {
+          "operation": "putKey",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "capacity_exceeded",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_live_keys",
+            "index": 44,
+            "replayed": false
+          }
+        }
+      }
+    },
+    {
+      "name": "cas-507-history-full",
+      "rule": "§8.4 507 history_full",
+      "target": {
+        "response": {
+          "operation": "compareAndSwap",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "history_full",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_history_bytes",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "delete-507-history-full",
+      "rule": "DM-7",
+      "target": {
+        "response": {
+          "operation": "deleteKey",
+          "status": "507"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "history_full",
+          "message": "m",
+          "details": {
+            "request_id": "d70ff69df7084a088e4a531837cc4e5a",
+            "limit": "max_log_entries",
+            "attempt_state": "not_submitted"
+          }
+        }
+      }
+    },
+    {
+      "name": "ready-503",
+      "rule": "O-1",
+      "target": {
+        "response": {
+          "operation": "getReadiness",
+          "status": "503"
+        }
+      },
+      "instance": {
+        "error": {
+          "code": "recovering",
+          "message": "m",
+          "details": {
+            "lifecycle": "failed"
+          }
+        }
+      }
+    }
+  ]
+}

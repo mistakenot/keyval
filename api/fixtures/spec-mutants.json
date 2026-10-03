@@ -1,0 +1,357 @@
+{
+  "schema": "keyval.spec.mutants/v1",
+  "target": "api/openapi.yaml",
+  "mutants": [
+    {
+      "name": "openapi-missing-info",
+      "rule": "openapi",
+      "why": "an OpenAPI document needs info",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/info"
+        }
+      ]
+    },
+    {
+      "name": "openapi-dangling-ref",
+      "rule": "openapi",
+      "why": "every $ref resolves",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/schemas/PutRequest/properties/value/$ref",
+          "value": "#/components/schemas/NoSuchValue"
+        }
+      ]
+    },
+    {
+      "name": "no-store-missing-on-get-200",
+      "rule": "no-store",
+      "why": "§8.1: every response carries Cache-Control",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/paths/~1v1~1kv/get/responses/200/headers/Cache-Control"
+        }
+      ]
+    },
+    {
+      "name": "no-store-missing-on-shared-response",
+      "rule": "no-store",
+      "why": "§8.1: error responses too",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/responses/NotFound/headers/Cache-Control"
+        }
+      ]
+    },
+    {
+      "name": "no-store-wrong-value",
+      "rule": "no-store",
+      "why": "§8.1: the value is exactly no-store",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/headers/CacheControl/schema/const",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "name": "example-does-not-validate",
+      "rule": "examples",
+      "why": "every example validates against its schema",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1cas/post/requestBody/content/application~1json/examples/create-only/value/value",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "name": "example-code-misspelled",
+      "rule": "examples",
+      "why": "every example validates against its schema",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1cas/post/responses/409/content/application~1json/examples/version-mismatch/value/error/code",
+          "value": "versionmismatch"
+        }
+      ]
+    },
+    {
+      "name": "closed-request-body-open",
+      "rule": "closed",
+      "why": "§8.1 strict JSON: request bodies reject unknown fields",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/PutRequest/additionalProperties"
+        }
+      ]
+    },
+    {
+      "name": "closed-error-details-open",
+      "rule": "closed",
+      "why": "per-code details schemas are closed",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/BusyWriteError/properties/error/properties/details/additionalProperties"
+        }
+      ]
+    },
+    {
+      "name": "codes-extra-enum-member",
+      "rule": "codes",
+      "why": "§8.4 has exactly twelve codes",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/components/schemas/ErrorCode/enum/-",
+          "value": "conflict"
+        }
+      ]
+    },
+    {
+      "name": "codes-missing-enum-member",
+      "rule": "codes",
+      "why": "§8.4 has exactly twelve codes",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/ErrorCode/enum/11"
+        }
+      ]
+    },
+    {
+      "name": "codes-const-misspelled",
+      "rule": "codes",
+      "why": "every error schema's code is one of the twelve",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/schemas/BusyReadError/properties/error/properties/code/const",
+          "value": "busyy"
+        }
+      ]
+    },
+    {
+      "name": "codes-const-not-tied-to-enum",
+      "rule": "codes",
+      "why": "every error schema's code references ErrorCode",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/TooLargeError/properties/error/properties/code/$ref"
+        }
+      ]
+    },
+    {
+      "name": "codes-under-wrong-status",
+      "rule": "codes",
+      "why": "§8.4: each code has one HTTP status",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1kv/delete/responses/507/$ref",
+          "value": "#/components/responses/NotFound"
+        }
+      ]
+    },
+    {
+      "name": "integers-without-maximum",
+      "rule": "integers",
+      "why": "D-77: every integer is below 2^53",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/Term/maximum"
+        }
+      ]
+    },
+    {
+      "name": "integers-maximum-2-pow-53",
+      "rule": "integers",
+      "why": "D-77: 2^53 itself is invalid",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/schemas/NodeId/maximum",
+          "value": 9007199254740992
+        }
+      ]
+    },
+    {
+      "name": "operations-missing-delete",
+      "rule": "operations",
+      "why": "§8.2: all nine endpoints",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/paths/~1v1~1kv/delete"
+        }
+      ]
+    },
+    {
+      "name": "operations-missing-307",
+      "rule": "operations",
+      "why": "§8.4: writes can be redirected",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/paths/~1v1~1kv/put/responses/307"
+        }
+      ]
+    },
+    {
+      "name": "operations-extra-status",
+      "rule": "operations",
+      "why": "per-operation status sets are exact",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/paths/~1v1~1health~1live/get/responses/503",
+          "value": {
+            "$ref": "#/components/responses/ReadUnavailable"
+          }
+        }
+      ]
+    },
+    {
+      "name": "operations-delete-returns-put-result",
+      "rule": "operations",
+      "why": "W03: per-operation response schemas",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1kv/delete/responses/200/content/application~1json/schema/$ref",
+          "value": "#/components/schemas/VersionedWriteResult"
+        }
+      ]
+    },
+    {
+      "name": "operations-renamed-operation-id",
+      "rule": "operations",
+      "why": "operation IDs are stable (§10.13 registry api field)",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1scan/get/operationId",
+          "value": "scan"
+        }
+      ]
+    },
+    {
+      "name": "operations-peer-channel-exposed",
+      "rule": "operations",
+      "why": "§8.2: the peer channel is not part of the public contract",
+      "patch": [
+        {
+          "op": "add",
+          "path": "/paths/~1raft",
+          "value": {
+            "post": {
+              "operationId": "raft",
+              "responses": {
+                "200": {
+                  "description": "peer envelope accepted",
+                  "headers": {
+                    "Cache-Control": {
+                      "$ref": "#/components/headers/CacheControl"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "operations-wrong-requirements",
+      "rule": "operations",
+      "why": "§8.2 Req column",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/paths/~1v1~1cas/post/x-requirements/0",
+          "value": "F-4"
+        }
+      ]
+    },
+    {
+      "name": "operations-key-not-required",
+      "rule": "operations",
+      "why": "§8.1: the key is a required query parameter",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/parameters/Key/required",
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "limits-key-missing",
+      "rule": "limits",
+      "why": "DM-1 byte limit is recorded",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/components/schemas/Key/x-maxUtf8Bytes"
+        }
+      ]
+    },
+    {
+      "name": "limits-value-off-by-one",
+      "rule": "limits",
+      "why": "DM-2 is 65,536 bytes",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/schemas/Value/x-maxUtf8Bytes",
+          "value": 65535
+        }
+      ]
+    },
+    {
+      "name": "limits-body-missing",
+      "rule": "limits",
+      "why": "§7.11 body limit is recorded",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/paths/~1v1~1cas/post/requestBody/x-maxBodyBytes"
+        }
+      ]
+    },
+    {
+      "name": "plan-example-drift",
+      "rule": "plan-examples",
+      "why": "§8.6 examples are reproduced exactly",
+      "patch": [
+        {
+          "op": "replace",
+          "path": "/components/responses/UnknownOutcome/content/application~1json/examples/deadline/value/error/message",
+          "value": "Unknown."
+        }
+      ]
+    },
+    {
+      "name": "plan-example-missing",
+      "rule": "plan-examples",
+      "why": "§8.6 examples are present",
+      "patch": [
+        {
+          "op": "remove",
+          "path": "/paths/~1v1~1cas/post/requestBody/content/application~1json/examples/counter"
+        }
+      ]
+    }
+  ]
+}
