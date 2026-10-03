@@ -1,0 +1,581 @@
+# Work graph — the machine mirror of PLAN.md §12.2 (§10.13, §11.11; W06).
+#
+# Shared surface (§11.7): edit only under a short, explicit Agent Mail reservation.
+# PLAN.md wins (§0.4). Changes flow plan → this file → beads, never the other way: never
+# edit a row to match the tracker. One [[item]] per §12.2 row, in plan order:
+#
+# - id, title: the §12.2 ID and Title cells, verbatim.
+# - deps: the "Depends on" cell ("—" is []); identical to the §12.3 edges into the item.
+# - reqs: the Reqs cell, one entry per comma-separated token, verbatim, with ranges such
+#   as "F-1…F-10" expanded in place. Only §6 requirement IDs activate requirements;
+#   principles, goals and section references are context (§10.13).
+# - area: the Area cell, one entry per token, verbatim. A parenthesised suffix is the
+#   plan's qualifier; the area name (Appendix A) is the text before it.
+# - milestone: the item bead's m0–m5 label (§12.2 has no milestone column).
+# - accept: the executable acceptance selectors `./dev accept` runs, each one `./dev`
+#   command line (arguments separated by spaces, no shell quoting). The bead that
+#   implements a selector registers it (§12.2), so an item lists only the selectors
+#   registered so far. An empty list selects nothing, and acceptance must fail on it (P10).
+# - bead: the tracker's bead ID, recorded by `./dev beads import`. It is never guessed or
+#   typed by hand, and is "" until the import records it.
+#
+# The registry gate (condition 8) fails when id, deps, reqs or area differ from §12.2, on a
+# cycle, or when the edges between plan:W<nn> beads differ from deps. milestone, accept
+# and bead are registry-owned detail.
+
+schema = "keyval.registry.workgraph/v1"
+
+[[item]]
+id = "W01"
+title = "Bootstrap: workspace, pinned toolchain, `./dev` (doctor, check, gate fast), lint policy, AGENTS.md (§11.5), DEPENDENCIES.md, beads init"
+deps = []
+reqs = ["P7", "CD-8", "CD-12", "O-8"]
+area = ["root", "xtask"]
+milestone = "m0"
+accept = [
+    "./dev check XTASK",
+    "./dev check DEV-DOCTOR",
+    "./dev check DEV-CHECK",
+    "./dev check LINT-PROBES",
+    "./dev check LINT-ALLOWS",
+    "./dev check LINT-TIERS",
+    "./dev check DEP-RULE",
+    "./dev check DEP-LEDGER",
+    "./dev check AGENTS-RULES",
+    "./dev check DEV-GATE",
+    "./dev check DEV-STEPLOG",
+    "./dev check INVARIANT",
+]
+bead = ""
+
+[[item]]
+id = "W02"
+title = "Raft library determinism spike"
+deps = ["W01"]
+reqs = ["P4", "T-3", "T-11"]
+area = ["vendor", "spike"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W03"
+title = "Complete `api/openapi.yaml` per §8, with fixtures"
+deps = ["W01"]
+reqs = ["F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "O-1"]
+area = ["api"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W04"
+title = "Domain types and ports"
+deps = ["W01", "W03"]
+reqs = ["CD-1", "CD-2", "CD-3", "CD-4", "CD-5", "CD-11", "DM-1", "DM-2", "DM-4", "T-1"]
+area = ["types"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W05"
+title = "Verification registry, T0 registry gate, traceability report"
+deps = ["W01", "W03", "W04", "W06"]
+reqs = ["P5", "§10.13"]
+area = ["registry", "xtask"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W06"
+title = "Work-graph manifest and idempotent bead import"
+deps = ["W01"]
+reqs = ["G1", "§11.11"]
+area = ["registry", "xtask"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W07"
+title = "Exact-candidate commit wrapper (`./dev commit`), acceptance runner (`./dev accept`) and closure lifecycle"
+deps = ["W01"]
+reqs = ["P11", "§11.10", "§11.3"]
+area = ["xtask"]
+milestone = "m0"
+accept = ["./dev check DEV-COMMIT"]
+bead = ""
+
+[[item]]
+id = "W08"
+title = "Config type, genesis fingerprint, limits registry"
+deps = ["W04"]
+reqs = ["O-5", "O-9", "DUR-8", "CD-3", "CD-9"]
+area = ["types", "config"]
+milestone = "m0"
+accept = []
+bead = ""
+
+[[item]]
+id = "W09"
+title = "State machine: PUT/GET, versions, request history, live-state quota, invariants"
+deps = ["W04", "W08"]
+reqs = ["DM-3", "DM-5", "DM-6", "F-1", "F-2", "F-6", "C-6", "CD-7"]
+area = ["statemachine"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W10"
+title = "Reference model, observation schema, differential tests"
+deps = ["W03", "W09"]
+reqs = ["T-7", "T-12", "§10.14"]
+area = ["model"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W11"
+title = "Journal engine: frames, genesis, logical truncation, offset index, entry cache, recovery"
+deps = ["W04", "W08"]
+reqs = ["DUR-1", "DUR-4", "DUR-5", "DUR-6", "DUR-8", "DUR-9", "CD-9", "CD-10"]
+area = ["journal"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W12"
+title = "Byte-storage adapters: real files and simulated disk"
+deps = ["W11", "W15"]
+reqs = ["DUR-1", "DUR-7", "DUR-9", "T-2"]
+area = ["fs_storage (file adapter)", "sim/disk"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W13"
+title = "`raft-rs` adapter and the Ready loop (§7.4)"
+deps = ["W02", "W11"]
+reqs = ["C-1", "C-2", "DUR-2"]
+area = ["raft_adapter"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W14"
+title = "Node controller: request lifecycle, reads, effects"
+deps = ["W09", "W13"]
+reqs = ["F-7", "A-2", "A-5", "C-3", "C-4"]
+area = ["node"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W15"
+title = "Simulation scheduler and canonical trace"
+deps = ["W04"]
+reqs = ["T-3", "T-5", "T-11", "P4"]
+area = ["sim"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W16"
+title = "Simulated network adapter"
+deps = ["W13", "W15"]
+reqs = ["§9.1"]
+area = ["sim"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W17"
+title = "Simulation composition root: five-node durable slice"
+deps = ["W12", "W14", "W15", "W16"]
+reqs = ["T-2", "DUR-3", "P3"]
+area = ["sim", "xtask"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W18"
+title = "Production composition root: `keyval-server` binary (init + run), single node, PUT/GET over HTTP"
+deps = ["W03", "W08", "W12", "W14"]
+reqs = ["F-1", "F-2", "O-1", "O-3", "O-9", "DUR-3", "§7.7 step 0"]
+area = ["server"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W19"
+title = "M1 owner demo"
+deps = ["W17", "W18"]
+reqs = ["G1"]
+area = ["xtask (demo)"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W20"
+title = "M1 drift audit"
+deps = ["W19"]
+reqs = ["§11.9"]
+area = ["audit"]
+milestone = "m1"
+accept = []
+bead = ""
+
+[[item]]
+id = "W21"
+title = "Peer transport, five-node config, write routing"
+deps = ["W18"]
+reqs = ["F-7", "A-1", "A-3", "O-5"]
+area = ["server"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W22"
+title = "Cluster launcher and lifecycle commands"
+deps = ["W21"]
+reqs = ["O-2", "O-3"]
+area = ["xtask"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W23"
+title = "`keyval` CLI crate with `doctor`"
+deps = ["W11", "W12"]
+reqs = ["O-7", "O-6"]
+area = ["cli"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W24"
+title = "Real-file crash probes and lifecycle smoke"
+deps = ["W12", "W22", "W23"]
+reqs = ["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"]
+area = ["fs_storage (probe tests)", "xtask"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W25"
+title = "M2 owner demo"
+deps = ["W22", "W23", "W24"]
+reqs = ["G1"]
+area = ["xtask (demo)"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W26"
+title = "M2 drift audit"
+deps = ["W25"]
+reqs = ["§11.9"]
+area = ["audit"]
+milestone = "m2"
+accept = []
+bead = ""
+
+[[item]]
+id = "W27"
+title = "DELETE and COMPARE_SWAP"
+deps = ["W09", "W10", "W14"]
+reqs = ["F-3", "F-5", "C-5", "DM-3"]
+area = ["statemachine/apply", "node/write_path"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W28"
+title = "SCAN"
+deps = ["W09", "W10", "W14"]
+reqs = ["F-4", "C-8", "DM-4"]
+area = ["statemachine/scan", "node/reads"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W29"
+title = "Request status and the full retry/ambiguity lifecycle"
+deps = ["W14", "W27"]
+reqs = ["F-6", "F-9", "F-10", "C-6", "A-5", "DM-7"]
+area = ["node/write_path", "node/lifecycle", "statemachine/history"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W30"
+title = "Reference model server"
+deps = ["W03", "W10"]
+reqs = ["T-7"]
+area = ["model"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W31"
+title = "Independent conformance suite"
+deps = ["W03", "W30", "W38"]
+reqs = ["T-12", "§10.8"]
+area = ["conformance"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W32"
+title = "Complete HTTP surface"
+deps = ["W18", "W21", "W22", "W27", "W28", "W29", "W31"]
+reqs = ["F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-7", "F-8", "F-9", "F-10", "O-1"]
+area = ["server"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W33"
+title = "CLI: all operations, pending store, bounded retries"
+deps = ["W23", "W32"]
+reqs = ["O-4", "O-6", "C-6"]
+area = ["cli"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W34"
+title = "M3 owner demo"
+deps = ["W32", "W33"]
+reqs = ["G1", "G2"]
+area = ["xtask (demo)"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W35"
+title = "M3 drift audit"
+deps = ["W34"]
+reqs = ["§11.9"]
+area = ["audit"]
+milestone = "m3"
+accept = []
+bead = ""
+
+[[item]]
+id = "W36"
+title = "Workload generator and observation recording"
+deps = ["W10", "W17"]
+reqs = ["§10.3"]
+area = ["sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W37"
+title = "Nemesis, swarm configurations, scenario files, heal protocol"
+deps = ["W12", "W16", "W17", "W36"]
+reqs = ["§9.1", "§10.4", "T-10", "A-4"]
+area = ["sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W38"
+title = "Write-history checkers K-1, K-2, K-3, K-4, K-10"
+deps = ["W10", "W36"]
+reqs = ["C-1", "C-2", "C-5", "C-6", "DM-3"]
+area = ["checker"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W39"
+title = "Read, convergence and liveness checkers K-5, K-6, K-7, K-9"
+deps = ["W10", "W36", "W37"]
+reqs = ["C-3", "C-4", "C-8", "A-1", "A-2", "A-3", "A-4"]
+area = ["checker"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W40"
+title = "Raft, persistence and honesty checkers K-8, K-11, K-12"
+deps = ["W10", "W13", "W14", "W15", "W36"]
+reqs = ["C-1", "C-2", "DUR-2", "A-5"]
+area = ["checker"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W41"
+title = "Non-vacuity (K-13), coverage matrix, run verdicts"
+deps = ["W37", "W38", "W39", "W40"]
+reqs = ["T-13", "P10"]
+area = ["checker", "sim", "registry"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W42"
+title = "`sim` commands, crash packs, corpus runner"
+deps = ["W41"]
+reqs = ["T-4", "T-8", "O-6"]
+area = ["sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W43"
+title = "Full-operation workload profiles"
+deps = ["W27", "W28", "W29", "W36", "W37", "W41"]
+reqs = ["§10.3"]
+area = ["sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W44"
+title = "Scenario shrinker"
+deps = ["W42"]
+reqs = ["T-9"]
+area = ["sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W45"
+title = "Bug variants and checker self-test"
+deps = ["W05", "W31", "W32", "W41", "W43"]
+reqs = ["T-6", "P9", "§10.6"]
+area = [
+    "node",
+    "statemachine",
+    "raft_adapter",
+    "journal",
+    "server",
+    "model",
+    "conformance",
+    "sim",
+    "checker",
+    "registry",
+    "xtask",
+]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W46"
+title = "Gate tiers, receipts, local scheduler, failure outbox"
+deps = ["W05", "W07", "W31", "W42"]
+reqs = ["P7", "P10", "§10.10", "§10.11"]
+area = ["xtask"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W47"
+title = "Measurements report"
+deps = ["W24", "W42"]
+reqs = ["§10.12"]
+area = ["sim", "xtask"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W48"
+title = "Parity check"
+deps = ["W17", "W24", "W32"]
+reqs = ["P3", "T-2", "§10.18"]
+area = ["xtask", "sim"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W49"
+title = "`./dev status` owner view"
+deps = ["W05", "W06", "W46"]
+reqs = ["O-8"]
+area = ["xtask"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W50"
+title = "M4 drift audit"
+deps = ["W44", "W45", "W46", "W47", "W48", "W49", "W53"]
+reqs = ["§11.9"]
+area = ["audit"]
+milestone = "m4"
+accept = []
+bead = ""
+
+[[item]]
+id = "W51"
+title = "Final drift audit, clean-state rehearsal and T3 release campaign"
+deps = ["W20", "W26", "W35", "W50"]
+reqs = ["§13", "§10.11", "§11.9"]
+area = ["all (defects get their own beads)", "audit"]
+milestone = "m5"
+accept = []
+bead = ""
+
+[[item]]
+id = "W52"
+title = "Definition-of-Done reconciliation and evidence report"
+deps = ["W51"]
+reqs = ["§13", "§10.15"]
+area = ["registry", "reports"]
+milestone = "m5"
+accept = []
+bead = ""
+
+[[item]]
+id = "W53"
+title = "Parser-boundary fuzz targets and code-coverage reporting (§10.19)"
+deps = ["W09", "W11", "W18", "W21", "W46"]
+reqs = ["§10.19", "CD-3", "CD-8"]
+area = ["fuzz", "xtask"]
+milestone = "m4"
+accept = []
+bead = ""
