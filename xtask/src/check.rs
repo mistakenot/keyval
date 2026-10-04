@@ -823,8 +823,8 @@ pub const CATALOGUE: &[CheckDef] = &[
         id: "APPLY-PUT",
         summary: "apply sets a PUT's key with version = its execution index, an empty entry only \
                   advances the applied index, keys iterate in byte order, replay rebuilds the \
-                  same state, and out-of-order, undecodable or unadmitted entries fire their \
-                  invariants (§7.5, DM-3, D-10)",
+                  same state, PUT, DELETE and compare-and-swap all execute, and out-of-order or \
+                  undecodable entries fire their invariants (§7.5, DM-3, D-10)",
         kind: Kind::TestGroup,
         covers: &["DM-3", "DM-4", "F-1", "F-2"],
         class: ClaimClass::Invariant,
@@ -909,9 +909,11 @@ pub const CATALOGUE: &[CheckDef] = &[
         summary: "over seeded random logs with retries, conflicts and quota refusals: version = \
                   execution index, a replay returns the original result, a conflicting command \
                   changes nothing, a quota refusal is terminal and deterministic, a DELETE \
-                  removes its key and reports whether it existed, and a key's versions strictly \
-                  increase across delete and re-create; failures shrink and name their seed \
-                  (DM-3, DM-5, DM-6, C-6)",
+                  removes its key and reports whether it existed, a key's versions strictly \
+                  increase across delete and re-create, and a compare-and-swap whose expectation \
+                  fails is a terminal version_mismatch that changes nothing, decided strictly \
+                  before capacity, while one whose expectation holds acts as a PUT; failures \
+                  shrink and name their seed (DM-3, DM-5, DM-6, C-6)",
         kind: Kind::TestGroup,
         covers: &["DM-3", "DM-5", "DM-6", "C-6"],
         class: ClaimClass::Invariant,
@@ -920,7 +922,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "statemachine",
             filters: &["properties::"],
         },
-        min_cases: 4,
+        min_cases: 5,
     },
     CheckDef {
         id: "MODEL",
@@ -1613,6 +1615,28 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["init_tests::", "run_tests::", "cli_tests::"],
         },
         min_cases: 15,
+    },
+    CheckDef {
+        id: "APPLY-CAS",
+        summary: "compare-and-swap in apply (§7.5 step 4, F-5, DM-3, DM-5, DM-6, DM-7, W27.2): \
+                  the expectation (absent, or a version) is checked against the state when the \
+                  entry applies; a match sets the key with version = its execution index; a \
+                  mismatch is a terminal version_mismatch naming the current version or its \
+                  absence, changes no live state, is recorded once in the history and counts its \
+                  command bytes toward DM-7; mismatch is decided strictly before capacity, so a \
+                  failed expectation whose write would also exceed DM-6 is still a mismatch; a \
+                  matching CAS over the key or byte quota is capacity_exceeded; a duplicate \
+                  entry replays the original mismatch even when it would now match; and after \
+                  delete and re-create only the new version matches",
+        kind: Kind::TestGroup,
+        covers: &["F-5", "DM-3", "DM-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["apply::cas_tests::"],
+        },
+        min_cases: 8,
     },
 ];
 

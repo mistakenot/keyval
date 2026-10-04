@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 
 use types::{
-    ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, LiveStateLimit, LogIndex,
-    Mutation, NodeId, RequestId, TerminalResult, Value, Version, invariant,
+    ByteCount, Decision, Entry, EntryIndex, EntryPayload, ExpectedVersion, ItemCount, Key,
+    LiveStateLimit, LogIndex, Mutation, NodeId, RequestId, TerminalResult, Value, Version,
+    invariant,
 };
 
 use crate::capacity::{StateLimits, entry_bytes};
@@ -173,8 +174,6 @@ impl StateMachine {
     /// - `SM-APPLY-IN-ORDER`: `entry` is not the one after the applied index;
     /// - `SM-COMMAND-DECODES`: a committed command does not decode, although the leader
     ///   validated it before proposing it (step 2);
-    /// - `SM-COMMAND-ADMITTED`: a committed compare-and-swap, which no node admits before
-    ///   W27.2 implements its apply;
     /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds;
     /// - `SM-LIVE-BYTES` and `SM-COMMAND-BYTES`: a live-bytes or committed-command-bytes
     ///   counter that would go below zero or overflow, on a PUT's overwrite or a DELETE's
@@ -273,8 +272,10 @@ impl StateMachine {
 
     /// Step 4: a command's first execution. A PUT sets its key with `version = index`
     /// unless the live-state quota refuses it; a DELETE removes its key if present and
-    /// reports whether it existed (F-3), assigning no version (DM-3). The result, whatever it
-    /// is, is recorded in the history, and the command's `size` is added to the DM-7 counter.
+    /// reports whether it existed (F-3), assigning no version (DM-3); a compare-and-swap
+    /// whose expectation holds sets its key like a PUT, and otherwise is a terminal
+    /// `version_mismatch` (F-5). The result, whatever it is, is recorded in the history, and
+    /// the command's `size` is added to the DM-7 counter.
     fn first_execution(
         &mut self,
         index: EntryIndex,
@@ -287,43 +288,37 @@ impl StateMachine {
             mutation,
         } = command;
         let decision = match mutation {
-            Mutation::Put { key, value } => Some(self.put(index, key, value)),
-            Mutation::Delete { key } => Some(self.delete(index, &key)),
-            Mutation::Cas { .. } => None,
+            Mutation::Put { key, value } => self.put(index, key, value),
+            Mutation::Delete { key } => self.delete(index, &key),
+            Mutation::Cas {
+                key,
+                expected,
+                value,
+            } => self.cas(index, key, expected, value),
         };
+        let result = TerminalResult::executed_at(index, decision);
+        let earlier = self
+            .history
+            .insert(request_id, Record::new(index, digest, result));
         invariant!(
-            decision.is_some(),
-            "SM-COMMAND-ADMITTED",
-            "node {}: committed entry {index} carries a compare-and-swap, which no node \
-             admits before W27.2 implements its apply",
+            earlier.is_none(),
+            "SM-HISTORY-ONCE",
+            "node {}: entry {index} executed request {request_id} again; its first \
+             execution was {earlier:?}",
             self.node
         );
-        // The fallback is unreachable once the invariant above holds.
-        decision.map_or(Applied::Empty, |decision| {
-            let result = TerminalResult::executed_at(index, decision);
-            let earlier = self
-                .history
-                .insert(request_id, Record::new(index, digest, result));
-            invariant!(
-                earlier.is_none(),
-                "SM-HISTORY-ONCE",
-                "node {}: entry {index} executed request {request_id} again; its first \
-                 execution was {earlier:?}",
-                self.node
-            );
-            let counted = self.command_bytes.checked_add(size);
-            invariant!(
-                counted.is_some(),
-                "SM-COMMAND-BYTES",
-                "node {}: entry {index}: adding {} bytes overflows the committed-command-bytes \
-                 counter at {}",
-                self.node,
-                size.get(),
-                self.command_bytes.get()
-            );
-            self.command_bytes = counted.unwrap_or(self.command_bytes);
-            Applied::Executed { request_id, result }
-        })
+        let counted = self.command_bytes.checked_add(size);
+        invariant!(
+            counted.is_some(),
+            "SM-COMMAND-BYTES",
+            "node {}: entry {index}: adding {} bytes overflows the committed-command-bytes \
+             counter at {}",
+            self.node,
+            size.get(),
+            self.command_bytes.get()
+        );
+        self.command_bytes = counted.unwrap_or(self.command_bytes);
+        Applied::Executed { request_id, result }
     }
 
     /// A PUT's step 4: sets the key with `version = index`, unless the live-state quota
@@ -378,6 +373,25 @@ impl StateMachine {
         Decision::Set
     }
 
+    /// A compare-and-swap's step 4 (F-5): its expectation is checked against the state
+    /// when it applies, never at admission, and strictly before the quota. A mismatch is a
+    /// terminal `version_mismatch` naming the key's current version (or its absence) and
+    /// changes nothing, even if the write would also exceed DM-6. A match sets the key like a
+    /// PUT, under the same quota (§7.5 step 4).
+    fn cas(
+        &mut self,
+        index: EntryIndex,
+        key: Key,
+        expected: ExpectedVersion,
+        value: Value,
+    ) -> Decision {
+        let current = self.map.get(&key).map(|stored| stored.version);
+        if !expected.matches(current) {
+            return Decision::VersionMismatch { current };
+        }
+        self.put(index, key, value)
+    }
+
     /// A DELETE's step 4: removes the key if it is live, and says whether it was (F-3).
     /// Nothing gets a version (DM-3), and the live-state counters shrink by the removed
     /// entry, so a DELETE is never refused by the quota (DM-6).
@@ -405,6 +419,8 @@ impl StateMachine {
     }
 }
 
+#[cfg(test)]
+mod cas_tests;
 #[cfg(test)]
 mod delete_tests;
 #[cfg(test)]
@@ -625,19 +641,44 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "invariant SM-COMMAND-ADMITTED violated: node 1: committed entry \
-                               1 carries a compare-and-swap"
-    )]
-    fn a_committed_compare_and_swap_is_not_admitted_before_w27() {
-        let cas = codec::encode(&Command {
-            request_id: id(1),
-            mutation: Mutation::Cas {
+    fn every_command_kind_executes_in_apply() {
+        // Since W27.2 a committed PUT, DELETE and compare-and-swap all execute: no command
+        // kind is refused at apply (the former SM-COMMAND-ADMITTED invariant is retired).
+        let commands = [
+            Mutation::Put {
                 key: key("k"),
-                expected: ExpectedVersion::Absent,
                 value: value("v"),
             },
-        });
-        machine().apply(&entry(1, EntryPayload::Command(cas)), far());
+            Mutation::Delete { key: key("k") },
+            Mutation::Cas {
+                key: key("k"),
+                expected: ExpectedVersion::Absent,
+                value: value("w"),
+            },
+        ];
+        let mut state = machine();
+        let executed: Vec<bool> = (1..)
+            .zip(commands)
+            .map(|(index, mutation)| {
+                let bytes = codec::encode(&Command {
+                    request_id: id(u8::try_from(index).unwrap()),
+                    mutation,
+                });
+                let applied = state.apply(&entry(index, EntryPayload::Command(bytes)), far());
+                match applied {
+                    Applied::Executed { .. } => true,
+                    Applied::Empty | Applied::Replayed { .. } | Applied::Conflict { .. } => false,
+                }
+            })
+            .collect();
+        assert_eq!(
+            (executed, state.get(&key("k")).map(Stored::version)),
+            (
+                vec![true, true, true],
+                Version::at(LogIndex::new(3).unwrap())
+            ),
+            "rule: PUT, DELETE and compare-and-swap each execute at apply (§7.5 step 4); the \
+             CAS on the deleted key matched Absent and set version 3"
+        );
     }
 }

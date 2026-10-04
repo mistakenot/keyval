@@ -4,7 +4,10 @@
 //! - a conflicting command changes nothing;
 //! - a quota refusal is terminal and deterministic;
 //! - a DELETE removes its key and reports whether it existed, and a key's versions strictly
-//!   increase across delete and re-create (W27.1, F-3, DM-3).
+//!   increase across delete and re-create (W27.1, F-3, DM-3);
+//! - a compare-and-swap whose expectation fails is a terminal `version_mismatch` that changes
+//!   nothing, decided strictly before capacity; one whose expectation holds acts as a PUT
+//!   (W27.2, F-5).
 //!
 //! These are hand-rolled rather than proptest (the decision on
 //! br-w09-4-invariants-property-tests-5mr): this is a deterministic crate, so no RNG crate.
@@ -17,13 +20,13 @@
 
 // check: STATE-PROPERTIES
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{self, AssertUnwindSafe};
 
 use types::{
-    ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, KeyValueLimits,
-    LiveStateLimit, LogIndex, MAX_SAFE_INTEGER, Mutation, NodeId, RequestId, Term, TerminalResult,
-    Value, Version,
+    ByteCount, Decision, Entry, EntryIndex, EntryPayload, ExpectedVersion, ItemCount, Key,
+    KeyValueLimits, LiveStateLimit, LogIndex, MAX_SAFE_INTEGER, Mutation, NodeId, RequestId, Term,
+    TerminalResult, Value, Version,
 };
 
 use crate::{Applied, Command, StateLimits, StateMachine, Stored, codec};
@@ -60,6 +63,34 @@ enum Step {
     Put { request: u8, key: u8, len: u8 },
     /// A DELETE of key `k<key>`, under request ID `request`.
     Delete { request: u8, key: u8 },
+    /// A compare-and-swap of key `k<key>` expecting `expected`, to a value of `len` bytes,
+    /// under request ID `request`.
+    Cas {
+        request: u8,
+        key: u8,
+        expected: Expect,
+        len: u8,
+    },
+}
+
+/// A generated CAS expectation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Expect {
+    /// The key must be absent.
+    Absent,
+    /// The key must be at the version of entry `index`.
+    At(u64),
+}
+
+impl Expect {
+    fn version(self) -> ExpectedVersion {
+        match self {
+            Self::Absent => ExpectedVersion::Absent,
+            Self::At(index) => {
+                ExpectedVersion::Version(Version::at(LogIndex::new(index).unwrap()).unwrap())
+            }
+        }
+    }
 }
 
 impl Step {
@@ -80,13 +111,27 @@ impl Step {
                     key: key_named(key),
                 },
             })),
+            Self::Cas {
+                request,
+                key,
+                expected,
+                len,
+            } => EntryPayload::Command(codec::encode(&Command {
+                request_id: RequestId::from_bytes([request; 16]),
+                mutation: Mutation::Cas {
+                    key: key_named(key),
+                    expected: expected.version(),
+                    value: Value::parse("v".repeat(usize::from(len)), KeyValueLimits::MAXIMA)
+                        .unwrap(),
+                },
+            })),
         }
     }
 
-    /// The key a PUT or DELETE names.
+    /// The key a PUT, DELETE or compare-and-swap names.
     const fn key(self) -> Option<u8> {
         match self {
-            Self::Put { key, .. } | Self::Delete { key, .. } => Some(key),
+            Self::Put { key, .. } | Self::Delete { key, .. } | Self::Cas { key, .. } => Some(key),
             Self::Empty => None,
         }
     }
@@ -114,8 +159,10 @@ fn below(rng: &mut u64, bound: u64) -> u8 {
 fn generate(seed: u64) -> Vec<Step> {
     let mut rng = seed;
     let mut first: BTreeMap<u8, Step> = BTreeMap::new();
-    (0..STEPS)
-        .map(|_| {
+    // The entry that last wrote each key, so a CAS often expects the key's current version.
+    let mut last_write: BTreeMap<u8, u64> = BTreeMap::new();
+    (1..=u64::try_from(STEPS).unwrap())
+        .map(|index| {
             if next(&mut rng).is_multiple_of(16) {
                 return Step::Empty;
             }
@@ -127,15 +174,36 @@ fn generate(seed: u64) -> Vec<Step> {
                 return previous;
             }
             let key = below(&mut rng, 5);
-            let step = if next(&mut rng).is_multiple_of(4) {
-                Step::Delete { request, key }
-            } else {
-                Step::Put {
+            let step = match next(&mut rng) % 8 {
+                0 | 1 => Step::Delete { request, key },
+                2 | 3 => Step::Cas {
+                    request,
+                    key,
+                    expected: match next(&mut rng) % 3 {
+                        0 => Expect::Absent,
+                        1 => last_write
+                            .get(&key)
+                            .copied()
+                            .map_or(Expect::Absent, Expect::At),
+                        _ => Expect::At(1 + next(&mut rng) % index),
+                    },
+                    len: below(&mut rng, 12),
+                },
+                _ => Step::Put {
                     request,
                     key,
                     len: below(&mut rng, 12),
-                }
+                },
             };
+            match step {
+                Step::Put { .. } | Step::Cas { .. } => {
+                    last_write.insert(key, index);
+                }
+                Step::Delete { .. } => {
+                    last_write.remove(&key);
+                }
+                Step::Empty => {}
+            }
             first.entry(request).or_insert(step);
             step
         })
@@ -190,27 +258,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
             }
             (Applied::Executed { request_id, result }, Step::Put { key, .. }) => {
                 once(raw, &mut first, *request_id, *result)?;
-                match result.decision() {
-                    Decision::Set => {
-                        let version = state.get(&key_named(key)).map(Stored::version);
-                        if version != Some(index.version()) {
-                            return Err(format!(
-                                "entry {raw}: the key's version is {version:?}, not the \
-                                 execution index (DM-3)"
-                            ));
-                        }
-                    }
-                    Decision::CapacityExceeded { .. } => {
-                        if after.keys != before.keys || after.live_bytes != before.live_bytes {
-                            return Err(format!(
-                                "entry {raw}: capacity_exceeded changed the live state (DM-6)"
-                            ));
-                        }
-                    }
-                    Decision::Deleted { .. } | Decision::VersionMismatch { .. } => {
-                        return Err(format!("entry {raw}: a PUT decided {result:?}"));
-                    }
-                }
+                put_executed(raw, index, key, result, &before, &after)?;
                 recorded(raw, &before, &after)?;
             }
             (Applied::Executed { request_id, result }, Step::Delete { key, .. }) => {
@@ -218,7 +266,15 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                 delete_executed(raw, key, result, &before, &after)?;
                 recorded(raw, &before, &after)?;
             }
-            (Applied::Replayed { request_id, result }, Step::Put { .. } | Step::Delete { .. }) => {
+            (Applied::Executed { request_id, result }, Step::Cas { key, expected, .. }) => {
+                once(raw, &mut first, *request_id, *result)?;
+                cas_executed(raw, index, (key, expected), result, &before, &after)?;
+                recorded(raw, &before, &after)?;
+            }
+            (
+                Applied::Replayed { request_id, result },
+                Step::Put { .. } | Step::Delete { .. } | Step::Cas { .. },
+            ) => {
                 if first.get(request_id) != Some(result) {
                     return Err(format!(
                         "entry {raw}: a replay of {request_id} returned {result:?}, not the \
@@ -235,7 +291,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                     request_id,
                     original_index,
                 },
-                Step::Put { .. } | Step::Delete { .. },
+                Step::Put { .. } | Step::Delete { .. } | Step::Cas { .. },
             ) => {
                 let original = first.get(request_id).map(|result| result.index());
                 if original != Some(original_index.index()) {
@@ -250,7 +306,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                     ));
                 }
             }
-            (Applied::Empty, Step::Put { .. } | Step::Delete { .. })
+            (Applied::Empty, Step::Put { .. } | Step::Delete { .. } | Step::Cas { .. })
             | (
                 Applied::Executed { .. } | Applied::Replayed { .. } | Applied::Conflict { .. },
                 Step::Empty,
@@ -310,6 +366,84 @@ fn once(
         ));
     }
     Ok(())
+}
+
+/// A compare-and-swap's first execution at entry `index` (F-5, §7.5 step 4): a failed
+/// expectation is a `version_mismatch` naming the key's current version and changes nothing,
+/// whatever the quota; a held one sets the key with `version = index`, or is
+/// `capacity_exceeded` and changes nothing.
+fn cas_executed(
+    raw: u64,
+    index: EntryIndex,
+    (key, expected): (u8, Expect),
+    result: &TerminalResult,
+    before: &Snapshot,
+    after: &Snapshot,
+) -> Result<(), String> {
+    let current = version_in(before, key);
+    let unchanged = after.keys == before.keys && after.live_bytes == before.live_bytes;
+    let fits = if expected.version().matches(current) {
+        match result.decision() {
+            Decision::Set => version_in(after, key) == Some(index.version()),
+            Decision::CapacityExceeded { .. } => unchanged,
+            Decision::VersionMismatch { .. } | Decision::Deleted { .. } => false,
+        }
+    } else {
+        result.decision() == (Decision::VersionMismatch { current }) && unchanged
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err(format!(
+            "entry {raw}: a CAS of k{key} expecting {expected:?} with the key at {current:?} \
+             decided {result:?} (F-5; mismatch is decided strictly before capacity)"
+        ))
+    }
+}
+
+/// A PUT's first execution of key `k<key>` at entry `index` (DM-3, DM-6): it sets the key
+/// with `version = index`, or is `capacity_exceeded` and changes nothing.
+fn put_executed(
+    raw: u64,
+    index: EntryIndex,
+    key: u8,
+    result: &TerminalResult,
+    before: &Snapshot,
+    after: &Snapshot,
+) -> Result<(), String> {
+    match result.decision() {
+        Decision::Set => {
+            let version = version_in(after, key);
+            if version == Some(index.version()) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "entry {raw}: the key's version is {version:?}, not the execution index (DM-3)"
+                ))
+            }
+        }
+        Decision::CapacityExceeded { .. } => {
+            if after.keys == before.keys && after.live_bytes == before.live_bytes {
+                Ok(())
+            } else {
+                Err(format!(
+                    "entry {raw}: capacity_exceeded changed the live state (DM-6)"
+                ))
+            }
+        }
+        Decision::Deleted { .. } | Decision::VersionMismatch { .. } => {
+            Err(format!("entry {raw}: a PUT decided {result:?}"))
+        }
+    }
+}
+
+/// The version of key `k<key>` in `snapshot`, if it is live.
+fn version_in(snapshot: &Snapshot, key: u8) -> Option<Version> {
+    snapshot
+        .keys
+        .iter()
+        .find(|(live, _)| *live == key_named(key))
+        .map(|(_, stored)| stored.version())
 }
 
 /// A first execution is recorded in the history and counted toward DM-7 (DM-5, §7.5).
@@ -398,6 +532,9 @@ fn the_generated_logs_reach_every_outcome() {
         for (step, applied) in steps.iter().zip(check(&steps).unwrap()) {
             if let Applied::Executed { result, .. } = &applied {
                 match (result.decision(), step.key()) {
+                    (Decision::Set, Some(_)) if matches_cas(*step) => {
+                        *seen.entry("cas set").or_insert(0) += 1;
+                    }
                     (Decision::Deleted { existed: true }, Some(key)) => deleted.push(key),
                     (Decision::Set, Some(key)) if deleted.contains(&key) => {
                         *seen.entry("re-created").or_insert(0) += 1;
@@ -426,7 +563,7 @@ fn the_generated_logs_reach_every_outcome() {
                     } => "refused for bytes",
                     Decision::Deleted { existed: true } => "deleted",
                     Decision::Deleted { existed: false } => "deleted absent",
-                    Decision::VersionMismatch { .. } => "other",
+                    Decision::VersionMismatch { .. } => "mismatch",
                 },
             };
             *seen.entry(kind).or_insert(0) += 1;
@@ -442,6 +579,8 @@ fn the_generated_logs_reach_every_outcome() {
         "deleted",
         "deleted absent",
         "re-created",
+        "mismatch",
+        "cas set",
     ] {
         assert!(
             seen.get(kind).is_some_and(|&count| count > 0),
@@ -475,7 +614,14 @@ fn the_shrinker_finds_a_minimal_failing_log() {
 fn matches_key(step: Step, wanted: u8) -> bool {
     match step {
         Step::Put { key, .. } => key == wanted,
-        Step::Delete { .. } | Step::Empty => false,
+        Step::Delete { .. } | Step::Cas { .. } | Step::Empty => false,
+    }
+}
+
+const fn matches_cas(step: Step) -> bool {
+    match step {
+        Step::Cas { .. } => true,
+        Step::Put { .. } | Step::Delete { .. } | Step::Empty => false,
     }
 }
 
@@ -524,5 +670,54 @@ fn versions_strictly_increase_across_delete_and_re_create_on_seeded_logs() {
     assert!(
         re_created > 0,
         "fixture: some key is re-created after a DELETE, so the property is not vacuous (P10)"
+    );
+}
+
+#[test]
+fn a_cas_mismatch_is_decided_before_the_quota_on_seeded_logs() {
+    // W27.2, §7.5 step 4: a CAS's expectation is checked strictly before capacity, and `check`
+    // demands version_mismatch for every failed expectation. This keeps that ordering from
+    // being vacuous (P10): the logs must hold failed expectations on a new key while the key
+    // quota is full, whose write would also be refused, and held ones that the quota refuses.
+    // The live keys are followed from the results alone.
+    let quota = usize::try_from(limits().max_live_keys.get()).unwrap();
+    let (mut mismatched_at_quota, mut refused) = (0, 0);
+    for seed in REGRESSION_SEEDS.iter().copied().chain(0..SEEDS) {
+        let steps = generate(seed);
+        let mut live: BTreeSet<u8> = BTreeSet::new();
+        for (step, applied) in steps.iter().zip(check(&steps).unwrap()) {
+            let Applied::Executed { result, .. } = applied else {
+                continue;
+            };
+            let Some(key) = step.key() else {
+                continue;
+            };
+            let full = live.len() == quota && !live.contains(&key);
+            match (result.decision(), matches_cas(*step)) {
+                (Decision::VersionMismatch { current: None }, true) if full => {
+                    mismatched_at_quota += 1;
+                }
+                (Decision::CapacityExceeded { .. }, true) => refused += 1,
+                (Decision::Set, _) => {
+                    live.insert(key);
+                }
+                (Decision::Deleted { existed: true }, _) => {
+                    live.remove(&key);
+                }
+                (
+                    Decision::VersionMismatch { .. }
+                    | Decision::CapacityExceeded { .. }
+                    | Decision::Deleted { existed: false },
+                    _,
+                ) => {}
+            }
+        }
+    }
+    assert!(
+        mismatched_at_quota > 0 && refused > 0,
+        "fixture: the seeded logs hold CAS mismatches on a new key at a full key quota \
+         ({mismatched_at_quota}) and matching CAS writes refused by the quota ({refused}), so \
+         mismatch-before-capacity is exercised (P10); re-run: ./dev check STATE-PROPERTIES \
+         --case properties::a_cas_mismatch_is_decided_before_the_quota_on_seeded_logs"
     );
 }

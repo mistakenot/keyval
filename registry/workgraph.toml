@@ -324,7 +324,7 @@ deps = ["W09", "W10", "W14"]
 reqs = ["F-3", "F-5", "C-5", "DM-3"]
 area = ["statemachine/apply", "node/write_path"]
 milestone = "m3"
-accept = ["./dev check DIFFERENTIAL-DELETE-CAS", "./dev check APPLY-DELETE"]
+accept = ["./dev check DIFFERENTIAL-DELETE-CAS", "./dev check APPLY-DELETE", "./dev check APPLY-CAS"]
 bead = "br-w27-delete-cas-o1r"
 
 [[item]]

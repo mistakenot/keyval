@@ -48,9 +48,9 @@
 //! W09 built this crate in steps: empty entries and PUT (W09.1), the request history
 //! (W09.2), the live-state quota and committed-bytes counter (W09.3), and the armed
 //! invariant set with its property tests (W09.4). Every invariant names its ID, the node and
-//! the entry, and a corrupted-state fixture proves each one fires. DELETE and compare-and-swap apply in W27. Until
-//! then no node admits them, and a committed one fails the `SM-COMMAND-ADMITTED`
-//! invariant.
+//! the entry, and a corrupted-state fixture proves each one fires. W27 added DELETE (W27.1)
+//! and compare-and-swap (W27.2) to apply, so every command kind executes: a CAS checks its
+//! expectation when it applies, strictly before the quota.
 //!
 //! As a deterministic crate it obeys §7.14 and §11.5 rule 4: no clock, randomness,
 //! threads, hashed maps or I/O. Its `clippy.toml` and the lint block above enforce this.

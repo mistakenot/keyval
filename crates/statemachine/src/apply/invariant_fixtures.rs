@@ -2,9 +2,9 @@
 //! invariant the state machine asserts, then makes it fire. They prove the invariants are
 //! armed, not decorative. Test-only: they reach into private state.
 //!
-//! `SM-APPLY-IN-ORDER`, `SM-COMMAND-DECODES` and `SM-COMMAND-ADMITTED` fire in the
-//! APPLY-PUT tests. `SM-CODEC-FIELD-LEN` cannot be reached, because no key or value comes
-//! near a `u32` length.
+//! `SM-APPLY-IN-ORDER` and `SM-COMMAND-DECODES` fire in the APPLY-PUT tests.
+//! `SM-CODEC-FIELD-LEN` cannot be reached, because no key or value comes near a `u32`
+//! length.
 #![cfg(test)]
 
 // check: STATE-INVARIANTS
