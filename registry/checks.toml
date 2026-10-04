@@ -898,6 +898,18 @@ min_cases = 11
 status = "implemented"
 
 [[check]]
+id = "SIM-NET-SCENARIOS"
+summary = "planned for W16.2: the simulated network's scenario tests: loss, delay, reorder, duplication, symmetric and asymmetric partitions and queue overflow each exercised; a stale packet delivered to a node after it restarted, handled as an ordinary stale protocol message; a client response lost after a committed application (§9.1, §12.2 W16)"
+kind = "test_group"
+covers = ["T-3", "P3"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check SIM-NET-SCENARIOS"
+min_cases = 1
+status = "planned"
+
+[[check]]
 id = "MODEL-SPEC"
 summary = "the reference model server, run as its own binary over real HTTP, answers every operation with a status the spec declares (or 405/415 with the invalid_request envelope), Content-Type: application/json, Cache-Control: no-store and a body that validates against that status's schema (the SPEC validator, extension keywords included): every write and read status a single node shows, the spec's PUT and CAS examples reproduced exactly, every request-body and parameter case of api/fixtures/ accepted or refused as the fixtures say, and the raw strict-JSON and RFC 3986 query rules (W30, T-7, §8.1)"
 kind = "test_group"
