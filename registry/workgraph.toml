@@ -150,7 +150,11 @@ deps = ["W04", "W08"]
 reqs = ["DUR-1", "DUR-4", "DUR-5", "DUR-6", "DUR-8", "DUR-9", "CD-9", "CD-10"]
 area = ["journal"]
 milestone = "m1"
-accept = ["./dev check JOURNAL-FRAMES", "./dev check JOURNAL-LOG"]
+accept = [
+    "./dev check JOURNAL-FRAMES",
+    "./dev check JOURNAL-LOG",
+    "./dev check JOURNAL-RECOVERY",
+]
 bead = "br-w11-journal-engine-f37"
 
 [[item]]

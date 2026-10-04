@@ -848,6 +848,23 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 5,
     },
+    CheckDef {
+        id: "JOURNAL-RECOVERY",
+        summary: "recovery verifies the genesis, replays the frames into the live log, \
+                  discards only a torn tail (at most one maximum frame, with no valid \
+                  later frame anywhere after it, skipping an intact header's payload) \
+                  and refuses corruption, impossible index relationships, a genesis \
+                  mismatch and a blank start (DUR-6, DUR-8, DUR-9, D-60, D-69)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-6", "DUR-8", "DUR-9", "CD-10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "journal",
+            filters: &["recovery_tests::"],
+        },
+        min_cases: 10,
+    },
 ];
 
 /// Outcome of one requested check.

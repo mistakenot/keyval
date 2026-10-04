@@ -396,25 +396,23 @@ impl LogicalLog {
 }
 
 /// Reads exactly `len` bytes at `offset` in chunks of at most `ReadLen::MAX` (§7.11).
-fn read_exact(
+/// Shared with the recovery scan.
+pub fn read_exact(
     storage: &impl JournalRead,
     offset: u64,
     len: usize,
-) -> Result<Vec<u8>, JournalError> {
+) -> Result<Vec<u8>, StorageError> {
     let mut bytes = Vec::with_capacity(len);
     while bytes.len() < len {
         let remaining = u32::try_from(len - bytes.len()).unwrap_or(u32::MAX);
-        let chunk = ReadLen::new(remaining.min(ReadLen::MAX))
-            .ok_or(JournalError::Storage(StorageError::Failed))?;
+        let chunk = ReadLen::new(remaining.min(ReadLen::MAX)).ok_or(StorageError::Failed)?;
         let at = offset.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-        let read = storage
-            .read_at(ByteCount::new(at), chunk)
-            .map_err(JournalError::Storage)?;
+        let read = storage.read_at(ByteCount::new(at), chunk)?;
         if read.len() != chunk.get() as usize {
-            return Err(JournalError::Storage(StorageError::ShortRead {
+            return Err(StorageError::ShortRead {
                 wanted: chunk,
                 got: u32::try_from(read.len()).unwrap_or(u32::MAX),
-            }));
+            });
         }
         bytes.extend_from_slice(&read);
     }
@@ -423,11 +421,11 @@ fn read_exact(
 
 /// The payload of the Raft-batch frame at `offset`, read and validated.
 fn read_frame(storage: &impl JournalRead, offset: u64) -> Result<Vec<u8>, JournalError> {
-    let header = read_exact(storage, offset, HEADER_LEN)?;
+    let header = read_exact(storage, offset, HEADER_LEN).map_err(JournalError::Storage)?;
     let frame_len = decode_header(&header)
         .map_err(JournalError::Frame)?
         .frame_len();
-    let bytes = read_exact(storage, offset, frame_len)?;
+    let bytes = read_exact(storage, offset, frame_len).map_err(JournalError::Storage)?;
     let frame = decode(&bytes).map_err(JournalError::Frame)?;
     if frame.header().kind() != FrameKind::RaftBatch {
         return Err(JournalError::NotRaftBatch { offset });

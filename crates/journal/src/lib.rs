@@ -37,7 +37,9 @@
 //!   or below the persisted commit), the offset index, the persisted hard state, and a
 //!   bounded entry cache whose eviction never changes results.
 //!
-//! The fail-closed recovery scan (W11.3) replays frames through [`LogicalLog::apply`].
+//! - [`recover`] is the fail-closed recovery scan (§7.6, §7.7): it verifies the genesis,
+//!   replays the frames through [`LogicalLog::apply`], and tells a torn tail, which the
+//!   core truncates, from corruption, which it refuses (D-60, D-69).
 
 mod crc32c;
 mod frame;
@@ -47,6 +49,9 @@ mod log;
 #[cfg(test)]
 mod log_tests;
 mod record;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 
 pub use crc32c::{crc32c, update as crc32c_update};
 pub use frame::{
@@ -55,3 +60,4 @@ pub use frame::{
 };
 pub use log::{JournalError, LogicalLog};
 pub use record::{Genesis, GenesisMismatch, RaftBatch, RecordError};
+pub use recovery::{MAX_FRAME_LEN, Recovered, RecoveryError, recover};
