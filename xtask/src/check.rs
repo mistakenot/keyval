@@ -1002,7 +1002,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   whose directory entry was never synced is lost, an unsynced truncation \
                   may be lost, a crash ends every handle and frees the lock, a lost sync \
                   completion is stale for the next incarnation, and the outcome is a \
-                  function of the seed (§10.2, DUR-7, DUR-9)",
+                  function of the seed; a sync writes only its unsynced bytes, so the \
+                  durable image equals the journal after every sync at linear cost \
+                  (§10.2, §10.10, DUR-7, DUR-9)",
         kind: Kind::TestGroup,
         covers: &["DUR-7", "DUR-9"],
         class: ClaimClass::Invariant,
@@ -1011,7 +1013,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["disk::tests::"],
         },
-        min_cases: 6,
+        min_cases: 8,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-FS",

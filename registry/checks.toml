@@ -659,14 +659,14 @@ status = "implemented"
 
 [[check]]
 id = "SIM-DISK"
-summary = "the simulated disk's crash model: a seed-chosen prefix of unsynced appends survives (none, some or all) with an optional zero or garbage fill to the append's extent, synced bytes are never damaged, a file whose directory entry was never synced is lost, an unsynced truncation may be lost, a crash ends every handle and frees the lock, a lost sync completion is stale for the next incarnation, and the outcome is a function of the seed (§10.2, DUR-7, DUR-9)"
+summary = "the simulated disk's crash model: a seed-chosen prefix of unsynced appends survives (none, some or all) with an optional zero or garbage fill to the append's extent, synced bytes are never damaged, a file whose directory entry was never synced is lost, an unsynced truncation may be lost, a crash ends every handle and frees the lock, a lost sync completion is stale for the next incarnation, and the outcome is a function of the seed; a sync writes only its unsynced bytes, so the durable image equals the journal after every sync at linear cost (§10.2, §10.10, DUR-7, DUR-9)"
 kind = "test_group"
 covers = ["DUR-7", "DUR-9"]
 api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SIM-DISK"
-min_cases = 6
+min_cases = 8
 status = "implemented"
 
 [[check]]
