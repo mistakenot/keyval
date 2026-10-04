@@ -19,13 +19,17 @@
 //! overwrite that keeps or shrinks the bytes, and every DELETE, always succeed. When both
 //! limits would be exceeded, the model names `max_live_keys`. §7.5 lists "create a key"
 //! before "grow bytes", and the plan does not otherwise rank them.
+//!
+//! **History admission (DM-7)** is a leader's decision before proposal, never part of
+//! apply: [`Model::admit`] refuses a new write once the commit index reaches
+//! `max_log_entries`, and a committed entry always applies.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::Bound;
 
-use crate::data::{DataError, Index, Key, Limits, RequestId, Value, Version};
+use crate::data::{DataError, HistoryLimits, Index, Key, Limits, RequestId, Value, Version};
 
 /// A CAS expectation (F-5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +119,28 @@ impl LiveLimit {
         match self {
             Self::MaxLiveKeys => "max_live_keys",
             Self::MaxLiveBytes => "max_live_bytes",
+        }
+    }
+}
+
+/// Which history capacity refused a new write before proposal, by its configuration name
+/// (DM-7, §8.4: `507 history_full`, never a terminal result).
+///
+/// Only `max_log_entries` is enforced so far. Which limit a refusal names once the byte
+/// ceiling joins and both are reached is not ranked by the plan: that is for br-camk, the
+/// plan change the byte ceiling waits for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryLimit {
+    /// `max_log_entries`: the commit index had reached it.
+    MaxLogEntries,
+}
+
+impl HistoryLimit {
+    /// The limit's configuration name, as the API reports it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxLogEntries => "max_log_entries",
         }
     }
 }
@@ -317,6 +343,26 @@ impl Model {
                 }
             }
         })
+    }
+
+    /// DM-7's history admission for a new write, decided before proposal: refused once the
+    /// commit index has reached `max_log_entries`. Every entry the model holds is
+    /// committed, so its commit index is its applied index, and empty entries count too.
+    ///
+    /// Only a new mutation asks. A known request ID is answered from the history first
+    /// ([`Self::classify`], F-7's short-circuit), and reads and status lookups never ask.
+    /// Admission changes nothing, and [`Self::apply`] never refuses a committed entry, so
+    /// entries already in flight can overshoot the ceiling: it is a soft one (DM-7).
+    ///
+    /// # Errors
+    ///
+    /// [`HistoryLimit::MaxLogEntries`] at or past the ceiling.
+    pub const fn admit(&self, limits: HistoryLimits) -> Result<(), HistoryLimit> {
+        if self.applied >= limits.max_log_entries() {
+            Err(HistoryLimit::MaxLogEntries)
+        } else {
+            Ok(())
+        }
     }
 
     /// The number of live keys (DM-6).
@@ -980,5 +1026,48 @@ mod tests {
             "rule: live bytes are the sum of live keys' and values' bytes (DM-6)"
         );
         assert_eq!(recomputed, 3);
+    }
+
+    #[test]
+    fn admission_refuses_new_writes_from_max_log_entries_on_and_changes_nothing() {
+        let limits = HistoryLimits::new(3).unwrap();
+        let mut model = Model::new(Limits::DEFAULT);
+        assert_eq!(model.admit(limits), Ok(()), "rule: an empty log admits");
+        // An empty entry (a leader's no-op) counts towards the commit index like any other.
+        run(&mut model, &[put(1, "a", "1"), Entry::Empty]);
+        assert_eq!(
+            model.admit(limits),
+            Ok(()),
+            "rule: one below the ceiling admits (DM-7); applied={}",
+            model.applied_index()
+        );
+        run(&mut model, &[delete(2, "a")]);
+        let before = model.clone();
+        assert_eq!(
+            model.admit(limits),
+            Err(HistoryLimit::MaxLogEntries),
+            "rule: a commit index at max_log_entries refuses (DM-7); applied={}",
+            model.applied_index()
+        );
+        assert_eq!(
+            model, before,
+            "rule: admission reads state and changes nothing"
+        );
+        assert_eq!(
+            run(&mut model, &[put(3, "b", "2")]),
+            vec![executed(3, 4, set_at(4))],
+            "rule: a committed entry past the ceiling still applies (a soft ceiling, DM-7)"
+        );
+        assert_eq!(
+            model.admit(limits),
+            Err(HistoryLimit::MaxLogEntries),
+            "rule: past the ceiling still refuses; applied={}",
+            model.applied_index()
+        );
+        assert_eq!(
+            HistoryLimit::MaxLogEntries.as_str(),
+            "max_log_entries",
+            "rule: history_full names the limit by its configuration parameter (§8.4)"
+        );
     }
 }

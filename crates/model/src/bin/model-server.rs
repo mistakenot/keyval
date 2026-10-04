@@ -4,7 +4,7 @@
 //! ```text
 //! model-server [--listen ADDR] [--node-id N] [--cluster-id ID]
 //!              [--max-key-bytes N] [--max-value-bytes N]
-//!              [--max-live-keys N] [--max-live-bytes N]
+//!              [--max-live-keys N] [--max-live-bytes N] [--max-log-entries N]
 //! ```
 //!
 //! `--listen` defaults to `127.0.0.1:0` (a free port). Once bound, the server prints one
@@ -14,8 +14,8 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use model::Limits;
 use model::server::{Config, Server};
+use model::{HistoryLimits, Limits};
 
 /// The command line, parsed.
 struct Options {
@@ -23,6 +23,7 @@ struct Options {
     node_id: u64,
     cluster_id: String,
     limits: [u64; 4],
+    max_log_entries: u64,
 }
 
 fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -36,6 +37,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             Limits::DEFAULT.max_live_keys(),
             Limits::DEFAULT.max_live_bytes(),
         ],
+        max_log_entries: HistoryLimits::DEFAULT.max_log_entries(),
     };
     let mut arguments = arguments;
     while let Some(flag) = arguments.next() {
@@ -55,6 +57,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--max-value-bytes" => options.limits[1] = number()?,
             "--max-live-keys" => options.limits[2] = number()?,
             "--max-live-bytes" => options.limits[3] = number()?,
+            "--max-log-entries" => options.max_log_entries = number()?,
             other => return Err(format!("unknown flag {other:?}")),
         }
     }
@@ -65,7 +68,8 @@ fn run() -> Result<(), String> {
     let options = parse(std::env::args().skip(1))?;
     let [key, value, keys, bytes] = options.limits;
     let limits = Limits::new(key, value, keys, bytes).map_err(|error| error.to_string())?;
-    let config = Config::new(options.node_id, options.cluster_id, limits)
+    let history = HistoryLimits::new(options.max_log_entries).map_err(|error| error.to_string())?;
+    let config = Config::new(options.node_id, options.cluster_id, limits, history)
         .map_err(|error| error.to_string())?;
     let server = Server::bind(&options.listen, config)
         .map_err(|error| format!("cannot listen on {}: {error}", options.listen))?;

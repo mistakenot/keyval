@@ -379,6 +379,51 @@ impl Limits {
     }
 }
 
+/// The history capacity a leader admits new writes under (DM-7, §7.10): once its commit
+/// index reaches `max_log_entries`, it refuses them before proposal with `history_full`.
+///
+/// DM-7's byte ceiling, `max_history_bytes`, is not here yet: it counts each command's
+/// canonical encoded length, which the plan does not define independently of the codec
+/// (br-camk).
+///
+/// Invariant: `max_log_entries` is 1 to 2^53 − 1, so every index it admits is one the API
+/// carries (§8.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryLimits {
+    log_entries: u64,
+}
+
+impl HistoryLimits {
+    /// The plan's default: 1,000,000 log entries (§7.10, DM-7).
+    pub const DEFAULT: Self = Self {
+        log_entries: 1_000_000,
+    };
+
+    /// Limits as configured.
+    ///
+    /// # Errors
+    ///
+    /// [`DataError::Limit`] for a `max_log_entries` of 0 or above 2^53 − 1.
+    pub const fn new(max_log_entries: u64) -> Result<Self, DataError> {
+        if max_log_entries == 0 || max_log_entries > MAX_INTEGER {
+            Err(DataError::Limit {
+                name: "max_log_entries",
+                value: max_log_entries,
+            })
+        } else {
+            Ok(Self {
+                log_entries: max_log_entries,
+            })
+        }
+    }
+
+    /// The commit-index ceiling (DM-7).
+    #[must_use]
+    pub const fn max_log_entries(self) -> u64 {
+        self.log_entries
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,5 +568,40 @@ mod tests {
         );
         assert!(Limits::new(0, 64, 8, 1024).is_err());
         assert!(Limits::new(16, 64, 0, 1024).is_err());
+    }
+
+    #[test]
+    fn history_limits_default_to_the_plan_and_are_1_to_2_pow_53_minus_1() {
+        assert_eq!(
+            HistoryLimits::DEFAULT.max_log_entries(),
+            1_000_000,
+            "rule: the plan's default (§7.10, DM-7)"
+        );
+        assert_eq!(
+            HistoryLimits::new(1).map(HistoryLimits::max_log_entries),
+            Ok(1),
+            "rule: a one-entry ceiling is the smallest"
+        );
+        assert_eq!(
+            HistoryLimits::new(0),
+            Err(DataError::Limit {
+                name: "max_log_entries",
+                value: 0
+            }),
+            "rule: a zero ceiling would refuse every write"
+        );
+        assert_eq!(
+            HistoryLimits::new(MAX_INTEGER).map(HistoryLimits::max_log_entries),
+            Ok(MAX_INTEGER),
+            "rule: the largest ceiling is the largest index the API carries (§8.1)"
+        );
+        assert_eq!(
+            HistoryLimits::new(MAX_INTEGER + 1),
+            Err(DataError::Limit {
+                name: "max_log_entries",
+                value: MAX_INTEGER + 1
+            }),
+            "rule: a ceiling above 2^53 - 1 would admit an index the API cannot carry (§8.1)"
+        );
     }
 }

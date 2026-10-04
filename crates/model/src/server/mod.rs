@@ -5,9 +5,10 @@
 //! the real server exists (§10.8).
 //!
 //! It is the model behind the contract's own parsing rules, nothing more: one node, always
-//! ready, the leader of term 1, every write applied as the next log entry at once. Topology
-//! and lifecycle behaviour (`not_leader`, `unavailable`, `recovering`, `unknown_outcome`)
-//! is out of its scope (§10.14).
+//! ready, the leader of term 1, every admitted write applied as the next log entry at once
+//! (DM-7's `max_log_entries` admits it; the byte ceiling waits for br-camk). Topology and
+//! lifecycle behaviour (`not_leader`, `unavailable`, `recovering`, `unknown_outcome`) is
+//! out of its scope (§10.14).
 //!
 //! Plain `std` HTTP/1.1 and `serde_json` for strict JSON (owner decisions on
 //! br-w30-1-model-server-impl-eop): a thread per connection, one lock around the model,
@@ -33,7 +34,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::data::MAX_INTEGER;
-use crate::{Limits, Model};
+use crate::{HistoryLimits, Limits, Model};
 
 pub use http::{MAX_BODY_BYTES, MAX_HEAD_BYTES};
 
@@ -58,6 +59,7 @@ pub struct Config {
     node_id: u64,
     cluster_id: String,
     limits: Limits,
+    history: HistoryLimits,
 }
 
 /// A configuration the contract cannot carry.
@@ -81,7 +83,8 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl Config {
-    /// A configuration for node `node_id` of cluster `cluster_id` under `limits`.
+    /// A configuration for node `node_id` of cluster `cluster_id` under `limits` and the
+    /// history capacity `history`.
     ///
     /// # Errors
     ///
@@ -90,6 +93,7 @@ impl Config {
         node_id: u64,
         cluster_id: impl Into<String>,
         limits: Limits,
+        history: HistoryLimits,
     ) -> Result<Self, ConfigError> {
         let cluster_id = cluster_id.into();
         if node_id == 0 || node_id > MAX_INTEGER {
@@ -102,6 +106,7 @@ impl Config {
             node_id,
             cluster_id,
             limits,
+            history,
         })
     }
 
@@ -121,6 +126,12 @@ impl Config {
     #[must_use]
     pub const fn limits(&self) -> Limits {
         self.limits
+    }
+
+    /// The history capacity (DM-7).
+    #[must_use]
+    pub const fn history(&self) -> HistoryLimits {
+        self.history
     }
 }
 

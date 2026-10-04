@@ -1,13 +1,15 @@
 //! The API over the reference model (PLAN.md §8, api/openapi.yaml): every operation a
 //! single node can show, with the contract's strict parsing. Single-node, always ready, the
 //! leader of term 1: it never answers `not_leader`, `busy`, `unavailable`, `recovering` or
-//! `unknown_outcome` (topology and lifecycle behaviour is out of scope, §10.14), and not
-//! `history_full` until the model keeps DM-7's history accounting (br-q37e).
+//! `unknown_outcome` (topology and lifecycle behaviour is out of scope, §10.14). Of DM-7's
+//! history capacity it enforces `max_log_entries`; `max_history_bytes` waits for the model's
+//! byte accounting (br-q37e).
 //!
 //! A write is admitted in the order §8.1 implies: the `Idempotency-Key` (a validation error
 //! carries `request_id` only once it is well-formed), the key, the media type, the body's
 //! size, strict JSON, the value's size. A request ID the history already holds is answered
-//! from it with no new entry (F-7's short circuit); any other write is the next log entry.
+//! from it with no new entry (F-7's short circuit). Any other write must pass history
+//! admission (`507 history_full`, not submitted, DM-7), and then is the next log entry.
 
 use std::collections::BTreeMap;
 
@@ -336,12 +338,32 @@ fn write(state: &mut State, request: &Request) -> Result<Response, Refusal> {
         })
     };
     let command = admitted().map_err(|refusal| refusal.for_request(&text))?;
+    // F-7's order: a known request ID is answered from the history before history
+    // admission is asked, and only an admitted command becomes the next entry.
     let applied = state
         .model
         .classify(&command)
-        .map_or_else(|| append(state, command), Ok)
+        .map_or_else(|| admit(state).and_then(|()| append(state, command)), Ok)
         .map_err(|refusal| refusal.for_request(&text))?;
     Ok(written(state, &text, applied))
+}
+
+/// DM-7's history admission for a new write: `507 history_full`, not submitted, once the
+/// log is at its ceiling (§8.4).
+fn admit(state: &State) -> Result<(), Refusal> {
+    state
+        .model
+        .admit(state.config.history())
+        .map_err(|limit| Refusal {
+            status: 507,
+            code: "history_full",
+            message: "the history capacity refused admission; the write was not submitted"
+                .to_owned(),
+            details: Map::from_iter([
+                ("limit".to_owned(), json!(limit.as_str())),
+                ("attempt_state".to_owned(), json!("not_submitted")),
+            ]),
+        })
 }
 
 /// Applies a first-seen command as the next log entry.

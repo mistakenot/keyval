@@ -9,7 +9,7 @@ use std::thread;
 use serde_json::Value as Json;
 
 use super::{Config, Server};
-use crate::Limits;
+use crate::{HistoryLimits, Limits};
 
 const RID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -17,7 +17,7 @@ const RID: &str = "0123456789abcdef0123456789abcdef";
 fn start() -> std::net::SocketAddr {
     let server = Server::bind(
         "127.0.0.1:0",
-        Config::new(1, "keyval-model", Limits::DEFAULT).unwrap(),
+        Config::new(1, "keyval-model", Limits::DEFAULT, HistoryLimits::DEFAULT).unwrap(),
     )
     .unwrap();
     let address = server.local_addr().unwrap();

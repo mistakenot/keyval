@@ -11,6 +11,8 @@
 //!   applies committed log entries one at a time, in log order, and says what each
 //!   decided: a version, whether a key existed, a CAS mismatch with the current version,
 //!   a capacity refusal, a replay or a conflict ([`apply`]).
+//! - [`Model::admit`]: DM-7's history admission for a new write, before proposal
+//!   (`max_log_entries`; the byte ceiling waits for br-camk).
 //! - [`Model::scan`]: SCAN pages over the current state ([`scan`]).
 //!
 //! No consensus, no I/O, no clocks, no performance concerns and no cleverness: where a
@@ -24,11 +26,12 @@ pub mod scan;
 pub mod server;
 
 pub use apply::{
-    Applied, ApplyError, Command, Decision, Entry, Expected, LiveLimit, Model, Op, TerminalResult,
+    Applied, ApplyError, Command, Decision, Entry, Expected, HistoryLimit, LiveLimit, Model, Op,
+    TerminalResult,
 };
 pub use data::{
-    DataError, Index, Key, Limits, MAX_INTEGER, MAX_KEY_BYTES, MAX_VALUE_BYTES, RequestId, Value,
-    Version,
+    DataError, HistoryLimits, Index, Key, Limits, MAX_INTEGER, MAX_KEY_BYTES, MAX_VALUE_BYTES,
+    RequestId, Value, Version,
 };
 pub use scan::{
     DEFAULT_PAGE_ITEMS, Item, MAX_PAGE_BYTES, MAX_PAGE_ITEMS, Page, ScanError, ScanRequest,

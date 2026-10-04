@@ -923,8 +923,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   (T-12), applies committed entries in order: PUT and CAS versions are the \
                   execution index, DELETE reports existed, a CAS mismatch is decided before \
                   capacity, DM-6 key and byte capacity refusals are terminal, a replay returns \
-                  the stored result and a conflict changes nothing; SCAN pages follow §8.5 and \
-                  §7.11 exactly (T-7, §10.14)",
+                  the stored result and a conflict changes nothing; DM-7 history admission \
+                  refuses a new write once the commit index reaches max_log_entries, changing \
+                  nothing; SCAN pages follow §8.5 and §7.11 exactly (T-7, §10.14)",
         kind: Kind::TestGroup,
         covers: &["T-7"],
         class: ClaimClass::Invariant,
@@ -933,7 +934,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "model",
             filters: &["apply::", "data::", "scan::"],
         },
-        min_cases: 32,
+        min_cases: 34,
     },
     CheckDef {
         id: "STORAGE-CONTRACT",
@@ -1320,7 +1321,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         summary: "the reference model server serves every operation of api/openapi.yaml a \
                   single node can show over the model: writes as the next log entry, same-ID \
                   retries and conflicts from the history with no new entry, terminal 409/507 \
-                  results that replay, status lookups, SCAN pages, health and cluster status; \
+                  results that replay, 507 history_full (not submitted) for a new write at \
+                  max_log_entries after the history's answer, status lookups, SCAN pages, \
+                  health and cluster status; \
                   strict parsing (RFC 3986 query decoding with unescaped '+', bad escapes, \
                   invalid UTF-8, repeated and unknown parameters refused; closed JSON object \
                   bodies with unknown, duplicate and null-but-present fields refused; request \
@@ -1336,7 +1339,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "model",
             filters: &["server::"],
         },
-        min_cases: 27,
+        min_cases: 29,
     },
 ];
 

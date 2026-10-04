@@ -8,15 +8,19 @@ use serde_json::{Value as Json, json};
 use super::Config;
 use super::api::{State, handle};
 use super::http::{Body, Request};
-use crate::{Limits, Model};
+use crate::{HistoryLimits, Limits, Model};
 
 const RID: &str = "0123456789abcdef0123456789abcdef";
 const RID2: &str = "fedcba9876543210fedcba9876543210";
 
 fn state_with(limits: Limits) -> State {
+    state_under(limits, HistoryLimits::DEFAULT)
+}
+
+fn state_under(limits: Limits, history: HistoryLimits) -> State {
     State {
         model: Model::new(limits),
-        config: Config::new(1, "keyval-model", limits).unwrap(),
+        config: Config::new(1, "keyval-model", limits, history).unwrap(),
         url: "http://127.0.0.1:7001".to_owned(),
     }
 }
@@ -246,6 +250,99 @@ fn a_quota_refusal_is_a_terminal_507_that_replays() {
         ((507, details(false)), (507, details(true))),
         "rule: a DM-6 refusal is a committed 507 capacity_exceeded naming its limit, replayed \
          unchanged (§8.4, DM-6)"
+    );
+}
+
+#[test]
+fn history_full_refuses_every_new_write_at_max_log_entries_and_submits_nothing() {
+    const RID3: &str = "33333333333333333333333333333333";
+    let mut state = state_under(Limits::DEFAULT, HistoryLimits::new(2).unwrap());
+    let below = (
+        put(&mut state, RID, "a", "1").0,
+        put(&mut state, RID2, "b", "2").0,
+    );
+    let refused = json!({"error": {"code": "history_full",
+        "message": "the history capacity refused admission; the write was not submitted",
+        "details": {"request_id": RID3, "limit": "max_log_entries", "attempt_state": "not_submitted"}}});
+    let delete = request("DELETE", "/v1/kv?key=a", &[("Idempotency-Key", RID3)], b"");
+    assert_eq!(
+        (
+            below,
+            put(&mut state, RID3, "c", "3"),
+            cas(
+                &mut state,
+                RID3,
+                "a",
+                r#"{"expected":{"kind":"version","version":1},"value":"x"}"#
+            ),
+            send(&mut state, &delete),
+        ),
+        (
+            (200, 200),
+            (507, refused.clone()),
+            (507, refused.clone()),
+            (507, refused)
+        ),
+        "rule: below max_log_entries a write is admitted; at it, PUT, CAS and DELETE get 507 \
+         history_full, not submitted, naming the limit (DM-7, §8.4)"
+    );
+    assert_eq!(
+        (
+            state.model.applied_index(),
+            get(&mut state, &format!("/v1/requests/{RID3}")),
+            get(&mut state, "/v1/kv?key=a").0
+        ),
+        (
+            2,
+            (200, json!({"state": "unknown", "served_by": served(2)})),
+            200
+        ),
+        "rule: a refusal before proposal appends no entry and leaves no history (DM-7, F-9)"
+    );
+}
+
+#[test]
+fn at_the_history_ceiling_known_ids_reads_and_validation_answer_first() {
+    let mut state = state_under(Limits::DEFAULT, HistoryLimits::new(1).unwrap());
+    let first = put(&mut state, RID, "a", "1");
+    let replay = put(&mut state, RID, "a", "1");
+    let conflict = put(&mut state, RID, "a", "2");
+    let invalid = send(
+        &mut state,
+        &json_put("/v1/kv?key=", RID2, br#"{"value":"v"}"#),
+    );
+    assert_eq!(
+        (
+            first.0,
+            replay.1["replayed"].clone(),
+            replay.0,
+            conflict.0,
+            code(&conflict.1),
+            invalid.0,
+            code(&invalid.1)
+        ),
+        (
+            200,
+            json!(true),
+            200,
+            409,
+            Some("request_id_conflict"),
+            400,
+            Some("invalid_request")
+        ),
+        "rule: at the ceiling a known request ID is still answered from the history and an \
+         invalid write is still 400: both precede history admission (F-7, DM-7)"
+    );
+    assert_eq!(
+        (
+            get(&mut state, "/v1/kv?key=a").0,
+            get(&mut state, "/v1/scan").0,
+            get(&mut state, &format!("/v1/requests/{RID}")).1["state"].clone(),
+            state.model.applied_index()
+        ),
+        (200, 200, json!("known"), 1),
+        "rule: reads, SCAN and status lookups keep working at the ceiling, and nothing was \
+         appended (DM-7)"
     );
 }
 
