@@ -43,6 +43,11 @@ pub struct Member {
     pub recorder: Recorder,
     /// Every effect executed through [`Member::execute`].
     pub effects: Vec<Effect>,
+    /// The journal's length up to the node's last completed sync: what it holds durably.
+    /// Every applied entry is judged against it (br-78hc).
+    pub synced_len: usize,
+    /// The journal's length when this member's outstanding sync was asked for.
+    pub syncing: Option<usize>,
 }
 
 pub fn member_over(
@@ -61,11 +66,15 @@ pub fn member_over(
         LogIndex::ZERO,
     )
     .unwrap();
+    // A journal a node starts over is what recovery read back: durable.
+    let synced_len = journal.bytes().len();
     Member {
         lp: ReadyLoop::new(node, INCARNATION, FIRST_SYNC),
         journal,
         recorder: Recorder::default(),
         effects: Vec::new(),
+        synced_len,
+        syncing: None,
     }
 }
 
@@ -187,6 +196,59 @@ pub fn durable_state(synced: &[u8]) -> Durable {
     state
 }
 
+/// The terms of the log the journal bytes `synced` hold, by index from 1, after every
+/// logical truncation (§7.6).
+pub fn synced_terms(synced: &[u8]) -> Vec<u64> {
+    let mut terms = Vec::new();
+    let mut offset = 0;
+    while offset < synced.len() {
+        let frame = journal::decode(&synced[offset..]).unwrap();
+        let batch = match frame.header().kind() {
+            journal::FrameKind::RaftBatch => true,
+            journal::FrameKind::Genesis => false,
+        };
+        if batch {
+            let (entries, _) = RaftBatch::decode(frame.payload()).unwrap().into_parts();
+            if let Some(first) = entries.first() {
+                terms.truncate(usize::try_from(first.index.get() - 1).unwrap());
+                terms.extend(entries.iter().map(|entry| entry.term.get()));
+            }
+        }
+        offset += frame.header().frame_len();
+    }
+    terms
+}
+
+/// The client-success obligation of every entry in `applied`, judged against what its
+/// node has synced (the journal bytes `synced`): an entry applies only once its frame is
+/// durable at the applying node, with the term its synced log holds (§7.4 step 5 after
+/// step 4; K-11; DUR-2; br-78hc). raft-rs keeps it by construction (`next_entries` stops at
+/// `min(committed, persisted)`), so this catches an adapter change that applies a Ready's
+/// committed entries before its frame syncs.
+pub fn unsynced_applies(applied: &[(Entry, LogIndex)], synced: &[u8]) -> Vec<String> {
+    let terms = synced_terms(synced);
+    applied
+        .iter()
+        .filter_map(|(entry, commit)| {
+            let at = usize::try_from(entry.index.get()).unwrap().checked_sub(1);
+            let why = match at.and_then(|at| terms.get(at)) {
+                None => "its frame is not synced at the applying node",
+                Some(&term) if term != entry.term.get() => {
+                    "its term differs from the applying node's synced log"
+                }
+                Some(_) => return None,
+            };
+            Some(format!(
+                "entry {} (term {}) applied under commit {commit}: {why}; the synced log holds {} \
+                 entries",
+                entry.index.get(),
+                entry.term.get(),
+                terms.len()
+            ))
+        })
+        .collect()
+}
+
 /// The DUR-2 obligations of one message, judged against what its sender has synced
 /// (§7.4: never release a vote grant or an append acknowledgement on unsynced state).
 pub fn dur2_violation(from: NodeId, to: NodeId, bytes: &[u8], durable: Durable) -> Option<String> {
@@ -243,7 +305,8 @@ pub struct Cluster {
     pub covered: BTreeMap<NodeId, usize>,
     /// Each node's synced state.
     pub durable: BTreeMap<NodeId, Durable>,
-    /// Every message sent on state its sender had not synced (DUR-2).
+    /// Every message sent on state its sender had not synced (DUR-2), and every entry
+    /// applied before its frame synced at the applying node (§7.4 step 5, K-11; br-78hc).
     pub violations: Vec<String>,
     pub events: Vec<Event>,
 }
@@ -315,13 +378,34 @@ impl Cluster {
 
     pub fn feed(&mut self, node: NodeId, input: RaftInput) -> Fed {
         let member = self.members.get_mut(&node).unwrap();
+        let applied = member.recorder.applied.len();
         let mut effects = Vec::new();
         let fed = member
             .lp
             .feed(input, &mut member.recorder, &mut effects)
             .unwrap();
         self.record(node, effects);
+        self.judge_applies(node, applied);
         fed
+    }
+
+    /// Judges the entries `node` applied from its `applied`-th on against its synced
+    /// journal, recording each one applied before its frame synced (br-78hc).
+    pub fn judge_applies(&mut self, node: NodeId, applied: usize) {
+        let found = {
+            let member = &self.members[&node];
+            let bytes = member.journal.bytes();
+            unsynced_applies(
+                &member.recorder.applied[applied..],
+                &bytes[..member.synced_len],
+            )
+        };
+        let at = self.events.len();
+        self.violations.extend(
+            found
+                .into_iter()
+                .map(|violation| format!("event {at}: node {node} {violation}")),
+        );
     }
 
     /// Completes `node`'s outstanding sync; false if it has none.
@@ -334,6 +418,8 @@ impl Cluster {
         let synced = durable_state(&self.members[&node].journal.bytes()[..covered]);
         self.durable.insert(node, synced);
         let member = self.members.get_mut(&node).unwrap();
+        member.synced_len = covered;
+        let applied = member.recorder.applied.len();
         let mut effects = Vec::new();
         let done = member
             .lp
@@ -345,6 +431,7 @@ impl Cluster {
             "rule: the outstanding sync completes"
         );
         self.record(node, effects);
+        self.judge_applies(node, applied);
         true
     }
 
@@ -396,12 +483,14 @@ impl Cluster {
     }
 }
 
-/// Asserts that every message the cluster sent was covered by its sender's synced state.
+/// Asserts that every message the cluster sent was covered by its sender's synced state,
+/// and every entry applied by its node's synced log.
 pub fn assert_synced_obligations(cluster: &Cluster) {
     assert_eq!(
         cluster.violations,
         Vec::<String>::new(),
-        "rule: every message is covered by its sender's synced term, vote and log (DUR-2)"
+        "rule: every message is covered by its sender's synced term, vote and log (DUR-2), and \
+         every applied entry by its node's synced log (§7.4 step 5, K-11)"
     );
 }
 
@@ -637,8 +726,8 @@ fn no_message_leaves_on_unsynced_state_in_seeded_cluster_runs() {
         assert_eq!(
             cluster.violations,
             Vec::<String>::new(),
-            "rule: every message is covered by its sender's synced term, vote and log (DUR-2); \
-             seed={seed}"
+            "rule: every message is covered by its sender's synced term, vote and log (DUR-2), \
+             and every applied entry by its node's synced log (§7.4 step 5, K-11); seed={seed}"
         );
         assert_eq!(
             sends_wait_for_syncs(&cluster.events),
@@ -736,15 +825,31 @@ impl Member {
         for effect in &effects {
             if let Effect::Append { frame } = effect {
                 self.journal.push(frame);
+            } else if let Effect::Sync { .. } = effect {
+                self.syncing = Some(self.journal.bytes().len());
             }
         }
         self.effects.extend(effects);
     }
 
+    /// Asserts that every entry applied from the `applied`-th on is in this node's synced
+    /// journal with its term (§7.4 step 5, K-11; br-78hc).
+    pub fn judge_applies(&self, applied: usize) {
+        let bytes = self.journal.bytes();
+        assert_eq!(
+            unsynced_applies(&self.recorder.applied[applied..], &bytes[..self.synced_len]),
+            Vec::<String>::new(),
+            "rule: an entry applies only once its frame is synced at the applying node, with its \
+             synced term (§7.4 step 5 after step 4, K-11, DUR-2)"
+        );
+    }
+
     pub fn feed(&mut self, input: RaftInput) -> Result<Fed, LoopError> {
+        let applied = self.recorder.applied.len();
         let mut effects = Vec::new();
         let fed = self.lp.feed(input, &mut self.recorder, &mut effects);
         self.execute(effects);
+        self.judge_applies(applied);
         fed
     }
 
@@ -753,18 +858,29 @@ impl Member {
         seq: SyncSeq,
         incarnation: Incarnation,
     ) -> Result<Synced, LoopError> {
+        let applied = self.recorder.applied.len();
+        let covered = self.syncing;
         let mut effects = Vec::new();
         let done = self
             .lp
             .sync_done(seq, incarnation, &mut self.recorder, &mut effects);
+        if done == Ok(Synced::Completed) {
+            // The completed sync covers what the journal held when it was asked for; a
+            // sync the same call asks for is recorded by `execute` below.
+            self.synced_len = covered.unwrap_or(self.synced_len);
+            self.syncing = None;
+        }
         self.execute(effects);
+        self.judge_applies(applied);
         done
     }
 
     pub fn poll(&mut self) -> Result<(), LoopError> {
+        let applied = self.recorder.applied.len();
         let mut effects = Vec::new();
         let polled = self.lp.poll(&mut self.recorder, &mut effects);
         self.execute(effects);
+        self.judge_applies(applied);
         polled
     }
 
@@ -880,6 +996,55 @@ fn a_lone_voter_applies_each_proposal_in_order_and_reports_it() {
         "rule: each frame is followed by its sync, one sync per frame; effects={:?}",
         kinds(&member.effects.iter().collect::<Vec<_>>())
     );
+}
+
+#[test]
+fn the_apply_check_names_an_unsynced_entry_and_a_term_the_synced_log_does_not_hold() {
+    let (mut member, _) = lone(&config("one-voter"));
+    member.elect();
+    member.commit(b"one");
+    let synced = member.journal.bytes();
+    let applied = member.recorder.applied.clone();
+    assert_eq!(
+        unsynced_applies(&applied, &synced),
+        Vec::<String>::new(),
+        "fixture: every entry the lone voter applied is in its synced journal"
+    );
+    let (last, commit) = applied.last().unwrap().clone();
+    let other_term = Entry {
+        term: Term::new(last.term.get() + 1).unwrap(),
+        ..last
+    };
+    let found = unsynced_applies(&[(other_term, commit)], &synced);
+    assert!(
+        found.len() == 1 && found[0].contains("its term differs"),
+        "rule: an applied entry whose term the synced log does not hold is caught; {found:?}"
+    );
+    let found = unsynced_applies(&applied, &[]);
+    assert!(
+        found.len() == applied.len() && found.iter().all(|v| v.contains("not synced")),
+        "rule: with nothing synced, every applied entry is caught (§7.4 step 5); {found:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "K-11")]
+fn an_entry_applied_before_its_frame_syncs_fails_the_harness_check() {
+    // The harness is under test here, not the loop. The lone voter applies its second
+    // proposal as that proposal's sync completes. Pretending the sync covered only the
+    // frames before it is exactly an apply ahead of its frame's sync (§7.4 step 5 before
+    // step 4), and the check must fire (br-78hc).
+    let (mut member, _) = lone(&config("one-voter"));
+    member.elect();
+    member.commit(b"one");
+    let before = member.journal.bytes().len();
+    assert_eq!(
+        member.feed(RaftInput::Propose(b"two".to_vec())),
+        Ok(Fed::Proposed(Ok(()))),
+        "fixture: the leader takes the proposal"
+    );
+    member.syncing = Some(before);
+    member.complete();
 }
 
 #[test]

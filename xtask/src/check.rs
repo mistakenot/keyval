@@ -1056,12 +1056,13 @@ pub const CATALOGUE: &[CheckDef] = &[
         id: "RAFT-READY-LOOP",
         summary: "the Ready loop persists, then releases: no vote grant, append acknowledgement \
                   or other message leaves before its sender has synced the term, vote and \
-                  entries it depends on (scripted and seeded three-voter runs judged against \
-                  each sender's synced journal), a frame never persists a commit index alone, \
-                  inputs wait while a sync is outstanding, an old-incarnation SyncDone is \
-                  ignored, committed entries apply once each in index order and drain past the \
-                  per-Ready bound before the next input, applied progress is reported, and a \
-                  hard stop stops the loop (§7.4, DUR-2, D-28)",
+                  entries it depends on, and no entry applies before its frame is synced at the \
+                  applying node with the term its synced log holds (scripted, seeded and \
+                  lone-voter runs judged against each node's synced journal), a frame never \
+                  persists a commit index alone, inputs wait while a sync is outstanding, an \
+                  old-incarnation SyncDone is ignored, committed entries apply once each in \
+                  index order and drain past the per-Ready bound before the next input, applied \
+                  progress is reported, and a hard stop stops the loop (§7.4, DUR-2, K-11, D-28)",
         kind: Kind::TestGroup,
         covers: &["DUR-2"],
         class: ClaimClass::Invariant,
@@ -1070,7 +1071,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["ready_loop_tests::", "ready_loop::invariant_fixtures::"],
         },
-        min_cases: 18,
+        min_cases: 20,
     },
     CheckDef {
         id: "JOURNAL-EXAMINE",
