@@ -1506,6 +1506,38 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 9,
     },
+    CheckDef {
+        id: "NODE-ATTEMPT-TABLE",
+        summary: "the attempt table through core inputs (§7.8, §8.4, F-7, A-2, A-5, DM-7, \
+                  W14.4): every PUT and GET outcome path, driven by inputs to controllers \
+                  running the real request lifecycle: unavailable with no leader known, and \
+                  not_leader naming the believed leader, which follows a new election; busy past \
+                  256 waiting writes even for a known request ID while a GET is still served, \
+                  past 16 waiters per request, one byte past max_uncommitted_bytes (an exact fit \
+                  admitted, the bound reopening as entries apply, the refused write never \
+                  executed), and for a GET and a write when the inbound queue is full; once a \
+                  storage failure fails the node, its submitted and attached writes answer \
+                  unknown_outcome and every other attempt recovering; a journal hard stop while \
+                  a proposal drains answers it unknown_outcome; shutdown answers unknown_outcome \
+                  or unavailable; at max_log_entries the leader answers history_full while a \
+                  follower redirects and both replay a known retry; a follower answers a known \
+                  request ID from its history, never redirecting it; a same-command retry \
+                  attaches without a second entry and shares the result; another command with \
+                  the same ID waits, then gets request_id_conflict; at the deadline submitted \
+                  and attached attempts answer unknown_outcome and ones never handed over busy; \
+                  a submitted write is answered only by its own entry's apply; a leadership \
+                  loss, through a later term's message or check_quorum, answers submitted and \
+                  attached attempts unknown_outcome before any deadline and redirects the rest",
+        kind: Kind::TestGroup,
+        covers: &["A-2", "A-5", "DM-7", "F-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "node",
+            filters: &["attempt_table_tests::"],
+        },
+        min_cases: 17,
+    },
 ];
 
 /// Outcome of one requested check.

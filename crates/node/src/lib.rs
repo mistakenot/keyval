@@ -58,6 +58,8 @@
 //! bounded by `controller_queue_inputs`, the deadline book by `pending_attempts`, and the
 //! tick counts are integers.
 
+#[cfg(test)]
+mod attempt_table_tests;
 mod controller;
 #[cfg(test)]
 mod controller_tests;
