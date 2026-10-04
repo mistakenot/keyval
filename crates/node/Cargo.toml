@@ -1,0 +1,16 @@
+[package]
+name = "node"
+version = "0.1.0"
+description = "keyval's node controller: the serial core of one node, with the inbound queue, the tick clock, the Ready loop and the peer envelopes (deterministic engine, PLAN.md §7.2, §7.11, §7.12)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+journal = { workspace = true }
+raft_adapter = { workspace = true }
+statemachine = { workspace = true }
+types = { workspace = true }
+
+[lints]
+workspace = true

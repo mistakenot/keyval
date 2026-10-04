@@ -11,6 +11,7 @@ members = [
     "crates/fs_storage",
     "crates/journal",
     "crates/model",
+    "crates/node",
     "crates/raft_adapter",
     "crates/sim",
     "crates/statemachine",

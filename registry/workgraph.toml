@@ -190,7 +190,7 @@ deps = ["W09", "W13"]
 reqs = ["F-7", "A-2", "A-5", "C-3", "C-4"]
 area = ["node"]
 milestone = "m1"
-accept = []
+accept = ["./dev check NODE-CONTROLLER"]
 bead = "br-w14-node-controller-w4z"
 
 [[item]]
