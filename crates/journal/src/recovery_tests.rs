@@ -112,7 +112,7 @@ impl Journal {
         let node = NodeId::new(2).unwrap();
         let genesis = Genesis::new(&config, node, InstanceId::from_bytes([7; 16])).unwrap();
         let mut bytes = encode(FrameKind::Genesis, 1, &genesis.encode()).unwrap();
-        let mut live = LogicalLog::after_genesis(len(&bytes), BOUNDS);
+        let mut live = LogicalLog::after_genesis(len(&bytes), genesis.voters(), BOUNDS);
         let mut starts = Vec::new();
         for batch in batches {
             starts.push(live.end());
@@ -832,11 +832,14 @@ fn an_impossible_history_in_the_journal_is_refused() {
     };
     assert_eq!(
         journal.recover(&with(vote(9))),
-        Err(RecoveryError::VoteForNonVoter {
+        Err(RecoveryError::Apply {
             at,
-            vote: NodeId::new(9).unwrap()
+            error: JournalError::VoteForNonVoter {
+                vote: NodeId::new(9).unwrap()
+            }
         }),
-        "rule: a vote for a node outside the genesis voters is refused"
+        "rule: a vote for a node outside the genesis voters is refused, by the same log rule \
+         the live path applies (CD-10)"
     );
     assert_eq!(
         journal.recover(&with(vote(3))).unwrap().log().hard_state(),

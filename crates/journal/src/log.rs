@@ -117,6 +117,11 @@ pub enum JournalError {
         /// The batch's vote.
         found: Option<NodeId>,
     },
+    /// The batch's hard state votes for a node outside the genesis voters (br-biok).
+    VoteForNonVoter {
+        /// The vote.
+        vote: NodeId,
+    },
     /// The frame would take the journal past its hard stop (DM-7): the node stops
     /// appending and moves to `failed`.
     HardStop {
@@ -205,6 +210,11 @@ impl fmt::Display for JournalError {
             Self::CommitRegression { persisted, found } => write!(
                 f,
                 "hard-state commit {found} is below the persisted commit {persisted}"
+            ),
+            Self::VoteForNonVoter { vote } => write!(
+                f,
+                "a vote for node {}, outside the genesis voters",
+                vote.get()
             ),
             Self::VoteChanged {
                 term,
@@ -352,6 +362,7 @@ impl LogBounds {
 ///   `positions.len()`, with terms of at least 1 that never decrease and never exceed
 ///   the persisted term;
 /// - the persisted commit index is at most that last index;
+/// - a persisted vote names one of the genesis voters;
 /// - `end` is the journal's length in bytes and `next_sequence` the next frame's
 ///   sequence.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,13 +379,16 @@ pub struct LogicalLog {
     cache: EntryCache,
     /// The hard stop: no append takes `end` past it (DM-7).
     max_journal_bytes: u64,
+    /// The voters the genesis records, which a persisted vote must name: the live path
+    /// and recovery refuse the same votes (CD-10, br-biok).
+    voters: Vec<NodeId>,
 }
 
 impl LogicalLog {
     /// The empty logical log that follows a genesis frame of `genesis_len` bytes at
-    /// sequence 1, within `bounds`.
+    /// sequence 1, recording `voters`, within `bounds`.
     #[must_use]
-    pub const fn after_genesis(genesis_len: u64, bounds: LogBounds) -> Self {
+    pub fn after_genesis(genesis_len: u64, voters: &[NodeId], bounds: LogBounds) -> Self {
         Self {
             positions: Vec::new(),
             hard_state: HardState {
@@ -390,6 +404,7 @@ impl LogicalLog {
                 limit: bounds.cache_bytes.get(),
             },
             max_journal_bytes: bounds.max_journal_bytes.get(),
+            voters: voters.to_vec(),
         }
     }
 
@@ -511,7 +526,12 @@ impl LogicalLog {
 
     /// Refuses a hard state that would lower the persisted term or commit, or change the
     /// vote persisted in its term (DUR-2, §7.6).
-    const fn check_hard_state(&self, state: HardState) -> Result<(), JournalError> {
+    fn check_hard_state(&self, state: HardState) -> Result<(), JournalError> {
+        if let Some(vote) = state.vote
+            && !self.voters.contains(&vote)
+        {
+            return Err(JournalError::VoteForNonVoter { vote });
+        }
         let persisted = self.hard_state;
         if state.term.get() < persisted.term.get() {
             return Err(JournalError::TermRegression {
@@ -528,10 +548,7 @@ impl LogicalLog {
         if state.term.get() == persisted.term.get()
             && let Some(vote) = persisted.vote
         {
-            let same = match state.vote {
-                Some(found) => found.get() == vote.get(),
-                None => false,
-            };
+            let same = state.vote.is_some_and(|found| found.get() == vote.get());
             if !same {
                 return Err(JournalError::VoteChanged {
                     term: persisted.term,

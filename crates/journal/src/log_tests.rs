@@ -63,6 +63,11 @@ fn batch(entries: Vec<Entry>, hard_state: Option<HardState>) -> RaftBatch {
     RaftBatch::new(entries, hard_state).unwrap()
 }
 
+/// The genesis voters in these tests: nodes 1 to 5.
+fn voters() -> Vec<NodeId> {
+    (1..=5).map(|id| NodeId::new(id).unwrap()).collect()
+}
+
 /// Bounds of a `cache`-byte entry cache and a `stop`-byte journal hard stop.
 fn bounds(cache: u64, stop: u64) -> LogBounds {
     LogBounds::new(ByteCount::new(cache), ByteCount::new(stop))
@@ -75,7 +80,7 @@ fn fresh(cache: u64) -> (LogicalLog, Memory) {
         ..Memory::default()
     };
     (
-        LogicalLog::after_genesis(100, bounds(cache, 1 << 40)),
+        LogicalLog::after_genesis(100, &voters(), bounds(cache, 1 << 40)),
         memory,
     )
 }
@@ -186,10 +191,13 @@ fn every_refusal_leaves_the_log_unchanged() {
     let before = log.clone();
     let end = log.end();
     let next = log.next_sequence();
+    // Each refusal runs on its own copy, which is returned so the test can show the
+    // refusal left it exactly as it was (§7.6, br-biok).
     let apply = |offset: u64, kind: FrameKind, sequence: u64, batch: RaftBatch| {
         let frame = encode(kind, sequence, &batch.encode()).unwrap();
-        log.clone()
-            .apply(offset, decode_header(&frame).unwrap(), batch)
+        let mut copy = log.clone();
+        let result = copy.apply(offset, decode_header(&frame).unwrap(), batch);
+        (result, copy)
     };
     let raft = FrameKind::RaftBatch;
     let cases = [
@@ -240,15 +248,50 @@ fn every_refusal_leaves_the_log_unchanged() {
             JournalError::CommitBeyondLog { commit: 4, last: 3 },
         ),
     ];
-    for (result, expected) in cases {
+    for ((result, after), expected) in cases {
         assert_eq!(result, Err(expected.clone()), "rule: {expected} is refused");
+        assert_eq!(
+            after, before,
+            "rule: refusing {expected} changes nothing, not even entries it would have \
+             replaced (§7.6, br-biok)"
+        );
     }
     let mut refusing = log.clone();
-    assert!(refusing.append(batch(vec![entry(1, 2, 1)], None)).is_err());
+    assert_eq!(
+        refusing.append(batch(vec![entry(1, 2, 1)], None)),
+        Err(JournalError::TruncatesCommitted {
+            first: 1,
+            commit: 2
+        })
+    );
     assert_eq!(
         refusing, before,
         "rule: a refused frame changes nothing (§7.6)"
     );
+}
+
+#[test]
+fn a_live_append_voting_for_a_non_voter_is_refused_before_anything_changes() {
+    let (mut log, mut memory) = fresh(1 << 20);
+    append(
+        &mut log,
+        &mut memory,
+        batch(vec![entry(1, 1, 1)], Some(state(1, 0))),
+    );
+    let before = log.clone();
+    let stray = HardState {
+        vote: NodeId::new(9).ok(),
+        ..state(1, 0)
+    };
+    assert_eq!(
+        log.append(batch(vec![entry(2, 1, 1)], Some(stray))),
+        Err(JournalError::VoteForNonVoter {
+            vote: NodeId::new(9).unwrap()
+        }),
+        "rule: the live path refuses the vote recovery would refuse, so a node never writes \
+         a journal it cannot restart from (CD-10, br-biok)"
+    );
+    assert_eq!(log, before, "rule: nothing changed");
 }
 
 #[test]
@@ -600,7 +643,7 @@ fn the_hard_stop_refuses_before_changing_anything() {
     };
     let full = 100 + frame_len(2, &first) + frame_len(3, &second);
     for stop in [full - 1, full, full + 1] {
-        let mut log = LogicalLog::after_genesis(100, bounds(1 << 20, stop));
+        let mut log = LogicalLog::after_genesis(100, &voters(), bounds(1 << 20, stop));
         log.append(first.clone()).unwrap();
         let before = log.clone();
         let result = log.append(second.clone());
@@ -622,7 +665,7 @@ fn the_hard_stop_refuses_before_changing_anything() {
             );
         }
     }
-    let mut log = LogicalLog::after_genesis(100, bounds(1 << 20, full));
+    let mut log = LogicalLog::after_genesis(100, &voters(), bounds(1 << 20, full));
     log.append(first).unwrap();
     log.append(second).unwrap();
     let third = batch(Vec::new(), Some(state(1, 1)));

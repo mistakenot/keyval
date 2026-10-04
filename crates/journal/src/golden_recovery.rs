@@ -397,10 +397,6 @@ fn relative(error: RecoveryError) -> RecoveryError {
             at: at - base,
             error,
         },
-        RecoveryError::VoteForNonVoter { at, vote } => RecoveryError::VoteForNonVoter {
-            at: at - base,
-            vote,
-        },
         RecoveryError::ImpossibleHeader { at, error } => RecoveryError::ImpossibleHeader {
             at: at - base,
             error,

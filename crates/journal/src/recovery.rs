@@ -13,9 +13,10 @@
 //!    valid frame N. A frame whose header is intact (its header checksum holds) but holds
 //!    a field this build never writes (a version, kind, reserved byte, length or sequence
 //!    0) is not crash damage: it refuses, whether it is the genesis or a later frame
-//!    (DUR-9, br-o69w). A checksum-valid frame of the right sequence is refused if its batch
-//!    is invalid, cannot apply (an impossible index or term relationship, DUR-6), or
-//!    votes for a node outside the genesis voters.
+//!    (DUR-9, br-o69w). A checksum-valid frame of the right sequence is refused if its
+//!    batch is invalid, or cannot apply: an impossible index or term relationship
+//!    (DUR-6), or a vote for a node outside the genesis voters, which the log refuses on
+//!    live appends too (CD-10).
 //! 3. The **resync scan** then searches the entire remainder, at every offset, for a
 //!    complete, checksum-valid frame with a sequence greater than N (D-60). Its memory
 //!    is bounded by one frame; how far it looks is not.
@@ -148,13 +149,6 @@ pub enum RecoveryError {
         /// The rule it breaks.
         error: JournalError,
     },
-    /// A hard state votes for a node outside the genesis voter set.
-    VoteForNonVoter {
-        /// The frame's offset.
-        at: u64,
-        /// The vote.
-        vote: NodeId,
-    },
     /// Damage inside the durable prefix: beyond the first invalid frame lies a valid
     /// frame with a later sequence (D-60).
     Corruption {
@@ -192,7 +186,6 @@ impl RecoveryError {
             | Self::Mismatch(_)
             | Self::Record { .. }
             | Self::Apply { .. }
-            | Self::VoteForNonVoter { .. }
             | Self::Corruption { .. }
             | Self::TailTooLong { .. }
             | Self::Storage(_) => false,
@@ -227,11 +220,6 @@ impl fmt::Display for RecoveryError {
             Self::Mismatch(error) => write!(f, "{error}"),
             Self::Record { at, error } => write!(f, "frame at offset {at}: {error}"),
             Self::Apply { at, error } => write!(f, "frame at offset {at}: {error}"),
-            Self::VoteForNonVoter { at, vote } => write!(
-                f,
-                "frame at offset {at}: a vote for node {}, outside the genesis voters",
-                vote.get()
-            ),
             Self::Corruption {
                 damaged_at,
                 valid_at,
@@ -445,7 +433,7 @@ pub fn recover(
     genesis
         .verify(config, node)
         .map_err(RecoveryError::Mismatch)?;
-    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), bounds);
+    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), genesis.voters(), bounds);
     while log.end() < journal_len {
         let at = log.end();
         let slot = read_slot(storage, at, journal_len)?;
@@ -461,11 +449,6 @@ pub fn recover(
         }
         let batch =
             RaftBatch::decode(&payload).map_err(|error| RecoveryError::Record { at, error })?;
-        if let Some(vote) = batch.hard_state().and_then(|state| state.vote)
-            && !genesis.voters().contains(&vote)
-        {
-            return Err(RecoveryError::VoteForNonVoter { at, vote });
-        }
         log.apply(at, header, batch)
             .map_err(|error| RecoveryError::Apply { at, error })?;
     }

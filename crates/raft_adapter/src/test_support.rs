@@ -11,7 +11,7 @@ use std::rc::Rc;
 use journal::{LogBounds, LogicalLog, RaftBatch};
 use types::{
     ByteCount, Config, Entropy, EntropyStream, Entry, EntryIndex, EntryPayload, HardState,
-    JournalRead, ReadLen, StorageError, Term,
+    JournalRead, NodeId, ReadLen, StorageError, Term,
 };
 
 /// A seeded `SplitMix64` entropy port: these tests' only randomness (§7.14).
@@ -74,10 +74,17 @@ impl JournalRead for Journal {
 }
 
 /// An empty logical log after a zero-byte genesis. Its 16-byte entry cache sends most reads
-/// to the journal.
+/// to the journal. It records the voters of every committed config fixture ([`CONFIGS`]),
+/// because the journal refuses a persisted vote for a node outside its genesis voters
+/// (br-biok), and these tests run clusters from any fixture.
 pub fn empty_log() -> LogicalLog {
+    let voters: Vec<NodeId> = CONFIGS
+        .iter()
+        .flat_map(|(name, _)| config(name).voters().collect::<Vec<_>>())
+        .collect();
     LogicalLog::after_genesis(
         0,
+        &voters,
         LogBounds::new(ByteCount::new(16), ByteCount::new(1 << 30)),
     )
 }
