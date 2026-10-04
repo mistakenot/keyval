@@ -140,7 +140,7 @@ deps = ["W03", "W09"]
 reqs = ["T-7", "T-12", "§10.14"]
 area = ["model"]
 milestone = "m1"
-accept = ["./dev check MODEL"]
+accept = ["./dev check MODEL", "./dev check OBSERVATION-SCHEMA"]
 bead = "br-w10-reference-model-che"
 
 [[item]]

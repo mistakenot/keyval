@@ -1,0 +1,4178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/observation/observation.v1.schema.json",
+  "title": "keyval.observation/v1",
+  "description": "One simulation run's observations: what the clients and the harness saw, independently of what the system claims. The oracles (the reference model and checkers K-1 to K-12, plus non-vacuity, K-13) read only this, never production types (T-12, PLAN.md §10.2, §10.5). See schemas/observation/README.md for the stream rules and which checker reads which record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "manifest",
+    "voters",
+    "complete",
+    "overflowed",
+    "event_budget",
+    "scenario",
+    "records"
+  ],
+  "if": {
+    "properties": {
+      "complete": {
+        "const": true
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "overflowed": {
+        "maxItems": 0
+      },
+      "event_budget": {
+        "properties": {
+          "exhausted": {
+            "const": false
+          }
+        }
+      },
+      "scenario": {
+        "properties": {
+          "status": {
+            "const": "valid"
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "anyOf": [
+      {
+        "properties": {
+          "overflowed": {
+            "minItems": 1
+          }
+        }
+      },
+      {
+        "properties": {
+          "event_budget": {
+            "properties": {
+              "exhausted": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "properties": {
+          "scenario": {
+            "properties": {
+              "status": {
+                "const": "invalid"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "properties": {
+    "schema": {
+      "const": "keyval.observation/v1"
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest"
+    },
+    "voters": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/node_id"
+      },
+      "description": "The configured voters: one, three or five (§7.10).",
+      "anyOf": [
+        {
+          "minItems": 1,
+          "maxItems": 1
+        },
+        {
+          "minItems": 3,
+          "maxItems": 3
+        },
+        {
+          "minItems": 5,
+          "maxItems": 5
+        }
+      ]
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when a required observation overflowed its bound, the event budget ran out or the scenario was invalid: the run is incomplete, which fails (P10, §10.16)."
+    },
+    "overflowed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/overflow"
+      }
+    },
+    "event_budget": {
+      "description": "Scheduler events used against the manifest's `max_events` (§10.16: the budget must not be exhausted).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "used",
+        "exhausted"
+      ],
+      "properties": {
+        "used": {
+          "$ref": "#/$defs/u53"
+        },
+        "exhausted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "scenario": {
+      "description": "Whether the scenario kept the healthy envelope's bounds (§9.4). An invalid scenario is reported, names the bound it broke, and makes the run incomplete (§10.16): a generator defect, not a liveness failure.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "violated"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "valid",
+            "invalid"
+          ]
+        },
+        "violated": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "invalid"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "violated": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "violated": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    }
+  },
+  "$defs": {
+    "u53": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "pos53": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "node_id": {
+      "description": "A configured node ID (§7.10).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "attempt_id": {
+      "description": "An attempt, numbered within the run; unique per `invoke`.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "on": {
+      "description": "A node incarnation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "incarnation"
+      ],
+      "properties": {
+        "node": {
+          "$ref": "#/$defs/node_id"
+        },
+        "incarnation": {
+          "$ref": "#/$defs/u53"
+        }
+      }
+    },
+    "request_id": {
+      "description": "An Idempotency-Key: 32 lowercase hex characters (F-6).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "digest": {
+      "description": "A SHA-256 digest as 64 lowercase hex characters.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hex_bytes": {
+      "description": "Bytes as lowercase hex (at most the 66 KiB canonical-command limit, §7.11).",
+      "type": "string",
+      "pattern": "^([0-9a-f]{2})*$",
+      "maxLength": 135168
+    },
+    "key": {
+      "description": "A key (DM-1: 1 to 256 bytes of UTF-8; consumers measure bytes after decoding).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "value": {
+      "description": "A value (DM-2: 0 to 65,536 bytes of UTF-8).",
+      "type": "string",
+      "maxLength": 65536
+    },
+    "endpoint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "node"
+          ],
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/node_id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "client"
+          ],
+          "properties": {
+            "client": {
+              "$ref": "#/$defs/pos53"
+            }
+          }
+        }
+      ]
+    },
+    "link": {
+      "description": "A directed link.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "to": {
+          "$ref": "#/$defs/endpoint"
+        }
+      }
+    },
+    "expected": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "version"
+          ],
+          "properties": {
+            "kind": {
+              "const": "version"
+            },
+            "version": {
+              "$ref": "#/$defs/pos53"
+            }
+          }
+        }
+      ]
+    },
+    "write_operation": {
+      "description": "A write, in the API's terms (§8.2).",
+      "type": "object",
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "put",
+            "delete",
+            "cas"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "put"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "key",
+              "value"
+            ],
+            "properties": {
+              "op": {
+                "const": "put"
+              },
+              "key": {
+                "$ref": "#/$defs/key"
+              },
+              "value": {
+                "$ref": "#/$defs/value"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "delete"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "key"
+            ],
+            "properties": {
+              "op": {
+                "const": "delete"
+              },
+              "key": {
+                "$ref": "#/$defs/key"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "cas"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "key",
+              "expected",
+              "value"
+            ],
+            "properties": {
+              "op": {
+                "const": "cas"
+              },
+              "key": {
+                "$ref": "#/$defs/key"
+              },
+              "expected": {
+                "$ref": "#/$defs/expected"
+              },
+              "value": {
+                "$ref": "#/$defs/value"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "description": "What the attempt asked for, in the API's terms (§8.2). A SCAN's null `limit` means the default page of 32 items (§7.11).",
+      "type": "object",
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "put",
+            "delete",
+            "cas",
+            "get",
+            "scan",
+            "status"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete",
+                  "cas"
+                ]
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/write_operation"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "get"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "key"
+            ],
+            "properties": {
+              "op": {
+                "const": "get"
+              },
+              "key": {
+                "$ref": "#/$defs/key"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "scan"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "start",
+              "end",
+              "after",
+              "limit"
+            ],
+            "properties": {
+              "op": {
+                "const": "scan"
+              },
+              "start": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/key"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "end": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/key"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "after": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/key"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "limit": {
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 128
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "status"
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "request_id"
+            ],
+            "properties": {
+              "op": {
+                "const": "status"
+              },
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "command": {
+      "description": "A committed entry's command: its request ID and write.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "operation"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "operation": {
+          "$ref": "#/$defs/write_operation"
+        }
+      }
+    },
+    "entry": {
+      "description": "A log entry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "term",
+        "payload"
+      ],
+      "properties": {
+        "index": {
+          "$ref": "#/$defs/pos53"
+        },
+        "term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "payload": {
+          "$ref": "#/$defs/hex_bytes"
+        }
+      }
+    },
+    "served_by": {
+      "description": "Which node answered, and the applied prefix it answered from (F-2, C-3).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "applied_index"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/node_id"
+        },
+        "applied_index": {
+          "$ref": "#/$defs/u53"
+        }
+      }
+    },
+    "item": {
+      "description": "A SCAN item.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "value",
+        "version"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        },
+        "version": {
+          "$ref": "#/$defs/pos53"
+        }
+      }
+    },
+    "write_outcome": {
+      "description": "A write's response (§8.1, §8.4): `ok` for a 200, otherwise the error code. Per code exactly the fields §8.4 lists are non-null; the constant or derivable ones (`message`, `guidance`, `nodes`) are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "request_id",
+        "index",
+        "version",
+        "existed",
+        "replayed",
+        "served_by",
+        "attempt_state",
+        "current_version",
+        "original_index",
+        "limit",
+        "leader_hint",
+        "lifecycle"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "ok",
+            "not_leader",
+            "invalid_request",
+            "too_large",
+            "version_mismatch",
+            "request_id_conflict",
+            "busy",
+            "unavailable",
+            "recovering",
+            "unknown_outcome",
+            "capacity_exceeded",
+            "history_full"
+          ]
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/request_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "index": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "existed": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replayed": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "served_by": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/served_by"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt_state": {
+          "oneOf": [
+            {
+              "enum": [
+                "not_submitted",
+                "submitted"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_version": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_index": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "oneOf": [
+            {
+              "enum": [
+                "max_live_keys",
+                "max_live_bytes",
+                "max_log_entries",
+                "max_history_bytes"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leader_hint": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lifecycle": {
+          "oneOf": [
+            {
+              "enum": [
+                "starting",
+                "recovering",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "$ref": "#/$defs/pos53"
+              },
+              "version": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/pos53"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "existed": {
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "served_by": {
+                "$ref": "#/$defs/served_by"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "not_leader"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "not_submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "$ref": "#/$defs/node_id"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "invalid_request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/request_id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "too_large"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/request_id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "version_mismatch"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "$ref": "#/$defs/pos53"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/pos53"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "request_id_conflict"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "$ref": "#/$defs/pos53"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "busy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "not_submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "not_submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "recovering"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "not_submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "enum": [
+                  "starting",
+                  "recovering",
+                  "failed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "unknown_outcome"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "type": "null"
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "capacity_exceeded"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "$ref": "#/$defs/pos53"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "type": "null"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "enum": [
+                  "max_live_keys",
+                  "max_live_bytes"
+                ]
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "history_full"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/request_id"
+              },
+              "index": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "existed": {
+                "type": "null"
+              },
+              "replayed": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "attempt_state": {
+                "const": "not_submitted"
+              },
+              "current_version": {
+                "type": "null"
+              },
+              "original_index": {
+                "type": "null"
+              },
+              "limit": {
+                "enum": [
+                  "max_log_entries",
+                  "max_history_bytes"
+                ]
+              },
+              "leader_hint": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "terminal_result": {
+      "description": "A stored terminal result, as a status lookup returns it (F-9, §8.3): the body a same-ID retry would receive now, so `replayed` is true. `request_id_conflict` is never stored.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/write_outcome"
+        },
+        {
+          "properties": {
+            "code": {
+              "enum": [
+                "ok",
+                "version_mismatch",
+                "capacity_exceeded"
+              ]
+            },
+            "replayed": {
+              "const": true
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "properties": {
+                  "version": {
+                    "$ref": "#/$defs/pos53"
+                  },
+                  "existed": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "version": {
+                    "type": "null"
+                  },
+                  "existed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "get_outcome": {
+      "description": "A GET's response (§8.2, §8.4).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "value",
+        "version",
+        "served_by",
+        "lifecycle"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "ok",
+            "not_found",
+            "invalid_request",
+            "busy",
+            "unavailable",
+            "recovering"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/value"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "served_by": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/served_by"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lifecycle": {
+          "oneOf": [
+            {
+              "enum": [
+                "starting",
+                "recovering",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/value"
+              },
+              "version": {
+                "$ref": "#/$defs/pos53"
+              },
+              "served_by": {
+                "$ref": "#/$defs/served_by"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "not_found"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "served_by": {
+                "$ref": "#/$defs/served_by"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "invalid_request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "busy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "recovering"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "enum": [
+                  "starting",
+                  "recovering",
+                  "failed"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scan_outcome": {
+      "description": "A SCAN page or refusal (§8.2, §8.5). When `has_more` is true, `next_after` is the last returned key; otherwise it is null.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "items",
+        "has_more",
+        "next_after",
+        "served_by",
+        "lifecycle"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "ok",
+            "invalid_request",
+            "busy",
+            "unavailable",
+            "recovering"
+          ]
+        },
+        "items": {
+          "oneOf": [
+            {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "$ref": "#/$defs/item"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has_more": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_after": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "served_by": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/served_by"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lifecycle": {
+          "oneOf": [
+            {
+              "enum": [
+                "starting",
+                "recovering",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 128,
+                "items": {
+                  "$ref": "#/$defs/item"
+                }
+              },
+              "has_more": {
+                "type": "boolean"
+              },
+              "next_after": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/key"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "served_by": {
+                "$ref": "#/$defs/served_by"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "invalid_request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "type": "null"
+              },
+              "has_more": {
+                "type": "null"
+              },
+              "next_after": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "busy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "type": "null"
+              },
+              "has_more": {
+                "type": "null"
+              },
+              "next_after": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "type": "null"
+              },
+              "has_more": {
+                "type": "null"
+              },
+              "next_after": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "recovering"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "type": "null"
+              },
+              "has_more": {
+                "type": "null"
+              },
+              "next_after": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "enum": [
+                  "starting",
+                  "recovering",
+                  "failed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "has_more": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "minItems": 1
+              },
+              "next_after": {
+                "$ref": "#/$defs/key"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "next_after": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "status_outcome": {
+      "description": "A status lookup's response (F-9): `known` with the stored terminal result, or `unknown` as of `served_by` (never a claim of absence).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "state",
+        "result",
+        "served_by",
+        "lifecycle"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "ok",
+            "invalid_request",
+            "busy",
+            "unavailable",
+            "recovering"
+          ]
+        },
+        "state": {
+          "oneOf": [
+            {
+              "enum": [
+                "known",
+                "unknown"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "served_by": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/served_by"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lifecycle": {
+          "oneOf": [
+            {
+              "enum": [
+                "starting",
+                "recovering",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "known",
+                  "unknown"
+                ]
+              },
+              "result": {
+                "oneOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "served_by": {
+                "$ref": "#/$defs/served_by"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "invalid_request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "null"
+              },
+              "result": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "busy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "null"
+              },
+              "result": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "null"
+              },
+              "result": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "recovering"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "null"
+              },
+              "result": {
+                "type": "null"
+              },
+              "served_by": {
+                "type": "null"
+              },
+              "lifecycle": {
+                "enum": [
+                  "starting",
+                  "recovering",
+                  "failed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "known"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/terminal_result"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "result": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "hard_state": {
+      "description": "A Raft hard state's durable part: term and vote (DUR-2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "term",
+        "vote"
+      ],
+      "properties": {
+        "term": {
+          "$ref": "#/$defs/u53"
+        },
+        "vote": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "obligation": {
+      "description": "What a release depends on (DUR-2): the hard state, when it carries one, and the node's log up to `last_index`, whose entry has term `last_term` (0 for an empty prefix).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hard_state",
+        "last_index",
+        "last_term"
+      ],
+      "properties": {
+        "hard_state": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/hard_state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_index": {
+          "$ref": "#/$defs/u53"
+        },
+        "last_term": {
+          "$ref": "#/$defs/u53"
+        }
+      }
+    },
+    "durable_state": {
+      "description": "Durable Raft state (DUR-2): term, vote, and the log up to `last_index`, whose entry has term `last_term` (0 for an empty log), so a sync before a suffix replacement never covers the replacement.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "term",
+        "vote",
+        "last_index",
+        "last_term"
+      ],
+      "properties": {
+        "term": {
+          "$ref": "#/$defs/u53"
+        },
+        "vote": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_index": {
+          "$ref": "#/$defs/u53"
+        },
+        "last_term": {
+          "$ref": "#/$defs/u53"
+        }
+      }
+    },
+    "drained_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "last_index",
+        "commit",
+        "applied",
+        "state_digest"
+      ],
+      "properties": {
+        "node": {
+          "$ref": "#/$defs/node_id"
+        },
+        "last_index": {
+          "$ref": "#/$defs/u53"
+        },
+        "commit": {
+          "$ref": "#/$defs/u53"
+        },
+        "applied": {
+          "$ref": "#/$defs/u53"
+        },
+        "state_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "overflow": {
+      "description": "A required observation that overflowed its bound (§7.11): the run is incomplete and fails (P10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "what",
+        "bound"
+      ],
+      "properties": {
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "what": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bound": {
+          "$ref": "#/$defs/pos53"
+        }
+      }
+    },
+    "limits": {
+      "description": "The semantic limits the reference model needs (§7.10; small test limits in capacity profiles, §10.3).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_key_bytes",
+        "max_value_bytes",
+        "max_live_keys",
+        "max_live_bytes",
+        "max_log_entries",
+        "max_history_bytes"
+      ],
+      "properties": {
+        "max_key_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_value_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "max_live_keys": {
+          "$ref": "#/$defs/pos53"
+        },
+        "max_live_bytes": {
+          "$ref": "#/$defs/pos53"
+        },
+        "max_log_entries": {
+          "$ref": "#/$defs/pos53"
+        },
+        "max_history_bytes": {
+          "$ref": "#/$defs/pos53"
+        }
+      }
+    },
+    "manifest": {
+      "description": "The run manifest (§10.2), the swarm's fault selection (§10.4), how the heal completes, the tick length that converts tick budgets to `time`, and the semantic limits.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_version",
+        "seed",
+        "profile",
+        "heal",
+        "build_id",
+        "config_fingerprint",
+        "prng",
+        "max_events",
+        "tick_us",
+        "chaos_ticks",
+        "heal_budget_ticks",
+        "quiet_ticks",
+        "limits",
+        "faults"
+      ],
+      "properties": {
+        "scenario_version": {
+          "$ref": "#/$defs/pos53"
+        },
+        "seed": {
+          "$ref": "#/$defs/u53"
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "heal": {
+          "enum": [
+            "marker",
+            "precreated_marker",
+            "drain"
+          ],
+          "description": "How the heal completes (§10.2): a catch-up marker; a marker key pre-created during baseline (DM-6 profiles); or a certified drain with no marker (DM-7 profiles)."
+        },
+        "build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "prng": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_events": {
+          "$ref": "#/$defs/pos53"
+        },
+        "tick_us": {
+          "$ref": "#/$defs/pos53"
+        },
+        "chaos_ticks": {
+          "$ref": "#/$defs/u53"
+        },
+        "heal_budget_ticks": {
+          "$ref": "#/$defs/u53"
+        },
+        "quiet_ticks": {
+          "$ref": "#/$defs/pos53"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "faults": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fault",
+              "intensity"
+            ],
+            "properties": {
+              "fault": {
+                "enum": [
+                  "crash_restart",
+                  "all_node_crash",
+                  "permanent_loss",
+                  "symmetric_partition",
+                  "asymmetric_partition",
+                  "message_loss",
+                  "message_delay",
+                  "message_duplication",
+                  "stall"
+                ]
+              },
+              "intensity": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "record": {
+      "description": "One observation, dispatched on `kind`.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "phase",
+            "fault",
+            "invoke",
+            "attempt",
+            "response",
+            "delivery",
+            "append",
+            "truncate",
+            "recovered",
+            "sync",
+            "accept",
+            "release",
+            "committed",
+            "node_state",
+            "marker",
+            "lost",
+            "quiescence",
+            "drain",
+            "resolution"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "phase"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_phase"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "fault"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_fault"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "invoke"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_invoke"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "attempt"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_attempt"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "response"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_response"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "delivery"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_delivery"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "append"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_append"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "truncate"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_truncate"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "recovered"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_recovered"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "sync"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_sync"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "accept"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_accept"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "release"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_release"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "committed"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_committed"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "node_state"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_node_state"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "marker"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_marker"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "lost"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_lost"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "quiescence"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_quiescence"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "drain"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_drain"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "resolution"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/record_resolution"
+          }
+        }
+      ]
+    },
+    "record_phase": {
+      "description": "A run phase begins (§10.2 run phases): setup, baseline, chaos, heal and check, each once and in that order. Non-vacuity (§10.16) reads successful writes before the first fault and after heal against these.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "phase"
+      ],
+      "properties": {
+        "kind": {
+          "const": "phase"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "phase": {
+          "enum": [
+            "setup",
+            "baseline",
+            "chaos",
+            "heal",
+            "check"
+          ]
+        }
+      }
+    },
+    "record_fault": {
+      "description": "The nemesis started or ended a fault (§9.1, §10.4): a crash and its restart, a partition and its healing, a stall and its resumption. A permanent loss only starts. A crash names, per crashed node, where in its disk work it struck.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "action",
+        "fault",
+        "nodes",
+        "crash_points",
+        "partition",
+        "links"
+      ],
+      "properties": {
+        "kind": {
+          "const": "fault"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "action": {
+          "enum": [
+            "start",
+            "end"
+          ]
+        },
+        "fault": {
+          "enum": [
+            "crash_restart",
+            "all_node_crash",
+            "permanent_loss",
+            "symmetric_partition",
+            "asymmetric_partition",
+            "message_loss",
+            "message_delay",
+            "message_duplication",
+            "stall"
+          ]
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node_id"
+          },
+          "uniqueItems": true,
+          "description": "The nodes it affects; empty for a fault on links only."
+        },
+        "crash_points": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "node",
+                  "point"
+                ],
+                "properties": {
+                  "node": {
+                    "$ref": "#/$defs/node_id"
+                  },
+                  "point": {
+                    "enum": [
+                      "idle",
+                      "before_write",
+                      "mid_append",
+                      "after_write_before_sync",
+                      "after_sync_before_completion",
+                      "after_commit_before_reply",
+                      "after_truncate_before_sync",
+                      "after_create_before_dir_sync"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "partition": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/node_id"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "links": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/link"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "enum": [
+                  "crash_restart",
+                  "all_node_crash"
+                ]
+              },
+              "action": {
+                "const": "start"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "crash_points": {
+                "type": "array"
+              },
+              "nodes": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "crash_points": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "const": "symmetric_partition"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "partition": {
+                "type": "array"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "partition": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "const": "asymmetric_partition"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "links": {
+                "type": "array"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "not": {
+                  "enum": [
+                    "asymmetric_partition",
+                    "message_loss",
+                    "message_delay",
+                    "message_duplication"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "links": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "const": "permanent_loss"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "const": "start"
+              },
+              "nodes": {
+                "maxItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fault": {
+                "enum": [
+                  "crash_restart",
+                  "all_node_crash",
+                  "permanent_loss",
+                  "stall"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "nodes": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "record_invoke": {
+      "description": "A simulated client invoked an operation: one attempt, one request to one node incarnation (the node's current one when the request is sent, even when it is down and the request is lost). A logical write is all the attempts sharing a request ID, misuse attempts excluded (§10.3). Recorded by the client, independently of anything the system claims. Simulated clients drive the core with parsed domain requests (§10.2), so `invalid_request` and `too_large` outcomes are representable for completeness only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "client",
+        "attempt",
+        "target",
+        "request_id",
+        "misuse",
+        "operation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "invoke"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "client": {
+          "$ref": "#/$defs/pos53"
+        },
+        "attempt": {
+          "$ref": "#/$defs/attempt_id"
+        },
+        "target": {
+          "$ref": "#/$defs/on"
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/request_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "misuse": {
+          "type": "boolean",
+          "description": "True for the misuse stream's reuse of a request ID with a different command; such attempts are never logical writes (§10.3)."
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        }
+      },
+      "if": {
+        "properties": {
+          "operation": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete",
+                  "cas"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "request_id": {
+            "$ref": "#/$defs/request_id"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "request_id": {
+            "type": "null"
+          },
+          "misuse": {
+            "const": false
+          }
+        }
+      }
+    },
+    "record_attempt": {
+      "description": "A write attempt moved through §7.8's lifecycle on the node handling it: admitted (`NotSubmitted`), answered from the applied history (short circuit), attached to the pending same-ID, same-digest proposal of attempt `attached_to`, submitted (recorded where the proposal is handed to the consensus library, not from the attempt's own bookkeeping), dropped (a synchronous `ProposalDropped` with nothing appended: not submitted after all, A-5), or terminal (an entry carrying its request ID applied). Unknown outcome is not a state: it is a response.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "attempt",
+        "at",
+        "state",
+        "attached_to"
+      ],
+      "properties": {
+        "kind": {
+          "const": "attempt"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "attempt": {
+          "$ref": "#/$defs/attempt_id"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "state": {
+          "enum": [
+            "admitted",
+            "short_circuit",
+            "attached",
+            "submitted",
+            "dropped",
+            "terminal"
+          ]
+        },
+        "attached_to": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/attempt_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "state": {
+            "const": "attached"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "attached_to": {
+            "$ref": "#/$defs/attempt_id"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "attached_to": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    "record_response": {
+      "description": "A node incarnation generated the response to an attempt, as the client will see it (§8.2, §8.4). `op` repeats the invoked operation so the outcome's shape can be checked here. `generation` is the incarnation's response-generation order, the order K-6 judges; arrival at the client is a separate `delivery` record.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "attempt",
+        "from",
+        "generation",
+        "op",
+        "outcome"
+      ],
+      "properties": {
+        "kind": {
+          "const": "response"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "attempt": {
+          "$ref": "#/$defs/attempt_id"
+        },
+        "from": {
+          "$ref": "#/$defs/on"
+        },
+        "generation": {
+          "$ref": "#/$defs/pos53"
+        },
+        "op": {
+          "enum": [
+            "put",
+            "delete",
+            "cas",
+            "get",
+            "scan",
+            "status"
+          ]
+        },
+        "outcome": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete",
+                  "cas"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "$ref": "#/$defs/write_outcome"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "get"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "$ref": "#/$defs/get_outcome"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "scan"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "$ref": "#/$defs/scan_outcome"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "$ref": "#/$defs/status_outcome"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "cas"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "if": {
+                  "properties": {
+                    "code": {
+                      "const": "ok"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "version": {
+                      "$ref": "#/$defs/pos53"
+                    },
+                    "existed": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "delete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "if": {
+                  "properties": {
+                    "code": {
+                      "const": "ok"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "version": {
+                      "type": "null"
+                    },
+                    "existed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "properties": {
+                  "code": {
+                    "not": {
+                      "const": "version_mismatch"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "delete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "properties": {
+                  "code": {
+                    "not": {
+                      "enum": [
+                        "too_large",
+                        "capacity_exceeded"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "record_delivery": {
+      "description": "One copy of an attempt's response reached its client, or was lost on the way (§9.1 message loss). Duplication can deliver a response more than once; the first copy delivered is what the client observed first.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "attempt",
+        "delivered"
+      ],
+      "properties": {
+        "kind": {
+          "const": "delivery"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "attempt": {
+          "$ref": "#/$defs/attempt_id"
+        },
+        "delivered": {
+          "type": "boolean"
+        }
+      }
+    },
+    "record_append": {
+      "description": "An entry was appended to a node incarnation's log (volatile until a sync covers it): its index (one past the log's end), term and exact payload bytes. With `truncate` and `recovered`, these give every node's log after every step (T-5), which K-8 judges.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "index",
+        "term",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "const": "append"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "index": {
+          "$ref": "#/$defs/pos53"
+        },
+        "term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "payload": {
+          "$ref": "#/$defs/hex_bytes"
+        }
+      }
+    },
+    "record_truncate": {
+      "description": "A node incarnation removed its log suffix from `from_index` on (a conflicting suffix replaced, §7.6).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "from_index"
+      ],
+      "properties": {
+        "kind": {
+          "const": "truncate"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "from_index": {
+          "$ref": "#/$defs/pos53"
+        }
+      }
+    },
+    "record_recovered": {
+      "description": "A node incarnation began: what it recovered from its disk (§7.7, §9.1 crash-restart), before it takes any other step. `log` is its whole recovered log and `durable` its durable state; incarnation 0 starts empty.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "durable",
+        "log"
+      ],
+      "properties": {
+        "kind": {
+          "const": "recovered"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "durable": {
+          "$ref": "#/$defs/durable_state"
+        },
+        "log": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        }
+      }
+    },
+    "record_sync": {
+      "description": "A durability obligation (DUR-2) was requested, completed, or its completion delivered stale to a later incarnation, which must ignore it (B-17). `covers` is what the sync makes durable: the term, the vote and the log as it was when the sync was requested, up to `last_index` (never the commit index).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "sync",
+        "state",
+        "covers"
+      ],
+      "properties": {
+        "kind": {
+          "const": "sync"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "sync": {
+          "$ref": "#/$defs/u53"
+        },
+        "state": {
+          "enum": [
+            "requested",
+            "completed",
+            "stale"
+          ]
+        },
+        "covers": {
+          "$ref": "#/$defs/durable_state"
+        }
+      }
+    },
+    "record_accept": {
+      "description": "A replica incarnation accepted the entry at `index` while in `acceptance_term`: a follower when it acknowledges the entry, the leader when its own sync covering the entry completes; K-11 judges that the entry was durable there first (K-8's commit certificates: an entry of term T is committed once a majority accepted it from the term-T leader during term T). `payload_digest` is SHA-256 of the entry's payload bytes, so two different entries at one index never merge into one certificate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "replica",
+        "index",
+        "entry_term",
+        "acceptance_term",
+        "payload_digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "accept"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "replica": {
+          "$ref": "#/$defs/on"
+        },
+        "index": {
+          "$ref": "#/$defs/pos53"
+        },
+        "entry_term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "acceptance_term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "record_release": {
+      "description": "A node released something that depends on durable state (K-11): a vote grant, an append acknowledgement, a client success (a response carrying a terminal execution decision: a write's `ok`, `version_mismatch` or `capacity_exceeded`) or a published read (a read answered with `served_by`). The last two name the `attempt` they answer. `requires` is the DUR-2 obligation, derived by the harness from the outgoing message, not claimed by the node: a vote grant needs the term and vote it carries (its `last_index` is 0); an append acknowledgement needs those and the log up to the acknowledged index; a client success or published read needs the log up to the decided or served index, never a term or vote sync (F-7). A pre-vote grant persists nothing and is not a release.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "what",
+        "attempt",
+        "requires"
+      ],
+      "properties": {
+        "kind": {
+          "const": "release"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "what": {
+          "enum": [
+            "vote_grant",
+            "append_ack",
+            "client_success",
+            "published_read"
+          ]
+        },
+        "attempt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/attempt_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requires": {
+          "$ref": "#/$defs/obligation"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "what": {
+                "enum": [
+                  "vote_grant",
+                  "append_ack"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "requires": {
+                "properties": {
+                  "hard_state": {
+                    "$ref": "#/$defs/hard_state"
+                  }
+                }
+              },
+              "attempt": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "requires": {
+                "properties": {
+                  "hard_state": {
+                    "type": "null"
+                  }
+                }
+              },
+              "attempt": {
+                "$ref": "#/$defs/attempt_id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "what": {
+                "const": "vote_grant"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "requires": {
+                "properties": {
+                  "last_index": {
+                    "const": 0
+                  },
+                  "last_term": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "record_committed": {
+      "description": "An entry became committed: the harness records it once a commit certificate forms from the `accept` records, for it or for a later index whose certifiers hold it (K-8: a certified entry and the prefix before it; K-8 recomputes this). `payload` is the entry's exact bytes, empty for an empty (no-op) entry; `command` is the harness's decoding of them, null exactly for an empty entry. The reference model replays `command`s, which is how first executions and their results are derived (§10.14), never taken from a node's claim.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "index",
+        "term",
+        "payload",
+        "command"
+      ],
+      "properties": {
+        "kind": {
+          "const": "committed"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "index": {
+          "$ref": "#/$defs/pos53"
+        },
+        "term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "payload": {
+          "$ref": "#/$defs/hex_bytes"
+        },
+        "command": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/command"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "command": {
+            "type": "null"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "maxLength": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "payload": {
+            "minLength": 2
+          }
+        }
+      }
+    },
+    "record_node_state": {
+      "description": "A node's god-view state after a step in which it changed (T-5), recorded at the point of the change, before any later record of that step. It holds until that node's next `node_state`, so these records give every node's state after every step. On a crash the process is `crashed` and the rest is the state it last had.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "process",
+        "lifecycle",
+        "role",
+        "term",
+        "vote",
+        "leader",
+        "commit",
+        "applied",
+        "state_digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "node_state"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "process": {
+          "enum": [
+            "running",
+            "paused",
+            "crashed",
+            "lost"
+          ]
+        },
+        "lifecycle": {
+          "enum": [
+            "starting",
+            "recovering",
+            "ready",
+            "failed"
+          ]
+        },
+        "role": {
+          "enum": [
+            "leader",
+            "candidate",
+            "pre_candidate",
+            "follower"
+          ]
+        },
+        "term": {
+          "$ref": "#/$defs/u53"
+        },
+        "vote": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leader": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commit": {
+          "$ref": "#/$defs/u53"
+        },
+        "applied": {
+          "$ref": "#/$defs/u53"
+        },
+        "state_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "record_marker": {
+      "description": "A node applied the catch-up marker (§10.2 heal). Its state digest at that application is what K-7 compares.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "at",
+        "index",
+        "state_digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "marker"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "at": {
+          "$ref": "#/$defs/on"
+        },
+        "index": {
+          "$ref": "#/$defs/pos53"
+        },
+        "state_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "record_lost": {
+      "description": "The permanent-loss set changed: the nodes removed for good so far (§9.1, at most two). K-1, K-7, K-9 and K-13 exclude them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "nodes"
+      ],
+      "properties": {
+        "kind": {
+          "const": "lost"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/node_id"
+          }
+        }
+      }
+    },
+    "record_quiescence": {
+      "description": "All client activity stopped: no client request queued or in flight on any node (§10.2 heal, K-9, K-12). Only status lookups follow it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time"
+      ],
+      "properties": {
+        "kind": {
+          "const": "quiescence"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        }
+      }
+    },
+    "record_drain": {
+      "description": "A certified drain held over the quiet period (§10.2, `drain` heal): a stable current-term leader, and on every recoverable node last log index = commit index = applied index with identical state digests.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "leader",
+        "term",
+        "quiet_ticks",
+        "nodes"
+      ],
+      "properties": {
+        "kind": {
+          "const": "drain"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "leader": {
+          "$ref": "#/$defs/node_id"
+        },
+        "term": {
+          "$ref": "#/$defs/pos53"
+        },
+        "quiet_ticks": {
+          "$ref": "#/$defs/pos53"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/drained_node"
+          }
+        }
+      }
+    },
+    "record_resolution": {
+      "description": "How the run resolved a logical write (§10.2, §9.3), once per logical write after its last attempt: executed at `index`, not executed (`unknown` on every recoverable node after a certified drain), refused (`history_full` with no submitted attempt), or unresolved (a liveness failure, K-9). `evidence` names the attempts whose responses decide it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "seq",
+        "time",
+        "request_id",
+        "resolved",
+        "index",
+        "evidence"
+      ],
+      "properties": {
+        "kind": {
+          "const": "resolution"
+        },
+        "seq": {
+          "$ref": "#/$defs/u53"
+        },
+        "time": {
+          "$ref": "#/$defs/u53"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "resolved": {
+          "enum": [
+            "executed",
+            "not_executed",
+            "refused",
+            "unresolved"
+          ]
+        },
+        "index": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/pos53"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/attempt_id"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolved": {
+                "const": "executed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "index": {
+                "$ref": "#/$defs/pos53"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "index": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "resolved": {
+                "enum": [
+                  "executed",
+                  "not_executed",
+                  "refused"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

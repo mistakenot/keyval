@@ -1,0 +1,78 @@
+{
+  "rule": "an attached attempt names the attempt it waits on (§7.8)",
+  "error_at": "/records/0/attached_to",
+  "instance": {
+    "schema": "keyval.observation/v1",
+    "manifest": {
+      "scenario_version": 1,
+      "seed": 42,
+      "profile": "mixed",
+      "heal": "marker",
+      "build_id": "fixture-build",
+      "config_fingerprint": "3f65a3399fdc3faf14843646190d5232493de3f9bbb05a2691aa664095fea71f",
+      "prng": "fixture-prng/1",
+      "max_events": 1000000,
+      "tick_us": 50000,
+      "chaos_ticks": 40,
+      "heal_budget_ticks": 30,
+      "quiet_ticks": 4,
+      "limits": {
+        "max_key_bytes": 256,
+        "max_value_bytes": 65536,
+        "max_live_keys": 10000,
+        "max_live_bytes": 67108864,
+        "max_log_entries": 1000000,
+        "max_history_bytes": 3221225472
+      },
+      "faults": [
+        {
+          "fault": "symmetric_partition",
+          "intensity": "medium"
+        },
+        {
+          "fault": "crash_restart",
+          "intensity": "low"
+        },
+        {
+          "fault": "stall",
+          "intensity": "low"
+        },
+        {
+          "fault": "permanent_loss",
+          "intensity": "low"
+        }
+      ]
+    },
+    "voters": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "complete": true,
+    "overflowed": [],
+    "event_budget": {
+      "used": 33,
+      "exhausted": false
+    },
+    "scenario": {
+      "status": "valid",
+      "violated": null
+    },
+    "records": [
+      {
+        "kind": "attempt",
+        "seq": 0,
+        "time": 0,
+        "attempt": 2,
+        "at": {
+          "node": 1,
+          "incarnation": 0
+        },
+        "state": "attached",
+        "attached_to": null
+      }
+    ]
+  }
+}

@@ -20,6 +20,8 @@ mod ledger;
 mod libtest;
 mod lint;
 mod metadata;
+#[cfg(test)]
+mod observation_schema;
 mod output;
 mod process;
 mod prune;

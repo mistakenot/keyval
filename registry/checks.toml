@@ -740,3 +740,15 @@ tier = "T0"
 run = "./dev check DOCTOR-CLI"
 min_cases = 7
 status = "implemented"
+
+[[check]]
+id = "OBSERVATION-SCHEMA"
+summary = "the observation schema keyval.observation/v1, the oracles' only input (T-12), follows the schema conventions; its two fixture runs (a marker heal and a drain heal) validate, together exercise every record kind, operation, attempt state, phase, sync state, fault action, role and process state, keep the stream rules (ordering, incarnations, logs, certificates, generations, resolutions) and are correct runs (DUR-2 cover, the served prefix, converged digests); the outcome table covers exactly the (operation, code) pairs §8.4 allows; each negative fixture is rejected only at its pointer; the README documents every record kind and its checkers (§10.2, §10.5)"
+kind = "test_group"
+covers = ["T-12"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check OBSERVATION-SCHEMA"
+min_cases = 7
+status = "implemented"

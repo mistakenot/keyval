@@ -1,0 +1,900 @@
+{
+  "outcomes": [
+    {
+      "op": "put",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": 6,
+        "existed": null,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "not_leader",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": 2,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "invalid_request",
+        "request_id": null,
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "too_large",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "request_id_conflict",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": 6,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "busy",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "unavailable",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "recovering",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": "starting"
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "unknown_outcome",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "capacity_exceeded",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": null,
+        "existed": null,
+        "replayed": true,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": "max_live_bytes",
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "put",
+      "outcome": {
+        "code": "history_full",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": "max_history_bytes",
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": null,
+        "existed": true,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "not_leader",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": 2,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "invalid_request",
+        "request_id": null,
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "request_id_conflict",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": 6,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "busy",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "unavailable",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "recovering",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": "starting"
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "unknown_outcome",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "delete",
+      "outcome": {
+        "code": "history_full",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": "max_history_bytes",
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": 6,
+        "existed": null,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "not_leader",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": 2,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "invalid_request",
+        "request_id": null,
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "too_large",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "version_mismatch",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": null,
+        "existed": null,
+        "replayed": false,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "request_id_conflict",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": 6,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "busy",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "unavailable",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "recovering",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": "starting"
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "unknown_outcome",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "capacity_exceeded",
+        "request_id": "000000000000000000000000000000c0",
+        "index": 6,
+        "version": null,
+        "existed": null,
+        "replayed": true,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": "max_live_bytes",
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "cas",
+      "outcome": {
+        "code": "history_full",
+        "request_id": "000000000000000000000000000000c0",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": "max_history_bytes",
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "ok",
+        "value": "v",
+        "version": 6,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "not_found",
+        "value": null,
+        "version": null,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "invalid_request",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "busy",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "unavailable",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "get",
+      "outcome": {
+        "code": "recovering",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": "failed"
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "ok",
+        "items": [
+          {
+            "key": "a",
+            "value": "",
+            "version": 3
+          }
+        ],
+        "has_more": true,
+        "next_after": "a",
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "ok",
+        "items": [],
+        "has_more": false,
+        "next_after": null,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "invalid_request",
+        "items": null,
+        "has_more": null,
+        "next_after": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "busy",
+        "items": null,
+        "has_more": null,
+        "next_after": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "unavailable",
+        "items": null,
+        "has_more": null,
+        "next_after": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "scan",
+      "outcome": {
+        "code": "recovering",
+        "items": null,
+        "has_more": null,
+        "next_after": null,
+        "served_by": null,
+        "lifecycle": "recovering"
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "known",
+        "result": {
+          "code": "ok",
+          "request_id": "000000000000000000000000000000c0",
+          "index": 6,
+          "version": 6,
+          "existed": null,
+          "replayed": true,
+          "served_by": {
+            "node_id": 1,
+            "applied_index": 7
+          },
+          "attempt_state": null,
+          "current_version": null,
+          "original_index": null,
+          "limit": null,
+          "leader_hint": null,
+          "lifecycle": null
+        },
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "known",
+        "result": {
+          "code": "ok",
+          "request_id": "000000000000000000000000000000c0",
+          "index": 6,
+          "version": null,
+          "existed": false,
+          "replayed": true,
+          "served_by": {
+            "node_id": 1,
+            "applied_index": 7
+          },
+          "attempt_state": null,
+          "current_version": null,
+          "original_index": null,
+          "limit": null,
+          "leader_hint": null,
+          "lifecycle": null
+        },
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "known",
+        "result": {
+          "code": "version_mismatch",
+          "request_id": "000000000000000000000000000000c0",
+          "index": 6,
+          "version": null,
+          "existed": null,
+          "replayed": true,
+          "served_by": null,
+          "attempt_state": null,
+          "current_version": 4,
+          "original_index": null,
+          "limit": null,
+          "leader_hint": null,
+          "lifecycle": null
+        },
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "known",
+        "result": {
+          "code": "capacity_exceeded",
+          "request_id": "000000000000000000000000000000c0",
+          "index": 6,
+          "version": null,
+          "existed": null,
+          "replayed": true,
+          "served_by": null,
+          "attempt_state": null,
+          "current_version": null,
+          "original_index": null,
+          "limit": "max_live_keys",
+          "leader_hint": null,
+          "lifecycle": null
+        },
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "unknown",
+        "result": null,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 7
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "invalid_request",
+        "state": null,
+        "result": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "busy",
+        "state": null,
+        "result": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "unavailable",
+        "state": null,
+        "result": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "op": "status",
+      "outcome": {
+        "code": "recovering",
+        "state": null,
+        "result": null,
+        "served_by": null,
+        "lifecycle": "starting"
+      }
+    }
+  ]
+}

@@ -1118,6 +1118,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "OBSERVATION-SCHEMA",
+        summary: "the observation schema keyval.observation/v1, the oracles' only input \
+                  (T-12), follows the schema conventions; its two fixture runs (a marker heal \
+                  and a drain heal) validate, together exercise every record kind, operation, \
+                  attempt state, phase, sync state, fault action, role and process state, keep \
+                  the stream rules (ordering, incarnations, logs, certificates, generations, \
+                  resolutions) and are correct runs (DUR-2 cover, the served prefix, converged \
+                  digests); the outcome table covers exactly the (operation, code) pairs §8.4 \
+                  allows; each negative fixture is rejected only at its pointer; the README \
+                  documents every record kind and its checkers (§10.2, §10.5)",
+        kind: Kind::TestGroup,
+        covers: &["T-12"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["observation_schema::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.

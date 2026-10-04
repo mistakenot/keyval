@@ -1,0 +1,4553 @@
+{
+  "schema": "keyval.observation/v1",
+  "manifest": {
+    "scenario_version": 1,
+    "seed": 42,
+    "profile": "mixed",
+    "heal": "marker",
+    "build_id": "fixture-build",
+    "config_fingerprint": "3f65a3399fdc3faf14843646190d5232493de3f9bbb05a2691aa664095fea71f",
+    "prng": "fixture-prng/1",
+    "max_events": 1000000,
+    "tick_us": 50000,
+    "chaos_ticks": 40,
+    "heal_budget_ticks": 30,
+    "quiet_ticks": 4,
+    "limits": {
+      "max_key_bytes": 256,
+      "max_value_bytes": 65536,
+      "max_live_keys": 10000,
+      "max_live_bytes": 67108864,
+      "max_log_entries": 1000000,
+      "max_history_bytes": 3221225472
+    },
+    "faults": [
+      {
+        "fault": "symmetric_partition",
+        "intensity": "medium"
+      },
+      {
+        "fault": "crash_restart",
+        "intensity": "low"
+      },
+      {
+        "fault": "stall",
+        "intensity": "low"
+      },
+      {
+        "fault": "permanent_loss",
+        "intensity": "low"
+      }
+    ]
+  },
+  "voters": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "complete": true,
+  "overflowed": [],
+  "event_budget": {
+    "used": 33,
+    "exhausted": false
+  },
+  "scenario": {
+    "status": "valid",
+    "violated": null
+  },
+  "records": [
+    {
+      "kind": "phase",
+      "seq": 0,
+      "time": 0,
+      "phase": "setup"
+    },
+    {
+      "kind": "recovered",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "durable": {
+        "term": 0,
+        "vote": null,
+        "last_index": 0,
+        "last_term": 0
+      },
+      "log": []
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "recovered",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "durable": {
+        "term": 0,
+        "vote": null,
+        "last_index": 0,
+        "last_term": 0
+      },
+      "log": []
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "recovered",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "durable": {
+        "term": 0,
+        "vote": null,
+        "last_index": 0,
+        "last_term": 0
+      },
+      "log": []
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "recovered",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "durable": {
+        "term": 0,
+        "vote": null,
+        "last_index": 0,
+        "last_term": 0
+      },
+      "log": []
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "recovered",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "durable": {
+        "term": 0,
+        "vote": null,
+        "last_index": 0,
+        "last_term": 0
+      },
+      "log": []
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "node_state",
+      "seq": 0,
+      "time": 0,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 0,
+      "vote": null,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "phase",
+      "seq": 1,
+      "time": 50000,
+      "phase": "baseline"
+    },
+    {
+      "kind": "node_state",
+      "seq": 1,
+      "time": 50000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "candidate",
+      "term": 1,
+      "vote": 1,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "sync",
+      "seq": 1,
+      "time": 50000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 1,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 1,
+      "time": 50000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 1,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "sync",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 2,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 2,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "vote_grant",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "sync",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "sync": 3,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "sync": 3,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 2,
+      "time": 100000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "what": "vote_grant",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 0,
+        "last_term": 0
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 3,
+      "time": 150000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "append",
+      "seq": 3,
+      "time": 150000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 1,
+      "term": 1,
+      "payload": ""
+    },
+    {
+      "kind": "invoke",
+      "seq": 3,
+      "time": 150000,
+      "client": 1,
+      "attempt": 1,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a1",
+      "misuse": false,
+      "operation": {
+        "op": "put",
+        "key": "k",
+        "value": "v"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 3,
+      "time": 150000,
+      "attempt": 1,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 3,
+      "time": 150000,
+      "attempt": 1,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "append",
+      "seq": 3,
+      "time": 150000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+    },
+    {
+      "kind": "sync",
+      "seq": 3,
+      "time": 150000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 4,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 3,
+      "time": 150000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 4,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 3,
+      "time": 150000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 1,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "accept",
+      "seq": 3,
+      "time": 150000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 2,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "683ae8fb2c3358d14b877ed84b1cf0f46239a006118327d74b1a5fdb32f87a52"
+    },
+    {
+      "kind": "node_state",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 1,
+      "term": 1,
+      "payload": ""
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 5,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 5,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 1,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 2,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "683ae8fb2c3358d14b877ed84b1cf0f46239a006118327d74b1a5fdb32f87a52"
+    },
+    {
+      "kind": "release",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "index": 1,
+      "term": 1,
+      "payload": ""
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "sync": 6,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "sync": 6,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "index": 1,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "index": 2,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "683ae8fb2c3358d14b877ed84b1cf0f46239a006118327d74b1a5fdb32f87a52"
+    },
+    {
+      "kind": "release",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 1,
+      "term": 1,
+      "payload": ""
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 7,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 7,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 1,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 2,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "683ae8fb2c3358d14b877ed84b1cf0f46239a006118327d74b1a5fdb32f87a52"
+    },
+    {
+      "kind": "release",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": null
+        },
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "index": 1,
+      "term": 1,
+      "payload": ""
+    },
+    {
+      "kind": "append",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "sync": 8,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "sync": 8,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "index": 1,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "accept",
+      "seq": 4,
+      "time": 200000,
+      "replica": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "index": 2,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "683ae8fb2c3358d14b877ed84b1cf0f46239a006118327d74b1a5fdb32f87a52"
+    },
+    {
+      "kind": "release",
+      "seq": 4,
+      "time": 200000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": null
+        },
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "committed",
+      "seq": 5,
+      "time": 250000,
+      "index": 1,
+      "term": 1,
+      "payload": "",
+      "command": null
+    },
+    {
+      "kind": "committed",
+      "seq": 5,
+      "time": 250000,
+      "index": 2,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a1000000016b0000000176",
+      "command": {
+        "request_id": "000000000000000000000000000000a1",
+        "operation": {
+          "op": "put",
+          "key": "k",
+          "value": "v"
+        }
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 5,
+      "time": 250000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "attempt",
+      "seq": 5,
+      "time": 250000,
+      "attempt": 1,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "terminal",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 5,
+      "time": 250000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 1,
+      "requires": {
+        "hard_state": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 5,
+      "time": 250000,
+      "attempt": 1,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 1,
+      "op": "put",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000a1",
+        "index": 2,
+        "version": 2,
+        "existed": null,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 2
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 5,
+      "time": 250000,
+      "attempt": 1,
+      "delivered": true
+    },
+    {
+      "kind": "node_state",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "node_state",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "node_state",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "node_state",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "invoke",
+      "seq": 6,
+      "time": 300000,
+      "client": 2,
+      "attempt": 2,
+      "target": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "get",
+        "key": "k"
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "published_read",
+      "attempt": 2,
+      "requires": {
+        "hard_state": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 6,
+      "time": 300000,
+      "attempt": 2,
+      "from": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "generation": 1,
+      "op": "get",
+      "outcome": {
+        "code": "ok",
+        "value": "v",
+        "version": 2,
+        "served_by": {
+          "node_id": 2,
+          "applied_index": 2
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 6,
+      "time": 300000,
+      "attempt": 2,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 6,
+      "time": 300000,
+      "client": 3,
+      "attempt": 3,
+      "target": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "get",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 6,
+      "time": 300000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "what": "published_read",
+      "attempt": 3,
+      "requires": {
+        "hard_state": null,
+        "last_index": 2,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 6,
+      "time": 300000,
+      "attempt": 3,
+      "from": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "generation": 1,
+      "op": "get",
+      "outcome": {
+        "code": "not_found",
+        "value": null,
+        "version": null,
+        "served_by": {
+          "node_id": 3,
+          "applied_index": 2
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 6,
+      "time": 300000,
+      "attempt": 3,
+      "delivered": true
+    },
+    {
+      "kind": "phase",
+      "seq": 7,
+      "time": 350000,
+      "phase": "chaos"
+    },
+    {
+      "kind": "fault",
+      "seq": 7,
+      "time": 350000,
+      "action": "start",
+      "fault": "symmetric_partition",
+      "nodes": [
+        4,
+        5
+      ],
+      "crash_points": null,
+      "partition": [
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          4,
+          5
+        ]
+      ],
+      "links": null
+    },
+    {
+      "kind": "invoke",
+      "seq": 8,
+      "time": 400000,
+      "client": 1,
+      "attempt": 4,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a2",
+      "misuse": false,
+      "operation": {
+        "op": "cas",
+        "key": "k",
+        "expected": {
+          "kind": "version",
+          "version": 1
+        },
+        "value": "w"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 8,
+      "time": 400000,
+      "attempt": 4,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 8,
+      "time": 400000,
+      "attempt": 4,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "append",
+      "seq": 8,
+      "time": 400000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 3,
+      "term": 1,
+      "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177"
+    },
+    {
+      "kind": "sync",
+      "seq": 8,
+      "time": 400000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 9,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 8,
+      "time": 400000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 9,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 8,
+      "time": 400000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 3,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "1d5670b8ef33458f6b7ac3d3c416e70585978c0be3f18f98ee8317b324c5a678"
+    },
+    {
+      "kind": "append",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 3,
+      "term": 1,
+      "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177"
+    },
+    {
+      "kind": "sync",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 10,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 10,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 9,
+      "time": 450000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 3,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "1d5670b8ef33458f6b7ac3d3c416e70585978c0be3f18f98ee8317b324c5a678"
+    },
+    {
+      "kind": "release",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "append",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "index": 3,
+      "term": 1,
+      "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177"
+    },
+    {
+      "kind": "sync",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "sync": 11,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "fault",
+      "seq": 9,
+      "time": 450000,
+      "action": "start",
+      "fault": "crash_restart",
+      "nodes": [
+        3
+      ],
+      "crash_points": [
+        {
+          "node": 3,
+          "point": "after_sync_before_completion"
+        }
+      ],
+      "partition": null,
+      "links": null
+    },
+    {
+      "kind": "node_state",
+      "seq": 9,
+      "time": 450000,
+      "at": {
+        "node": 3,
+        "incarnation": 0
+      },
+      "process": "crashed",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "fault",
+      "seq": 10,
+      "time": 500000,
+      "action": "end",
+      "fault": "crash_restart",
+      "nodes": [
+        3
+      ],
+      "crash_points": null,
+      "partition": null,
+      "links": null
+    },
+    {
+      "kind": "recovered",
+      "seq": 10,
+      "time": 500000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "durable": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      },
+      "log": [
+        {
+          "index": 1,
+          "term": 1,
+          "payload": ""
+        },
+        {
+          "index": 2,
+          "term": 1,
+          "payload": "0101000000000000000000000000000000a1000000016b0000000176"
+        },
+        {
+          "index": 3,
+          "term": 1,
+          "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177"
+        }
+      ]
+    },
+    {
+      "kind": "node_state",
+      "seq": 10,
+      "time": 500000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "recovering",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": null,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "sync",
+      "seq": 10,
+      "time": 500000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 11,
+      "state": "stale",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "invoke",
+      "seq": 10,
+      "time": 500000,
+      "client": 2,
+      "attempt": 5,
+      "target": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "get",
+        "key": "k"
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 10,
+      "time": 500000,
+      "attempt": 5,
+      "from": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "generation": 1,
+      "op": "get",
+      "outcome": {
+        "code": "recovering",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": "recovering"
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 10,
+      "time": 500000,
+      "attempt": 5,
+      "delivered": true
+    },
+    {
+      "kind": "node_state",
+      "seq": 11,
+      "time": 550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 0,
+      "applied": 0,
+      "state_digest": "1d507e1a39948e592f8cb583f566c54773c363d4aa5f89b63c50e0fab0d4cf48"
+    },
+    {
+      "kind": "accept",
+      "seq": 11,
+      "time": 550000,
+      "replica": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 3,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "1d5670b8ef33458f6b7ac3d3c416e70585978c0be3f18f98ee8317b324c5a678"
+    },
+    {
+      "kind": "release",
+      "seq": 11,
+      "time": 550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "committed",
+      "seq": 12,
+      "time": 600000,
+      "index": 3,
+      "term": 1,
+      "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177",
+      "command": {
+        "request_id": "000000000000000000000000000000a2",
+        "operation": {
+          "op": "cas",
+          "key": "k",
+          "expected": {
+            "kind": "version",
+            "version": 1
+          },
+          "value": "w"
+        }
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 12,
+      "time": 600000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 3,
+      "applied": 3,
+      "state_digest": "092a1c1b7f25979d47c88ec6be53a3c017535cfd02b1a9b0e6c3f5a80eec64a0"
+    },
+    {
+      "kind": "attempt",
+      "seq": 12,
+      "time": 600000,
+      "attempt": 4,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "terminal",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 12,
+      "time": 600000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 4,
+      "requires": {
+        "hard_state": null,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 12,
+      "time": 600000,
+      "attempt": 4,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 2,
+      "op": "cas",
+      "outcome": {
+        "code": "version_mismatch",
+        "request_id": "000000000000000000000000000000a2",
+        "index": 3,
+        "version": null,
+        "existed": null,
+        "replayed": false,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": 2,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 12,
+      "time": 600000,
+      "attempt": 4,
+      "delivered": false
+    },
+    {
+      "kind": "node_state",
+      "seq": 13,
+      "time": 650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 3,
+      "applied": 3,
+      "state_digest": "092a1c1b7f25979d47c88ec6be53a3c017535cfd02b1a9b0e6c3f5a80eec64a0"
+    },
+    {
+      "kind": "node_state",
+      "seq": 13,
+      "time": 650000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 3,
+      "applied": 3,
+      "state_digest": "092a1c1b7f25979d47c88ec6be53a3c017535cfd02b1a9b0e6c3f5a80eec64a0"
+    },
+    {
+      "kind": "invoke",
+      "seq": 13,
+      "time": 650000,
+      "client": 1,
+      "attempt": 6,
+      "target": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a2",
+      "misuse": false,
+      "operation": {
+        "op": "cas",
+        "key": "k",
+        "expected": {
+          "kind": "version",
+          "version": 1
+        },
+        "value": "w"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 13,
+      "time": 650000,
+      "attempt": 6,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "state": "short_circuit",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 13,
+      "time": 650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 6,
+      "requires": {
+        "hard_state": null,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 13,
+      "time": 650000,
+      "attempt": 6,
+      "from": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "generation": 2,
+      "op": "cas",
+      "outcome": {
+        "code": "version_mismatch",
+        "request_id": "000000000000000000000000000000a2",
+        "index": 3,
+        "version": null,
+        "existed": null,
+        "replayed": true,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": 2,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 13,
+      "time": 650000,
+      "attempt": 6,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 14,
+      "time": 700000,
+      "client": 3,
+      "attempt": 7,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a1",
+      "misuse": true,
+      "operation": {
+        "op": "put",
+        "key": "k",
+        "value": "x"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 14,
+      "time": 700000,
+      "attempt": 7,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "short_circuit",
+      "attached_to": null
+    },
+    {
+      "kind": "response",
+      "seq": 14,
+      "time": 700000,
+      "attempt": 7,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 3,
+      "op": "put",
+      "outcome": {
+        "code": "request_id_conflict",
+        "request_id": "000000000000000000000000000000a1",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": 2,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 14,
+      "time": 700000,
+      "attempt": 7,
+      "delivered": true
+    },
+    {
+      "kind": "node_state",
+      "seq": 15,
+      "time": 750000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "pre_candidate",
+      "term": 1,
+      "vote": null,
+      "leader": null,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "invoke",
+      "seq": 15,
+      "time": 750000,
+      "client": 2,
+      "attempt": 8,
+      "target": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a3",
+      "misuse": false,
+      "operation": {
+        "op": "delete",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 15,
+      "time": 750000,
+      "attempt": 8,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "response",
+      "seq": 15,
+      "time": 750000,
+      "attempt": 8,
+      "from": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "generation": 1,
+      "op": "delete",
+      "outcome": {
+        "code": "unavailable",
+        "request_id": "000000000000000000000000000000a3",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 15,
+      "time": 750000,
+      "attempt": 8,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 16,
+      "time": 800000,
+      "client": 2,
+      "attempt": 9,
+      "target": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a3",
+      "misuse": false,
+      "operation": {
+        "op": "delete",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 16,
+      "time": 800000,
+      "attempt": 9,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "response",
+      "seq": 16,
+      "time": 800000,
+      "attempt": 9,
+      "from": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "generation": 3,
+      "op": "delete",
+      "outcome": {
+        "code": "not_leader",
+        "request_id": "000000000000000000000000000000a3",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": 1,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 16,
+      "time": 800000,
+      "attempt": 9,
+      "delivered": true
+    },
+    {
+      "kind": "fault",
+      "seq": 17,
+      "time": 850000,
+      "action": "start",
+      "fault": "stall",
+      "nodes": [
+        2
+      ],
+      "crash_points": null,
+      "partition": null,
+      "links": null
+    },
+    {
+      "kind": "node_state",
+      "seq": 17,
+      "time": 850000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "paused",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 3,
+      "applied": 3,
+      "state_digest": "092a1c1b7f25979d47c88ec6be53a3c017535cfd02b1a9b0e6c3f5a80eec64a0"
+    },
+    {
+      "kind": "invoke",
+      "seq": 18,
+      "time": 900000,
+      "client": 2,
+      "attempt": 10,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a3",
+      "misuse": false,
+      "operation": {
+        "op": "delete",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 18,
+      "time": 900000,
+      "attempt": 10,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 18,
+      "time": 900000,
+      "attempt": 10,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "append",
+      "seq": 18,
+      "time": 900000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 4,
+      "term": 1,
+      "payload": "0102000000000000000000000000000000a3000000026b32"
+    },
+    {
+      "kind": "sync",
+      "seq": 18,
+      "time": 900000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 12,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 18,
+      "time": 900000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 12,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 18,
+      "time": 900000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 4,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "f148d899db04bdf6d292b50601edb9c05a59a4b16a38e9eb7000e9db1197e355"
+    },
+    {
+      "kind": "invoke",
+      "seq": 18,
+      "time": 900000,
+      "client": 2,
+      "attempt": 11,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a3",
+      "misuse": false,
+      "operation": {
+        "op": "delete",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 18,
+      "time": 900000,
+      "attempt": 11,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "attached",
+      "attached_to": 10
+    },
+    {
+      "kind": "append",
+      "seq": 19,
+      "time": 950000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 4,
+      "term": 1,
+      "payload": "0102000000000000000000000000000000a3000000026b32"
+    },
+    {
+      "kind": "sync",
+      "seq": 19,
+      "time": 950000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 13,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 19,
+      "time": 950000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 13,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 19,
+      "time": 950000,
+      "replica": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 4,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "f148d899db04bdf6d292b50601edb9c05a59a4b16a38e9eb7000e9db1197e355"
+    },
+    {
+      "kind": "release",
+      "seq": 19,
+      "time": 950000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "invoke",
+      "seq": 19,
+      "time": 950000,
+      "client": 5,
+      "attempt": 12,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a4",
+      "misuse": false,
+      "operation": {
+        "op": "put",
+        "key": "k3",
+        "value": "z"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 12,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 12,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 12,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "dropped",
+      "attached_to": null
+    },
+    {
+      "kind": "response",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 12,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 4,
+      "op": "put",
+      "outcome": {
+        "code": "busy",
+        "request_id": "000000000000000000000000000000a4",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "not_submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 12,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 19,
+      "time": 950000,
+      "client": 3,
+      "attempt": 13,
+      "target": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "get",
+        "key": "k"
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 13,
+      "from": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "generation": 2,
+      "op": "get",
+      "outcome": {
+        "code": "busy",
+        "value": null,
+        "version": null,
+        "served_by": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 19,
+      "time": 950000,
+      "attempt": 13,
+      "delivered": true
+    },
+    {
+      "kind": "response",
+      "seq": 20,
+      "time": 1200000,
+      "attempt": 10,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 5,
+      "op": "delete",
+      "outcome": {
+        "code": "unknown_outcome",
+        "request_id": "000000000000000000000000000000a3",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 20,
+      "time": 1200000,
+      "attempt": 11,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 6,
+      "op": "delete",
+      "outcome": {
+        "code": "unknown_outcome",
+        "request_id": "000000000000000000000000000000a3",
+        "index": null,
+        "version": null,
+        "existed": null,
+        "replayed": null,
+        "served_by": null,
+        "attempt_state": "submitted",
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 20,
+      "time": 1200000,
+      "attempt": 10,
+      "delivered": true
+    },
+    {
+      "kind": "delivery",
+      "seq": 20,
+      "time": 1200000,
+      "attempt": 11,
+      "delivered": true
+    },
+    {
+      "kind": "fault",
+      "seq": 21,
+      "time": 1250000,
+      "action": "start",
+      "fault": "permanent_loss",
+      "nodes": [
+        5
+      ],
+      "crash_points": null,
+      "partition": null,
+      "links": null
+    },
+    {
+      "kind": "node_state",
+      "seq": 21,
+      "time": 1250000,
+      "at": {
+        "node": 5,
+        "incarnation": 0
+      },
+      "process": "lost",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "lost",
+      "seq": 21,
+      "time": 1250000,
+      "nodes": [
+        5
+      ]
+    },
+    {
+      "kind": "invoke",
+      "seq": 22,
+      "time": 1300000,
+      "client": 3,
+      "attempt": 14,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "scan",
+        "start": "a",
+        "end": null,
+        "after": null,
+        "limit": 2
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 22,
+      "time": 1300000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "published_read",
+      "attempt": 14,
+      "requires": {
+        "hard_state": null,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 22,
+      "time": 1300000,
+      "attempt": 14,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 7,
+      "op": "scan",
+      "outcome": {
+        "code": "ok",
+        "items": [
+          {
+            "key": "k",
+            "value": "v",
+            "version": 2
+          }
+        ],
+        "has_more": false,
+        "next_after": null,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 3
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 22,
+      "time": 1300000,
+      "attempt": 14,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 23,
+      "time": 1350000,
+      "client": 1,
+      "attempt": 15,
+      "target": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "status",
+        "request_id": "000000000000000000000000000000a2"
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 23,
+      "time": 1350000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "what": "published_read",
+      "attempt": 15,
+      "requires": {
+        "hard_state": null,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 23,
+      "time": 1350000,
+      "attempt": 15,
+      "from": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "generation": 3,
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "known",
+        "result": {
+          "code": "version_mismatch",
+          "request_id": "000000000000000000000000000000a2",
+          "index": 3,
+          "version": null,
+          "existed": null,
+          "replayed": true,
+          "served_by": null,
+          "attempt_state": null,
+          "current_version": 2,
+          "original_index": null,
+          "limit": null,
+          "leader_hint": null,
+          "lifecycle": null
+        },
+        "served_by": {
+          "node_id": 3,
+          "applied_index": 3
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 23,
+      "time": 1350000,
+      "attempt": 15,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 23,
+      "time": 1350000,
+      "client": 1,
+      "attempt": 16,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": null,
+      "misuse": false,
+      "operation": {
+        "op": "status",
+        "request_id": "000000000000000000000000000000a3"
+      }
+    },
+    {
+      "kind": "release",
+      "seq": 23,
+      "time": 1350000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "published_read",
+      "attempt": 16,
+      "requires": {
+        "hard_state": null,
+        "last_index": 3,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 23,
+      "time": 1350000,
+      "attempt": 16,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 8,
+      "op": "status",
+      "outcome": {
+        "code": "ok",
+        "state": "unknown",
+        "result": null,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 3
+        },
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 23,
+      "time": 1350000,
+      "attempt": 16,
+      "delivered": true
+    },
+    {
+      "kind": "phase",
+      "seq": 24,
+      "time": 2350000,
+      "phase": "heal"
+    },
+    {
+      "kind": "fault",
+      "seq": 24,
+      "time": 2350000,
+      "action": "end",
+      "fault": "symmetric_partition",
+      "nodes": [
+        4,
+        5
+      ],
+      "crash_points": null,
+      "partition": [
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          4,
+          5
+        ]
+      ],
+      "links": null
+    },
+    {
+      "kind": "fault",
+      "seq": 24,
+      "time": 2350000,
+      "action": "end",
+      "fault": "stall",
+      "nodes": [
+        2
+      ],
+      "crash_points": null,
+      "partition": null,
+      "links": null
+    },
+    {
+      "kind": "node_state",
+      "seq": 24,
+      "time": 2350000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 3,
+      "applied": 3,
+      "state_digest": "092a1c1b7f25979d47c88ec6be53a3c017535cfd02b1a9b0e6c3f5a80eec64a0"
+    },
+    {
+      "kind": "append",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 4,
+      "term": 1,
+      "payload": "0102000000000000000000000000000000a3000000026b32"
+    },
+    {
+      "kind": "sync",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 14,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 14,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 25,
+      "time": 2400000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 3,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "1d5670b8ef33458f6b7ac3d3c416e70585978c0be3f18f98ee8317b324c5a678"
+    },
+    {
+      "kind": "accept",
+      "seq": 25,
+      "time": 2400000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 4,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "f148d899db04bdf6d292b50601edb9c05a59a4b16a38e9eb7000e9db1197e355"
+    },
+    {
+      "kind": "release",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 2,
+      "applied": 2,
+      "state_digest": "2976d0c69b5a8a79e8d62fcced55749be3ca1b88a32bd7917683b5764735073b"
+    },
+    {
+      "kind": "append",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 3,
+      "term": 1,
+      "payload": "0103000000000000000000000000000000a2000000016b0100000000000000010000000177"
+    },
+    {
+      "kind": "append",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 4,
+      "term": 1,
+      "payload": "0102000000000000000000000000000000a3000000026b32"
+    },
+    {
+      "kind": "sync",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 15,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 15,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 25,
+      "time": 2400000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 3,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "1d5670b8ef33458f6b7ac3d3c416e70585978c0be3f18f98ee8317b324c5a678"
+    },
+    {
+      "kind": "accept",
+      "seq": 25,
+      "time": 2400000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 4,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "f148d899db04bdf6d292b50601edb9c05a59a4b16a38e9eb7000e9db1197e355"
+    },
+    {
+      "kind": "release",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": null
+        },
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "committed",
+      "seq": 25,
+      "time": 2400000,
+      "index": 4,
+      "term": 1,
+      "payload": "0102000000000000000000000000000000a3000000026b32",
+      "command": {
+        "request_id": "000000000000000000000000000000a3",
+        "operation": {
+          "op": "delete",
+          "key": "k2"
+        }
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 25,
+      "time": 2400000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 4,
+      "applied": 4,
+      "state_digest": "9e0189b6cfaa5a2d4dcabebe63635d29ccf4a4fdc8e24201ce357dbc129a5ff8"
+    },
+    {
+      "kind": "node_state",
+      "seq": 26,
+      "time": 2450000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 4,
+      "applied": 4,
+      "state_digest": "9e0189b6cfaa5a2d4dcabebe63635d29ccf4a4fdc8e24201ce357dbc129a5ff8"
+    },
+    {
+      "kind": "node_state",
+      "seq": 26,
+      "time": 2450000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 4,
+      "applied": 4,
+      "state_digest": "9e0189b6cfaa5a2d4dcabebe63635d29ccf4a4fdc8e24201ce357dbc129a5ff8"
+    },
+    {
+      "kind": "node_state",
+      "seq": 26,
+      "time": 2450000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 4,
+      "applied": 4,
+      "state_digest": "9e0189b6cfaa5a2d4dcabebe63635d29ccf4a4fdc8e24201ce357dbc129a5ff8"
+    },
+    {
+      "kind": "invoke",
+      "seq": 26,
+      "time": 2450000,
+      "client": 2,
+      "attempt": 17,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a3",
+      "misuse": false,
+      "operation": {
+        "op": "delete",
+        "key": "k2"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 26,
+      "time": 2450000,
+      "attempt": 17,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "short_circuit",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 26,
+      "time": 2450000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 17,
+      "requires": {
+        "hard_state": null,
+        "last_index": 4,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 26,
+      "time": 2450000,
+      "attempt": 17,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 9,
+      "op": "delete",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000a3",
+        "index": 4,
+        "version": null,
+        "existed": false,
+        "replayed": true,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 4
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 26,
+      "time": 2450000,
+      "attempt": 17,
+      "delivered": true
+    },
+    {
+      "kind": "invoke",
+      "seq": 27,
+      "time": 2500000,
+      "client": 5,
+      "attempt": 18,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000a4",
+      "misuse": false,
+      "operation": {
+        "op": "put",
+        "key": "k3",
+        "value": "z"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 27,
+      "time": 2500000,
+      "attempt": 18,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 27,
+      "time": 2500000,
+      "attempt": 18,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "append",
+      "seq": 27,
+      "time": 2500000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 5,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a4000000026b33000000017a"
+    },
+    {
+      "kind": "sync",
+      "seq": 27,
+      "time": 2500000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 16,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 27,
+      "time": 2500000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 16,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 27,
+      "time": 2500000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 5,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "8913badb0070644ef923e69bc013f21cffc5a8dd62c1de63aed171eab4a3c528"
+    },
+    {
+      "kind": "append",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 5,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a4000000026b33000000017a"
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 17,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 17,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 28,
+      "time": 2550000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 5,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "8913badb0070644ef923e69bc013f21cffc5a8dd62c1de63aed171eab4a3c528"
+    },
+    {
+      "kind": "release",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "append",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 5,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a4000000026b33000000017a"
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 18,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 18,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 28,
+      "time": 2550000,
+      "replica": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 5,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "8913badb0070644ef923e69bc013f21cffc5a8dd62c1de63aed171eab4a3c528"
+    },
+    {
+      "kind": "release",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "append",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 5,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a4000000026b33000000017a"
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 19,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 19,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 28,
+      "time": 2550000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 5,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "8913badb0070644ef923e69bc013f21cffc5a8dd62c1de63aed171eab4a3c528"
+    },
+    {
+      "kind": "release",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": null
+        },
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "committed",
+      "seq": 28,
+      "time": 2550000,
+      "index": 5,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000a4000000026b33000000017a",
+      "command": {
+        "request_id": "000000000000000000000000000000a4",
+        "operation": {
+          "op": "put",
+          "key": "k3",
+          "value": "z"
+        }
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 5,
+      "applied": 5,
+      "state_digest": "3cf52a2b9741e9064df99fcd8a1932cc614421c30f81616f6ede62aaff0fae3c"
+    },
+    {
+      "kind": "attempt",
+      "seq": 28,
+      "time": 2550000,
+      "attempt": 18,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "terminal",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 28,
+      "time": 2550000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 18,
+      "requires": {
+        "hard_state": null,
+        "last_index": 5,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 28,
+      "time": 2550000,
+      "attempt": 18,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 10,
+      "op": "put",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000a4",
+        "index": 5,
+        "version": 5,
+        "existed": null,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 5
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 28,
+      "time": 2550000,
+      "attempt": 18,
+      "delivered": true
+    },
+    {
+      "kind": "node_state",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 5,
+      "applied": 5,
+      "state_digest": "3cf52a2b9741e9064df99fcd8a1932cc614421c30f81616f6ede62aaff0fae3c"
+    },
+    {
+      "kind": "node_state",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 5,
+      "applied": 5,
+      "state_digest": "3cf52a2b9741e9064df99fcd8a1932cc614421c30f81616f6ede62aaff0fae3c"
+    },
+    {
+      "kind": "node_state",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 5,
+      "applied": 5,
+      "state_digest": "3cf52a2b9741e9064df99fcd8a1932cc614421c30f81616f6ede62aaff0fae3c"
+    },
+    {
+      "kind": "invoke",
+      "seq": 29,
+      "time": 2600000,
+      "client": 1,
+      "attempt": 19,
+      "target": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "request_id": "000000000000000000000000000000ff",
+      "misuse": false,
+      "operation": {
+        "op": "put",
+        "key": "catch-up marker",
+        "value": "1"
+      }
+    },
+    {
+      "kind": "attempt",
+      "seq": 29,
+      "time": 2600000,
+      "attempt": 19,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "admitted",
+      "attached_to": null
+    },
+    {
+      "kind": "attempt",
+      "seq": 29,
+      "time": 2600000,
+      "attempt": 19,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "submitted",
+      "attached_to": null
+    },
+    {
+      "kind": "append",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 6,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000ff0000000f63617463682d7570206d61726b65720000000131"
+    },
+    {
+      "kind": "sync",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 20,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 29,
+      "time": 2600000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "sync": 20,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 29,
+      "time": 2600000,
+      "replica": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 6,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "203c872a207bd7f25d4ef388a55ad477d72c0353e45ccbf6942b6de53560ee88"
+    },
+    {
+      "kind": "append",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 6,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000ff0000000f63617463682d7570206d61726b65720000000131"
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 21,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "sync": 21,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 30,
+      "time": 2650000,
+      "replica": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 6,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "203c872a207bd7f25d4ef388a55ad477d72c0353e45ccbf6942b6de53560ee88"
+    },
+    {
+      "kind": "release",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "append",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 6,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000ff0000000f63617463682d7570206d61726b65720000000131"
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 22,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "sync": 22,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": 1,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 30,
+      "time": 2650000,
+      "replica": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 6,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "203c872a207bd7f25d4ef388a55ad477d72c0353e45ccbf6942b6de53560ee88"
+    },
+    {
+      "kind": "release",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": 1
+        },
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "append",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 6,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000ff0000000f63617463682d7570206d61726b65720000000131"
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 23,
+      "state": "requested",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "sync",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "sync": 23,
+      "state": "completed",
+      "covers": {
+        "term": 1,
+        "vote": null,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "accept",
+      "seq": 30,
+      "time": 2650000,
+      "replica": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 6,
+      "entry_term": 1,
+      "acceptance_term": 1,
+      "payload_digest": "203c872a207bd7f25d4ef388a55ad477d72c0353e45ccbf6942b6de53560ee88"
+    },
+    {
+      "kind": "release",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "what": "append_ack",
+      "attempt": null,
+      "requires": {
+        "hard_state": {
+          "term": 1,
+          "vote": null
+        },
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "committed",
+      "seq": 30,
+      "time": 2650000,
+      "index": 6,
+      "term": 1,
+      "payload": "0101000000000000000000000000000000ff0000000f63617463682d7570206d61726b65720000000131",
+      "command": {
+        "request_id": "000000000000000000000000000000ff",
+        "operation": {
+          "op": "put",
+          "key": "catch-up marker",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "kind": "node_state",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "leader",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 6,
+      "applied": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "marker",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "index": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "attempt",
+      "seq": 30,
+      "time": 2650000,
+      "attempt": 19,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "state": "terminal",
+      "attached_to": null
+    },
+    {
+      "kind": "release",
+      "seq": 30,
+      "time": 2650000,
+      "at": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "what": "client_success",
+      "attempt": 19,
+      "requires": {
+        "hard_state": null,
+        "last_index": 6,
+        "last_term": 1
+      }
+    },
+    {
+      "kind": "response",
+      "seq": 30,
+      "time": 2650000,
+      "attempt": 19,
+      "from": {
+        "node": 1,
+        "incarnation": 0
+      },
+      "generation": 11,
+      "op": "put",
+      "outcome": {
+        "code": "ok",
+        "request_id": "000000000000000000000000000000ff",
+        "index": 6,
+        "version": 6,
+        "existed": null,
+        "replayed": false,
+        "served_by": {
+          "node_id": 1,
+          "applied_index": 6
+        },
+        "attempt_state": null,
+        "current_version": null,
+        "original_index": null,
+        "limit": null,
+        "leader_hint": null,
+        "lifecycle": null
+      }
+    },
+    {
+      "kind": "delivery",
+      "seq": 30,
+      "time": 2650000,
+      "attempt": 19,
+      "delivered": true
+    },
+    {
+      "kind": "node_state",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 6,
+      "applied": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "marker",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 2,
+        "incarnation": 0
+      },
+      "index": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "node_state",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": 1,
+      "leader": 1,
+      "commit": 6,
+      "applied": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "marker",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 3,
+        "incarnation": 1
+      },
+      "index": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "node_state",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "process": "running",
+      "lifecycle": "ready",
+      "role": "follower",
+      "term": 1,
+      "vote": null,
+      "leader": 1,
+      "commit": 6,
+      "applied": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "marker",
+      "seq": 31,
+      "time": 2700000,
+      "at": {
+        "node": 4,
+        "incarnation": 0
+      },
+      "index": 6,
+      "state_digest": "adbfd84da496c0657e1b1c7382e06ff891124e2c3fe33cc3d6a99d7f9c58a41b"
+    },
+    {
+      "kind": "quiescence",
+      "seq": 32,
+      "time": 2750000
+    },
+    {
+      "kind": "resolution",
+      "seq": 32,
+      "time": 2750000,
+      "request_id": "000000000000000000000000000000a1",
+      "resolved": "executed",
+      "index": 2,
+      "evidence": [
+        1
+      ]
+    },
+    {
+      "kind": "resolution",
+      "seq": 32,
+      "time": 2750000,
+      "request_id": "000000000000000000000000000000a2",
+      "resolved": "executed",
+      "index": 3,
+      "evidence": [
+        6
+      ]
+    },
+    {
+      "kind": "resolution",
+      "seq": 32,
+      "time": 2750000,
+      "request_id": "000000000000000000000000000000a3",
+      "resolved": "executed",
+      "index": 4,
+      "evidence": [
+        17
+      ]
+    },
+    {
+      "kind": "resolution",
+      "seq": 32,
+      "time": 2750000,
+      "request_id": "000000000000000000000000000000a4",
+      "resolved": "executed",
+      "index": 5,
+      "evidence": [
+        18
+      ]
+    },
+    {
+      "kind": "resolution",
+      "seq": 32,
+      "time": 2750000,
+      "request_id": "000000000000000000000000000000ff",
+      "resolved": "executed",
+      "index": 6,
+      "evidence": [
+        19
+      ]
+    },
+    {
+      "kind": "phase",
+      "seq": 33,
+      "time": 2800000,
+      "phase": "check"
+    }
+  ]
+}
