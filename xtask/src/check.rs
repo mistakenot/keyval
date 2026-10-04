@@ -1100,6 +1100,24 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 4,
     },
+    CheckDef {
+        id: "DOCTOR-CLI",
+        summary: "keyval doctor, run as the real binary on real data directories, \
+                  reaches startup recovery's verdict on every recovery golden (clean, \
+                  the torn tail it would discard, the refusal), verifies the genesis \
+                  binding against --config/--node, refuses a live directory unexamined, \
+                  prints a keyval.cli.doctor/v1 report that validates against its \
+                  schema, and leaves every file byte for byte as it was (O-7, O-6)",
+        kind: Kind::TestGroup,
+        covers: &["O-7", "O-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "cli",
+            filters: &["doctor_cli::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.

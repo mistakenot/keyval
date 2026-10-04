@@ -1,0 +1,25 @@
+[package]
+name = "cli"
+version = "0.1.0"
+description = "The keyval command-line tool: `keyval doctor <data-dir>` verifies a node's data directory offline (tools, PLAN.md O-6, O-7); W33 adds the client commands"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keyval"
+path = "src/main.rs"
+
+[dependencies]
+types = { workspace = true }
+journal = { workspace = true }
+fs_storage = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+jsonschema = { workspace = true }
+
+[lints]
+workspace = true

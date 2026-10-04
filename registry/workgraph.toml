@@ -283,6 +283,7 @@ milestone = "m2"
 accept = [
     "./dev check JOURNAL-EXAMINE",
     "./dev check FS-DOCTOR",
+    "./dev check DOCTOR-CLI",
 ]
 bead = "br-w23-cli-doctor-z22"
 

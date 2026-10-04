@@ -7,6 +7,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/cli",
     "crates/fs_storage",
     "crates/journal",
     "crates/model",
@@ -35,6 +36,7 @@ publish = false
 # First-party crates.
 types = { path = "crates/types" }
 journal = { path = "crates/journal" }
+fs_storage = { path = "crates/fs_storage" }
 statemachine = { path = "crates/statemachine" }
 # Third-party crates (each one ledgered in DEPENDENCIES.md).
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }

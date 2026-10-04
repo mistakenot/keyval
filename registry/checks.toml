@@ -728,3 +728,15 @@ tier = "T0"
 run = "./dev check FS-DOCTOR"
 min_cases = 4
 status = "implemented"
+
+[[check]]
+id = "DOCTOR-CLI"
+summary = "keyval doctor, run as the real binary on real data directories, reaches startup recovery's verdict on every recovery golden (clean, the torn tail it would discard, the refusal), verifies the genesis binding against --config/--node, refuses a live directory unexamined, prints a keyval.cli.doctor/v1 report that validates against its schema, and leaves every file byte for byte as it was (O-7, O-6)"
+kind = "test_group"
+covers = ["O-7", "O-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DOCTOR-CLI"
+min_cases = 7
+status = "implemented"
