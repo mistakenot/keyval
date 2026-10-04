@@ -22,6 +22,10 @@
 //!
 //! - [`cluster`]: the composition root itself (W17.1): every voter as a real core over
 //!   these adapters, crash and restart as new incarnations, every step recorded.
+//! - [`slice`]: the slice scenario (W17.2) that `./dev sim run --profile slice` runs through
+//!   the `keyval-sim` binary: elect, PUT and GET, a follower crash with unsynced bytes and
+//!   its restart and catch-up, an audit of every mirror; its report labels it a simulated
+//!   slice (P6).
 
 pub mod cluster;
 #[cfg(test)]
@@ -36,6 +40,9 @@ mod net_profile_tests;
 mod net_tests;
 pub mod replay;
 pub mod scheduler;
+pub mod slice;
+#[cfg(test)]
+mod slice_tests;
 pub mod trace;
 
 pub use cluster::{Answer, Cluster, ClusterError, Happening};

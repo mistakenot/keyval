@@ -220,7 +220,7 @@ deps = ["W12", "W14", "W15", "W16"]
 reqs = ["T-2", "DUR-3", "P3"]
 area = ["sim", "xtask"]
 milestone = "m1"
-accept = ["./dev check SIM-CLUSTER"]
+accept = ["./dev check SIM-CLUSTER", "./dev check SIM-RUN", "./dev check DEV-SIM"]
 bead = "br-w17-sim-composition-root-opj"
 
 [[item]]

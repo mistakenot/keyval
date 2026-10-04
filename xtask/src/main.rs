@@ -34,6 +34,7 @@ mod registry;
 mod registry_gate;
 #[cfg(test)]
 mod schemas;
+mod sim;
 mod spec;
 mod spike;
 mod staging;
@@ -184,6 +185,33 @@ enum Command {
         #[command(subcommand)]
         report: ReportKind,
     },
+    /// Simulated runs (§10.2): run one seed of a profile in a fresh process and print its
+    /// report and trace hash, labelled a simulated slice (P6). W42 adds campaigns.
+    Sim {
+        #[command(subcommand)]
+        action: SimAction,
+    },
+}
+
+/// `./dev sim` actions.
+#[derive(Clone, Debug, Subcommand)]
+enum SimAction {
+    /// Run one seed of a profile through the `keyval-sim` binary (§12.2 W17); a failed or
+    /// incomplete run exits 1 (P10).
+    Run {
+        /// The master seed.
+        #[arg(long, value_name = "N", required_unless_present = "scenario")]
+        seed: Option<u64>,
+        /// The run profile; only `slice` exists before W42.
+        #[arg(long, value_name = "P", default_value = "slice")]
+        profile: String,
+        /// A scenario file to replay: refused until W37 brings scenario files.
+        #[arg(long, value_name = "FILE", conflicts_with = "seed")]
+        scenario: Option<PathBuf>,
+        /// The configuration, relative to the workspace root (default: config/local.toml).
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+    },
 }
 
 /// `./dev report` kinds.
@@ -296,6 +324,7 @@ fn run(cli: Cli) -> Status {
         ),
         Command::Beads { action } => run_beads(&root, format, action),
         Command::Report { report } => run_report(&root, format, report),
+        Command::Sim { action } => run_sim(&root, format, action),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
@@ -319,6 +348,32 @@ fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {
                 root: root.to_path_buf(),
             };
             output::emit(format, &beads::run(root, &graph, dry_run))
+        }
+    }
+}
+
+/// `./dev sim run`: one simulated run in a fresh `keyval-sim` process (§12.2 W17).
+fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
+    match action {
+        SimAction::Run {
+            seed,
+            profile,
+            scenario,
+            config,
+        } => {
+            let request = sim::Request {
+                seed,
+                profile,
+                scenario,
+                config: sim::config_path(root, config),
+            };
+            let artifacts = root.join("artifacts");
+            match sim::run(root, &cargo::Cargo::local(), &request, &artifacts) {
+                Ok(report) => output::emit(format, &report),
+                Err(refusal) => {
+                    output::report_error(format, refusal.kind, &refusal.message, &refusal.message)
+                }
+            }
         }
     }
 }

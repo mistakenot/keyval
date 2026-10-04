@@ -719,6 +719,27 @@ fn how_often_the_driver_polls_never_changes_the_run() {
 }
 
 #[test]
+fn an_aborted_run_marks_its_trace_incomplete() {
+    let mut cluster = Cluster::new(
+        config(),
+        MasterSeed::new(42),
+        net(LinkProfile::reliable(500)),
+        EventBudget::new(50),
+    )
+    .unwrap();
+    let ran = cluster.run_until(VirtualTime::from_micros(SECOND));
+    let trace = cluster.trace().canonical();
+    assert!(
+        matches!(ran, Err(ClusterError::Incomplete { .. }))
+            && !cluster.trace().is_complete()
+            && crate::trace::marks_incomplete(&trace),
+        "rule: a run stopped by its event budget is incomplete, and its trace says so in its \
+         bytes (P10); run_until={ran:?}, last line {:?}",
+        trace.lines().next_back()
+    );
+}
+
+#[test]
 fn nothing_is_scheduled_before_the_time_the_driver_ran_to() {
     let mut cluster = cluster(42);
     let target = VirtualTime::from_micros(SECOND + 1);

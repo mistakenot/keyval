@@ -19,13 +19,16 @@
 //! K-14 lives in `sim`, an explicit, stated exemption from T-12 (§10.5): it compares
 //! canonical traces byte for byte and consults no expected-result oracle.
 //!
-//! Until the five-node slice (W17) gives K-14 a cluster to replay, the replayed run is
-//! [`machinery`]: the scheduler, the entropy streams and the trace working together,
-//! without Raft. Five nodes' election timers fire on delays drawn from each node
-//! incarnation's own stream. The delays sit on a coarse grid, so timers often fire at the
-//! same virtual time and the seeded tie priority orders them. The faults stream restarts
-//! nodes, and a timer armed by an earlier incarnation still fires after the restart, as
-//! a stale event that is ignored.
+//! This module's own tests replay [`machinery`]: the scheduler, the entropy streams and
+//! the trace working together, without Raft. Five nodes' election timers fire on delays
+//! drawn from each node incarnation's own stream. The delays sit on a coarse grid, so
+//! timers often fire at the same virtual time and the seeded tie priority orders them. The
+//! faults stream restarts nodes, and a timer armed by an earlier incarnation still fires
+//! after the restart, as a stale event that is ignored.
+//!
+//! The five-node slice itself (W17.2) is replayed through this harness by check SIM-RUN
+//! (`tests/sim_run.rs`): seeds 42 and 43, each in two fresh processes of the `keyval-sim`
+//! binary that `./dev sim run` runs.
 
 use std::collections::BTreeSet;
 use std::error::Error;

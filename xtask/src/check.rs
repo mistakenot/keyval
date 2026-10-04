@@ -1759,7 +1759,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["cluster_tests::"],
         },
-        min_cases: 13,
+        min_cases: 14,
     },
     CheckDef {
         id: "SERVER-HTTP",
@@ -1893,6 +1893,50 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["admission_tests::"],
         },
         min_cases: 3,
+    },
+    CheckDef {
+        id: "SIM-RUN",
+        summary: "`./dev sim run --seed 42 --profile slice` gives identical traces in two fresh \
+                  processes and labels its output a slice (§12.2 W17): seeds 42 and 43, each run \
+                  by two fresh processes of the keyval-sim binary `./dev sim run` starts, through \
+                  K-14's fresh-process harness, give byte-identical canonical traces; seed 42's \
+                  report conforms to keyval.dev.sim-run/v1, labels the run a simulated slice (P6), \
+                  passes, and names its trace by an FNV-1a hash recomputed from the definition; \
+                  the slice elects, writes and reads back, crashes a follower holding unsynced \
+                  bytes, restarts it caught up and audits every mirror, on seeds 1 to 8 too; a run \
+                  cut short by its event budget is incomplete in its verdict and its trace's \
+                  bytes, a finding fails a run, and a pass needs every step observed (P10); seed \
+                  43's trace differs from 42's (the negative control); and the binary refuses \
+                  unusable arguments with exit 2 and no report",
+        kind: Kind::TestGroup,
+        covers: &["T-3", "T-11", "P6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["sim_run::", "slice_tests::"],
+        },
+        min_cases: 10,
+    },
+    CheckDef {
+        id: "DEV-SIM",
+        summary: "./dev sim run starts keyval-sim with the seed, profile, configuration (default \
+                  config/local.toml, relative to the root) and a trace path under artifacts/sim/, \
+                  parses its report strictly (unknown fields, another schema, ok disagreeing with \
+                  the verdict, two reports are refused), maps its exit 0 and 1 to the report (ok \
+                  only for a pass), its exit 2 to a usage error carrying its own message, and a \
+                  build failure, a signal, no report or a launch that cannot start to an internal \
+                  error, never a pass (P10); prints the run's simulated-slice label first (P6); \
+                  and refuses --scenario before anything runs (W37)",
+        kind: Kind::TestGroup,
+        covers: &["O-6", "P6", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["sim::tests::"],
+        },
+        min_cases: 9,
     },
 ];
 

@@ -643,6 +643,13 @@ impl Trace {
         self.metrics.insert(name, value);
     }
 
+    /// Marks the trace incomplete: the run that writes it stopped before its end (an
+    /// error, an exhausted budget), so its bytes are not the run's full evidence (P10).
+    /// Sticky, like an overflow: the canonical bytes end with [`INCOMPLETE_MARKER`].
+    pub const fn mark_incomplete(&mut self) {
+        self.incomplete = true;
+    }
+
     /// Whether every required observation was recorded. Once false it stays false, and
     /// the canonical bytes end with [`INCOMPLETE_MARKER`].
     #[must_use]
@@ -841,6 +848,25 @@ mod tests {
             }
         }
         trace
+    }
+
+    #[test]
+    fn a_trace_marked_incomplete_ends_with_the_marker_for_good() {
+        let mut trace = trace_of(&[]);
+        let before = trace.canonical();
+        trace.mark_incomplete();
+        let marked = trace.canonical();
+        trace.mark_incomplete();
+        assert!(
+            !marks_incomplete(&before)
+                && !trace.is_complete()
+                && marks_incomplete(&marked)
+                && marked == format!("{before}{INCOMPLETE_MARKER}\n")
+                && trace.canonical() == marked,
+            "rule: a run marked incomplete keeps its lines and ends with the marker, once, \
+             so a checker reading only the bytes refuses it (P10); before {before:?}, after \
+             {marked:?}"
+        );
     }
 
     #[test]

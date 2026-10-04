@@ -19,6 +19,7 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.prune/v1` | `prune.v1.schema.json` | `./dev prune`, report and receipt |
 | `keyval.dev.step/v1` | `step.v1.schema.json` | step records (stderr, `steps.jsonl`) |
 | `keyval.dev.traceability/v2` | `traceability.v2.schema.json` | `./dev report traceability` |
+| `keyval.dev.sim-run/v1` | `sim-run.v1.schema.json` | `./dev sim run` (printed by the `keyval-sim` binary, re-emitted) |
 
 ## Conventions
 

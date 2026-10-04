@@ -331,9 +331,9 @@ output only together with its schema, and bump the version when the change break
   MODEL-SPEC, NODE-CONTROLLER, SIM-NET-SCENARIOS, NODE-WRITE-PATH, NODE-READ-PATH,
   NODE-ATTEMPT-TABLE, APPLY-DELETE, STATE-SCAN, SERVER-INIT, APPLY-CAS, DIFFERENTIAL-SCAN,
   SERVER-RUNTIME, DIFFERENTIAL-DELETE-CAS, SIM-CLUSTER, SERVER-HTTP, REQUEST-STATUS,
-  REQUEST-ID-RACE, SERVER-RESTART, HISTORY-ADMISSION. Unknown IDs, zero-case selections,
-  `#[ignore]`d cases and runs below the check's minimum case count fail (P10). A failure
-  prints its exact re-run command.
+  REQUEST-ID-RACE, SERVER-RESTART, HISTORY-ADMISSION, SIM-RUN, DEV-SIM. Unknown IDs,
+  zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
+  fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
   REGISTRY-FILES fails (rule 12). `./dev gate fast` runs the file's implemented T0 rows
@@ -420,6 +420,13 @@ output only together with its schema, and bump the version when the change break
     valid marker is only reported;
   - logs every removal (or, with `--dry-run`, every removal it would make) in a
     `keyval.dev.prune/v1` receipt. Gate-run retention comes with W46.
+- `./dev sim run --seed N [--profile slice] [--config FILE]` — one simulated run (§12.2 W17)
+  in a fresh `keyval-sim` process, built and run by local cargo (never `rch`: the trace must
+  be on this machine). It writes the canonical trace to `artifacts/sim/<profile>-seed-<N>.trace`
+  and prints the run's report: as text, first the run's **simulated slice** label (P6), then
+  its verdict, trace hash and what each step showed; with `--json`, the report itself
+  (`keyval.dev.sim-run/v1`). A failed or incomplete run exits 1 (P10). Only the `slice`
+  profile exists before W42, and `--scenario FILE` is refused until W37.
 - `./dev gate fast` — the T0 gate (§10.10). A tree with `registry/checks.toml`, or whose
   parent commit has one, gets the **registry set** (W05.4):
   - fmt, and clippy with denied warnings;

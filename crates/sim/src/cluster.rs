@@ -25,7 +25,9 @@
 //!
 //! **Driving.** [`Cluster::run_until`] dispatches the events due by a time, looking at the
 //! next event's time without scheduling anything of its own, so how often a driver polls
-//! never changes the run: its events, their tie order or its trace.
+//! never changes the run: its events, their tie order or its trace. A driving call that
+//! fails (`submit`, `crash_at`, `restart_at`, `run_until`) marks the trace incomplete: the
+//! run did not happen as driven, so its bytes are not complete evidence (P10).
 //!
 //! **Crash and restart.** A crash applies the disk's crash model (a seed-chosen prefix of the
 //! unsynced bytes survives, DUR-9) and discards the incarnation: its controller, its handles
@@ -280,6 +282,33 @@ impl fmt::Display for ClusterError {
 }
 
 impl std::error::Error for ClusterError {}
+
+impl ClusterError {
+    /// Whether the error is a finding about the system under test (a core that would not
+    /// recover or start, a mirror or god view that disagrees, a response to an attempt
+    /// nobody made), rather than the harness running out or being misdriven. A run stopped
+    /// by a finding failed; one stopped otherwise is incomplete (§10.2 outputs, P10).
+    #[must_use]
+    pub const fn is_finding(&self) -> bool {
+        match self {
+            Self::Recovery { .. }
+            | Self::Start { .. }
+            | Self::Mirror { .. }
+            | Self::GodView
+            | Self::UnknownAttempt { .. } => true,
+            Self::Setup(_)
+            | Self::Genesis { .. }
+            | Self::Storage { .. }
+            | Self::Full { .. }
+            | Self::IncarnationsExhausted { .. }
+            | Self::UnknownNode { .. }
+            | Self::Schedule(_)
+            | Self::Net(_)
+            | Self::Trace(_)
+            | Self::Incomplete { .. } => false,
+        }
+    }
+}
 
 /// A response a client received: which attempt it answers, the node that sent it, and when
 /// it arrived. A duplicated response arrives, and is listed, once per copy; the trace
@@ -744,7 +773,20 @@ impl Cluster {
     ///
     /// [`ClusterError::UnknownNode`], [`ClusterError::Schedule`] (also for a time before
     /// [`Self::now`]) or [`ClusterError::Full`].
+    /// Any error marks the trace incomplete.
     pub fn submit(
+        &mut self,
+        at: VirtualTime,
+        client: ClientId,
+        node: NodeId,
+        op: ClientOp,
+    ) -> Result<AttemptId, ClusterError> {
+        let submitted = self.try_submit(at, client, node, op);
+        self.settle(submitted)
+    }
+
+    /// [`Self::submit`], leaving the trace to the caller.
+    fn try_submit(
         &mut self,
         at: VirtualTime,
         client: ClientId,
@@ -786,8 +828,10 @@ impl Cluster {
     /// # Errors
     ///
     /// [`ClusterError::Schedule`], also for a time before [`Self::now`].
+    /// Any error marks the trace incomplete.
     pub fn crash_at(&mut self, at: VirtualTime, node: NodeId) -> Result<(), ClusterError> {
-        self.schedule(at, Some(node), Happening::Crash { node })
+        let crashed = self.schedule(at, Some(node), Happening::Crash { node });
+        self.settle(crashed)
     }
 
     /// Schedules `node`'s restart at `at`; it does nothing if the node is running then.
@@ -795,8 +839,10 @@ impl Cluster {
     /// # Errors
     ///
     /// [`ClusterError::Schedule`], also for a time before [`Self::now`].
+    /// Any error marks the trace incomplete.
     pub fn restart_at(&mut self, at: VirtualTime, node: NodeId) -> Result<(), ClusterError> {
-        self.schedule(at, Some(node), Happening::Restart { node })
+        let restarted = self.schedule(at, Some(node), Happening::Restart { node });
+        self.settle(restarted)
     }
 
     /// Dispatches every event due by `at`, those the handling schedules meanwhile included,
@@ -807,7 +853,14 @@ impl Cluster {
     ///
     /// [`ClusterError`] from any event's handling, or [`ClusterError::Incomplete`] if the
     /// run's budget or queue ran out first.
+    /// Any error marks the trace incomplete.
     pub fn run_until(&mut self, at: VirtualTime) -> Result<(), ClusterError> {
+        let driven = self.drive(at);
+        self.settle(driven)
+    }
+
+    /// [`Self::run_until`], leaving the trace to the caller.
+    fn drive(&mut self, at: VirtualTime) -> Result<(), ClusterError> {
         while self.scheduler.next_time().is_some_and(|next| next <= at) {
             match self.scheduler.step() {
                 Step::Event(event) => self.dispatch(&event)?,
@@ -1470,6 +1523,15 @@ impl Cluster {
             }
         }
         Ok(())
+    }
+
+    /// Passes `result` on, first marking the trace incomplete if it is an error: the run
+    /// did not happen as driven, so its trace is not complete evidence (P10).
+    const fn settle<T>(&mut self, result: Result<T, ClusterError>) -> Result<T, ClusterError> {
+        if result.is_err() {
+            self.trace.mark_incomplete();
+        }
+        result
     }
 
     fn record(&mut self, record: &Record) -> Result<(), ClusterError> {

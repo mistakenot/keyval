@@ -884,9 +884,11 @@ name = "sim"
 version = "0.1.0"
 dependencies = [
  "journal",
+ "jsonschema",
  "model",
  "node",
  "raft_adapter",
+ "serde_json",
  "statemachine",
  "types",
 ]

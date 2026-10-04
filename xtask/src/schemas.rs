@@ -51,6 +51,7 @@ const IDS: &[&str] = &[
     crate::prune::SCHEMA,
     crate::steplog::SCHEMA,
     crate::traceability::SCHEMA,
+    crate::sim::SCHEMA,
 ];
 
 /// The file stem for an identifier: `keyval.dev.<name>/v<n>` becomes `<name>.v<n>`.
@@ -182,6 +183,7 @@ mod tests {
     use crate::git::{Git, fixture};
     use crate::output::{self, ErrorKind};
     use crate::prune::{self, Action, Layout, Reason};
+    use crate::sim::{self, Verdict as SimVerdict};
     use crate::staging::Field as DemotionField;
     use crate::steplog::{self, Outcome as StepOutcome, StepLog};
     use crate::test_support::{nested_cargo, scratch_dir};
@@ -362,6 +364,8 @@ mod tests {
 
     #[test]
     fn enums_match_their_schemas() {
+        let verdicts = variants!(SimVerdict: Pass, Fail, Incomplete);
+        assert_enum(sim::SCHEMA, "/properties/verdict/enum", &verdicts, false);
         let error = output::ERROR_SCHEMA;
         let doctor = doctor::SCHEMA;
         let check = check::SCHEMA;
@@ -897,6 +901,26 @@ mod tests {
             let report = beads::run(&root, graph, true);
             validators.assert_matches(&report, &format!("beads::run --dry-run: {case}"));
         }
+    }
+
+    #[test]
+    fn sim_run_reports_match_their_schema() {
+        let validators = Validators::load();
+        let passing = sim::parse(sim::tests::PASSING).unwrap();
+        validators.assert_matches(&passing, "sim::parse (seed 42's report)");
+        let mut failed = passing.clone();
+        failed.ok = false;
+        failed.verdict = SimVerdict::Fail;
+        failed.facts.mirrors_audited = false;
+        failed.failures = vec!["the mirror audit failed".to_owned()];
+        validators.assert_matches(&failed, "a failed run");
+        let mut incomplete = passing;
+        incomplete.ok = false;
+        incomplete.verdict = SimVerdict::Incomplete;
+        incomplete.error = Some("incomplete after 150 events".to_owned());
+        incomplete.trace.complete = false;
+        incomplete.facts.restarted = None;
+        validators.assert_matches(&incomplete, "an incomplete run");
     }
 
     #[test]

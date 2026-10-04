@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/sim-run.v1.schema.json",
+  "title": "keyval.dev.sim-run/v1",
+  "description": "The `./dev sim run --seed N --profile P --json` report (PLAN.md §12.2 W17, §10.2): one simulated run, printed by the `keyval-sim` binary (crates/sim/src/slice.rs `Run::report`) and re-emitted with the same fields by xtask/src/sim.rs from the strictly parsed report. Its `label` says what the run is, a simulated slice (P6); the text output prints it first. `ok` is true exactly when the verdict is `pass`; an incomplete run fails (P10), and a run stopped by a finding about the system under test fails. `trace.complete` is true when the run reached its end and its trace holds every required observation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "label",
+    "manifest",
+    "verdict",
+    "failures",
+    "error",
+    "facts",
+    "trace",
+    "virtual_time_us"
+  ],
+  "allOf": [
+    {
+      "description": "A passing run is ok, says nothing went wrong, ran to its end, and observed every step of its scenario; any other run is not ok.",
+      "if": { "required": ["verdict"], "properties": { "verdict": { "const": "pass" } } },
+      "then": {
+        "properties": {
+          "ok": { "const": true },
+          "failures": { "maxItems": 0 },
+          "error": { "type": "null" },
+          "trace": { "properties": { "complete": { "const": true } } },
+          "facts": {
+            "properties": {
+              "elected": { "type": "object" },
+              "put": { "type": "object" },
+              "read_back": { "const": true },
+              "crashed": { "type": "object" },
+              "restarted": { "type": "object" },
+              "mirrors_audited": { "const": true }
+            }
+          }
+        }
+      },
+      "else": { "properties": { "ok": { "const": false } } }
+    },
+    {
+      "description": "A failed run says which step went wrong or which finding stopped it; `error` is only for a harness that ran out.",
+      "if": { "required": ["verdict"], "properties": { "verdict": { "const": "fail" } } },
+      "then": { "properties": { "failures": { "minItems": 1 }, "error": { "type": "null" } } }
+    },
+    {
+      "description": "An incomplete run says why it stopped, and its trace is not complete (P10).",
+      "if": { "required": ["verdict"], "properties": { "verdict": { "const": "incomplete" } } },
+      "then": {
+        "properties": {
+          "error": { "type": "string" },
+          "trace": { "properties": { "complete": { "const": false } } }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": { "const": "keyval.dev.sim-run/v1" },
+    "ok": { "type": "boolean" },
+    "label": {
+      "description": "What the run is and is not (P6), the same for every run.",
+      "const": "simulated slice: five production node cores over a simulated disk, network, clock and entropy in one process; not a real server or cluster (P6)"
+    },
+    "manifest": {
+      "description": "The run manifest (§10.2): what determines the run, without the build ID, which W42's campaign runner adds (gate receipts record it meanwhile).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenario_version", "seed", "profile", "prng", "max_events", "config_fingerprint"],
+      "properties": {
+        "scenario_version": { "const": 1 },
+        "seed": { "type": "integer", "minimum": 0 },
+        "profile": { "description": "Only `slice` before W42.", "enum": ["slice"] },
+        "prng": { "const": "splitmix64" },
+        "max_events": { "type": "integer", "minimum": 1 },
+        "config_fingerprint": {
+          "description": "The configuration's semantic fingerprint (§7.9), 64 lowercase hex digits.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "verdict": { "enum": ["pass", "fail", "incomplete"] },
+    "failures": {
+      "description": "Each step that did not happen or check that did not hold, in order.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "error": {
+      "description": "Why the harness stopped the run before its end, if it did (the run is then incomplete).",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "facts": {
+      "description": "What the run showed, step by step; `null` (or false) for a step that did not happen.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elected", "put", "read_back", "crashed", "restarted", "mirrors_audited"],
+      "properties": {
+        "elected": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["node", "term", "at_us"],
+          "properties": {
+            "node": { "$ref": "#/$defs/node" },
+            "term": { "type": "integer", "minimum": 1 },
+            "at_us": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "put": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["index"],
+          "properties": { "index": { "type": "integer", "minimum": 1 } }
+        },
+        "read_back": { "type": "boolean" },
+        "crashed": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["node", "incarnation", "unsynced_bytes", "kept_bytes", "damaged_tail"],
+          "properties": {
+            "node": { "$ref": "#/$defs/node" },
+            "incarnation": { "type": "integer", "minimum": 0 },
+            "unsynced_bytes": { "type": "integer", "minimum": 1 },
+            "kept_bytes": { "type": "integer", "minimum": 0 },
+            "damaged_tail": { "type": "boolean" }
+          }
+        },
+        "restarted": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["node", "incarnation", "applied"],
+          "properties": {
+            "node": { "$ref": "#/$defs/node" },
+            "incarnation": { "type": "integer", "minimum": 1 },
+            "applied": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "mirrors_audited": { "type": "boolean" }
+      }
+    },
+    "trace": {
+      "description": "The canonical trace (§10.2): its 64-bit FNV-1a hash over the canonical bytes, its line and event counts, and the file it was written to, if any.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash", "lines", "events", "complete", "path"],
+      "properties": {
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "lines": { "type": "integer", "minimum": 0 },
+        "events": { "type": "integer", "minimum": 0 },
+        "complete": { "type": "boolean" },
+        "path": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "virtual_time_us": { "description": "The virtual time the run ended at.", "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "node": { "description": "A voter's node ID.", "type": "integer", "minimum": 1 }
+  }
+}

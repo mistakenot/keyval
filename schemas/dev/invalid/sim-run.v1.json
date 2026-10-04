@@ -1,0 +1,36 @@
+{
+  "rule": "a run that is not ok cannot pass",
+  "error_at": "/ok",
+  "instance": {
+    "schema": "keyval.dev.sim-run/v1",
+    "ok": false,
+    "label": "simulated slice: five production node cores over a simulated disk, network, clock and entropy in one process; not a real server or cluster (P6)",
+    "manifest": {
+      "scenario_version": 1,
+      "seed": 42,
+      "profile": "slice",
+      "prng": "splitmix64",
+      "max_events": 1000000,
+      "config_fingerprint": "48205fd1b435b33601373568bee9688dd2d780f57d77f83b2a4c2e4c2f9f99dd"
+    },
+    "verdict": "pass",
+    "failures": [],
+    "error": null,
+    "facts": {
+      "elected": { "node": 2, "term": 1, "at_us": 1110000 },
+      "put": { "index": 2 },
+      "read_back": true,
+      "crashed": { "node": 1, "incarnation": 0, "unsynced_bytes": 94, "kept_bytes": 0, "damaged_tail": true },
+      "restarted": { "node": 1, "incarnation": 1, "applied": 3 },
+      "mirrors_audited": true
+    },
+    "trace": {
+      "hash": "34ec631c053276db",
+      "lines": 629,
+      "events": 268,
+      "complete": true,
+      "path": "/data/projects/keyval/artifacts/sim/slice-seed-42.trace"
+    },
+    "virtual_time_us": 1306550
+  }
+}
