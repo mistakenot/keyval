@@ -21,6 +21,11 @@
 //! A [`StorageError`] carries no cause, so the adapter keeps the last one it saw
 //! ([`FsStorage::last_failure`]) for the composition root to log.
 //!
+//! [`ReadOnlyDir`] is the doctor's handle (O-7, W23.1): it opens the journal for reading
+//! only, never creates or writes anything, and only probes the lock
+//! ([`ReadOnlyDir::probe_lock`]), holding it while it reads so that no node starts
+//! meanwhile. It has no [`ByteStorage`] implementation, so it cannot write.
+//!
 //! The adapter-agnostic contract suite (`crates/types/tests/storage_contract`) runs
 //! against it unmodified (`tests/contract.rs`, check FS-STORAGE); crash behaviour is
 //! tested by W24's crash probes.
@@ -122,6 +127,12 @@ impl FsStorage {
     /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` is not a directory,
     /// or [`StorageError::Failed`] if the journal cannot be opened.
     pub fn open(dir: &Path) -> Result<Self, Failure> {
+        Self::open_journal(dir, true)
+    }
+
+    /// Opens `dir`'s journal, if it exists, for reading, and for appending when
+    /// `writable`. Nothing is created and the lock is not taken.
+    fn open_journal(dir: &Path, writable: bool) -> Result<Self, Failure> {
         if !dir.is_dir() {
             return Err(Failure {
                 op: "open",
@@ -131,7 +142,7 @@ impl FsStorage {
             });
         }
         let path = dir.join(JOURNAL);
-        let journal = match OpenOptions::new().read(true).append(true).open(&path) {
+        let journal = match OpenOptions::new().read(true).append(writable).open(&path) {
             Ok(file) => Some(file),
             Err(err) if err.kind() == ErrorKind::NotFound => None,
             Err(err) => return Err(Failure::io("open_journal", &path, &err)),
@@ -237,6 +248,95 @@ impl DataDir for FsStorage {
                 ..Failure::io("lock", &path, &err)
             })),
         }
+    }
+}
+
+/// What probing a data directory's lock found ([`ReadOnlyDir::probe_lock`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LockProbe {
+    /// There is no `LOCK` file: no process ever took the directory's lock.
+    NoLockFile,
+    /// The lock was free, and the probing handle now holds it until it is dropped, so no
+    /// node starts while the doctor reads.
+    Acquired,
+    /// Another process holds the lock: the directory is live, and its journal may be
+    /// mid-append (O-7).
+    Live,
+}
+
+/// A data directory opened for examination only (the doctor, O-7).
+///
+/// The journal is opened for reading, nothing is created or written, and the lock is only
+/// probed. It implements [`JournalRead`] and no [`ByteStorage`], so it cannot write.
+#[derive(Debug)]
+pub struct ReadOnlyDir(FsStorage);
+
+impl ReadOnlyDir {
+    /// Opens the data directory `dir` for reading: its journal, if it exists, read-only.
+    ///
+    /// # Errors
+    ///
+    /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` is not a directory,
+    /// or [`StorageError::Failed`] if the journal cannot be opened.
+    pub fn open(dir: &Path) -> Result<Self, Failure> {
+        FsStorage::open_journal(dir, false).map(Self)
+    }
+
+    /// The data directory.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        self.0.dir()
+    }
+
+    /// The cause of the most recent failed call, if any failed.
+    #[must_use]
+    pub fn last_failure(&self) -> Option<Failure> {
+        self.0.last_failure()
+    }
+
+    /// The journal's length.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Missing`] without a journal; [`StorageError::Failed`] if its length
+    /// cannot be read.
+    pub fn journal_len(&self) -> Result<ByteCount, StorageError> {
+        self.0.journal_len()
+    }
+
+    /// Probes the directory's lock without creating anything: an existing `LOCK` file is
+    /// opened read-only and locked if it is free, and held until this handle is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Failed`] if `LOCK` exists but cannot be opened or locked.
+    pub fn probe_lock(&mut self) -> Result<LockProbe, StorageError> {
+        if self.0.lock.is_some() {
+            return Ok(LockProbe::Acquired);
+        }
+        let path = self.0.dir.join(LOCK);
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(LockProbe::NoLockFile),
+            Err(err) => return Err(self.0.fail(Failure::io("probe_lock", &path, &err))),
+        };
+        match file.try_lock() {
+            Ok(()) => {
+                self.0.lock = Some(file);
+                Ok(LockProbe::Acquired)
+            }
+            Err(TryLockError::WouldBlock) => Ok(LockProbe::Live),
+            Err(TryLockError::Error(err)) => Err(self.0.fail(Failure {
+                error: StorageError::Failed,
+                ..Failure::io("probe_lock", &path, &err)
+            })),
+        }
+    }
+}
+
+impl JournalRead for ReadOnlyDir {
+    fn read_at(&self, offset: ByteCount, len: ReadLen) -> Result<Vec<u8>, StorageError> {
+        self.0.read_at(offset, len)
     }
 }
 
@@ -476,5 +576,185 @@ mod tests {
             "rule: one journal.log plus a LOCK file per data directory (§7.6)"
         );
         assert_eq!(storage.dir(), dir.as_path());
+    }
+}
+
+#[cfg(test)]
+mod doctor_handle {
+    // check: FS-DOCTOR
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A fresh path under the cargo target directory (never `/tmp`), not yet created.
+    fn scratch(name: &str) -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let exe = std::env::current_exe().unwrap();
+        let target = exe.ancestors().nth(3).unwrap().to_path_buf();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let unique = format!(
+            "{name}-{nanos}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let base = target.join("fs-storage-doctor-scratch");
+        fs::create_dir_all(&base).unwrap();
+        base.join(unique)
+    }
+
+    /// Every file in `dir` with its bytes: what "unchanged" means for the doctor.
+    fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// A data directory a node has used: a LOCK file and a journal of `bytes`.
+    fn used_dir(name: &str, bytes: &[u8]) -> PathBuf {
+        let dir = scratch(name);
+        create_data_dir(&dir).unwrap();
+        let mut node = FsStorage::open(&dir).unwrap();
+        node.lock().unwrap();
+        node.create_journal().unwrap();
+        node.sync_dir().unwrap();
+        node.append(bytes).unwrap();
+        node.sync().unwrap();
+        dir
+    }
+
+    #[test]
+    fn examining_a_directory_creates_and_changes_nothing() {
+        let dir = used_dir("unchanged", b"genesis and frames");
+        let before = snapshot(&dir);
+        {
+            let mut doctor = ReadOnlyDir::open(&dir).unwrap();
+            assert_eq!(doctor.probe_lock(), Ok(LockProbe::Acquired));
+            assert_eq!(
+                doctor.read_at(ByteCount::new(0), ReadLen::new(7).unwrap()),
+                Ok(b"genesis".to_vec())
+            );
+            assert_eq!(doctor.journal_len(), Ok(ByteCount::new(18)));
+        }
+        assert_eq!(
+            snapshot(&dir),
+            before,
+            "rule: the doctor's handle leaves every file byte for byte as it was (O-7)"
+        );
+        let blank = scratch("blank");
+        create_data_dir(&blank).unwrap();
+        let mut doctor = ReadOnlyDir::open(&blank).unwrap();
+        assert_eq!(
+            (doctor.journal_len(), doctor.probe_lock()),
+            (Err(StorageError::Missing), Ok(LockProbe::NoLockFile)),
+            "rule: a blank directory has no journal and no lock"
+        );
+        drop(doctor);
+        assert!(
+            snapshot(&blank).is_empty(),
+            "rule: probing never creates LOCK, unlike DataDir::lock"
+        );
+    }
+
+    #[test]
+    fn a_live_directory_is_reported_live_and_an_examined_one_cannot_start() {
+        let dir = used_dir("live", b"frames");
+        let mut node = FsStorage::open(&dir).unwrap();
+        node.lock().unwrap();
+        let mut doctor = ReadOnlyDir::open(&dir).unwrap();
+        assert_eq!(
+            doctor.probe_lock(),
+            Ok(LockProbe::Live),
+            "rule: a locked directory is live; the doctor refuses it (O-7)"
+        );
+        drop(node);
+        assert_eq!(
+            doctor.probe_lock(),
+            Ok(LockProbe::Acquired),
+            "rule: once the node exits the lock is free"
+        );
+        let mut starting = FsStorage::open(&dir).unwrap();
+        assert_eq!(
+            starting.lock(),
+            Err(StorageError::Locked),
+            "rule: while the doctor reads, no node can start on the directory"
+        );
+        drop(doctor);
+        assert_eq!(
+            starting.lock(),
+            Ok(()),
+            "rule: the doctor's hold ends with its handle"
+        );
+    }
+
+    #[test]
+    fn reads_are_bounded_and_never_silently_short() {
+        let dir = used_dir("reads", b"0123456789");
+        let doctor = ReadOnlyDir::open(&dir).unwrap();
+        assert_eq!(
+            doctor.read_at(ByteCount::new(6), ReadLen::new(8).unwrap()),
+            Err(StorageError::ShortRead {
+                wanted: ReadLen::new(8).unwrap(),
+                got: 4
+            }),
+            "rule: a read past the end is ShortRead, as through the node's own handle"
+        );
+        assert_eq!(
+            ReadOnlyDir::open(&dir.join("missing"))
+                .map(|_| ())
+                .map_err(|failure| failure.error),
+            Err(StorageError::Missing),
+            "rule: a missing directory is Missing"
+        );
+    }
+
+    #[test]
+    fn a_journal_the_process_cannot_write_is_still_examined() {
+        let dir = used_dir("read-only-file", b"frames");
+        let journal = dir.join(JOURNAL);
+        let mut permissions = fs::metadata(&journal).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&journal, permissions).unwrap();
+        let writable = FsStorage::open(&dir)
+            .map(|_| ())
+            .map_err(|failure| failure.error);
+        let examined = ReadOnlyDir::open(&dir).and_then(|doctor| {
+            doctor.journal_len().map_err(|error| Failure {
+                op: "journal_len",
+                path: journal.clone(),
+                cause: String::new(),
+                error,
+            })
+        });
+        fs::set_permissions(&journal, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            examined.map_err(|failure| failure.error),
+            Ok(ByteCount::new(6)),
+            "rule: the doctor opens the journal read-only, so it needs no write access"
+        );
+        if running_as_root() {
+            return;
+        }
+        assert_eq!(
+            writable,
+            Err(StorageError::Failed),
+            "fixture sanity: the node's own handle needs write access"
+        );
+    }
+
+    /// Whether this process runs as root, which ignores file permissions.
+    fn running_as_root() -> bool {
+        fs::metadata("/proc/self")
+            .is_ok_and(|metadata| std::os::unix::fs::MetadataExt::uid(&metadata) == 0)
     }
 }

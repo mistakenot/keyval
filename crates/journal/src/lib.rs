@@ -40,8 +40,13 @@
 //! - [`recover`] is the fail-closed recovery scan (§7.6, §7.7): it verifies the genesis,
 //!   replays the frames through [`LogicalLog::apply`], and tells a torn tail, which the
 //!   core truncates, from corruption, which it refuses (D-60, D-69).
+//! - [`examine`] is the doctor's core (O-7): the same scan, read-only, reporting what
+//!   recovery would do and what it read, with or without the configuration.
 
 mod crc32c;
+mod examine;
+#[cfg(test)]
+mod examine_tests;
 mod frame;
 #[cfg(test)]
 mod golden;
@@ -56,10 +61,11 @@ mod recovery;
 mod recovery_tests;
 
 pub use crc32c::{crc32c, update as crc32c_update};
+pub use examine::{Binding, Examination, Verdict, examine};
 pub use frame::{
     FORMAT_VERSION, Frame, FrameError, FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode,
     decode_header, encode,
 };
 pub use log::{JournalError, LogBounds, LogicalLog, MIN_ENTRY_RECORD_BYTES};
 pub use record::{Genesis, GenesisMismatch, RaftBatch, RecordError};
-pub use recovery::{MAX_FRAME_LEN, Recovered, RecoveryError, recover};
+pub use recovery::{MAX_FRAME_LEN, Recovered, RecoveryError, TailShape, TornTail, recover};

@@ -280,7 +280,10 @@ deps = ["W11", "W12"]
 reqs = ["O-7", "O-6"]
 area = ["cli"]
 milestone = "m2"
-accept = []
+accept = [
+    "./dev check JOURNAL-EXAMINE",
+    "./dev check FS-DOCTOR",
+]
 bead = "br-w23-cli-doctor-z22"
 
 [[item]]

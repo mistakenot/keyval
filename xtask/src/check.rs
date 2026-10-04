@@ -1063,6 +1063,41 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 12,
     },
+    CheckDef {
+        id: "JOURNAL-EXAMINE",
+        summary: "the doctor's journal examination reads a journal exactly as startup \
+                  recovery does and reaches recovery's verdict on every recovery golden, \
+                  names the torn tail it would discard (incomplete, checksum-failing, \
+                  unreadable or stale, with offset and length), keeps what was read \
+                  before a refusal, and verifies the genesis binding only when given the \
+                  configuration (O-7)",
+        kind: Kind::TestGroup,
+        covers: &["O-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "journal",
+            filters: &["examine_tests::"],
+        },
+        min_cases: 5,
+    },
+    CheckDef {
+        id: "FS-DOCTOR",
+        summary: "the doctor's read-only data-directory handle opens the journal \
+                  read-only, creates and changes nothing (every file byte for byte), \
+                  probes the lock without creating LOCK, reports a live directory as \
+                  live, and holds the lock while it reads so no node can start meanwhile \
+                  (O-7)",
+        kind: Kind::TestGroup,
+        covers: &["O-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &["doctor_handle::"],
+        },
+        min_cases: 4,
+    },
 ];
 
 /// Outcome of one requested check.

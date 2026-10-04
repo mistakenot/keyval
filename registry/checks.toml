@@ -704,3 +704,27 @@ tier = "T0"
 run = "./dev check RAFT-READY-LOOP"
 min_cases = 12
 status = "implemented"
+
+[[check]]
+id = "JOURNAL-EXAMINE"
+summary = "the doctor's journal examination reads a journal exactly as startup recovery does and reaches recovery's verdict on every recovery golden, names the torn tail it would discard (incomplete, checksum-failing, unreadable or stale, with offset and length), keeps what was read before a refusal, and verifies the genesis binding only when given the configuration (O-7)"
+kind = "test_group"
+covers = ["O-7"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check JOURNAL-EXAMINE"
+min_cases = 5
+status = "implemented"
+
+[[check]]
+id = "FS-DOCTOR"
+summary = "the doctor's read-only data-directory handle opens the journal read-only, creates and changes nothing (every file byte for byte), probes the lock without creating LOCK, reports a live directory as live, and holds the lock while it reads so no node can start meanwhile (O-7)"
+kind = "test_group"
+covers = ["O-7"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check FS-DOCTOR"
+min_cases = 4
+status = "implemented"

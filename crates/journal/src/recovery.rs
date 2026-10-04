@@ -95,6 +95,84 @@ impl Recovered {
     }
 }
 
+/// What a torn tail looks like where it starts (§7.6, D-50, D-69).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TailShape {
+    /// A frame cut short: its header is intact and promises `frame_len` bytes, fewer of
+    /// which reached the disk.
+    Incomplete {
+        /// The frame's full length, from its intact header.
+        frame_len: u64,
+    },
+    /// A full-length frame whose checksum fails.
+    ChecksumFailed,
+    /// Bytes without an intact header: a cut header, zeros or garbage.
+    Unreadable,
+    /// A complete, valid frame whose sequence is at or below the last one applied: a
+    /// stale copy.
+    Stale {
+        /// Its sequence.
+        sequence: u64,
+    },
+}
+
+impl fmt::Display for TailShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Incomplete { frame_len } => {
+                write!(f, "incomplete final frame (of {frame_len} bytes)")
+            }
+            Self::ChecksumFailed => f.write_str("final frame failing its checksum"),
+            Self::Unreadable => f.write_str("unreadable tail (no intact frame header)"),
+            Self::Stale { sequence } => write!(f, "stale copy of frame {sequence}"),
+        }
+    }
+}
+
+/// The torn tail startup recovery discards: it truncates the journal to `start` and
+/// syncs before the next append (DUR-6, D-50).
+///
+/// Invariant: `len` is at most one maximum frame ([`MAX_FRAME_LEN`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TornTail {
+    /// Where it starts: the end of the durable prefix.
+    start: u64,
+    /// Its length in bytes.
+    len: u64,
+    /// What it looks like.
+    shape: TailShape,
+}
+
+impl TornTail {
+    /// Where the tail starts: the length recovery truncates the journal to.
+    #[must_use]
+    pub const fn start(&self) -> ByteCount {
+        ByteCount::new(self.start)
+    }
+
+    /// The tail's length in bytes.
+    #[must_use]
+    pub const fn len(&self) -> ByteCount {
+        ByteCount::new(self.len)
+    }
+
+    /// What the tail looks like.
+    #[must_use]
+    pub const fn shape(&self) -> TailShape {
+        self.shape
+    }
+}
+
+impl fmt::Display for TornTail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "discard the {}-byte {} at offset {}",
+            self.len, self.shape, self.start
+        )
+    }
+}
+
 /// Why a journal cannot be recovered: the node does not start, and nothing has been
 /// modified.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -334,15 +412,15 @@ fn find_later_frame(
 
 /// Judges the remainder of the journal after the durable prefix, whose last valid frame
 /// has sequence `last` and whose first invalid frame, `slot`, starts at `damaged_at`:
-/// a torn tail (`Ok`), or a refusal.
+/// a torn tail of the returned shape (`Ok`), or a refusal.
 fn judge_remainder(
     storage: &impl JournalRead,
     damaged_at: u64,
     slot: &Slot,
     journal_len: u64,
     last: u64,
-) -> Result<(), RecoveryError> {
-    let resume_at = match slot {
+) -> Result<TailShape, RecoveryError> {
+    let (resume_at, shape) = match slot {
         Slot::Valid { header, .. } => {
             if header.sequence() > last {
                 return Err(RecoveryError::Corruption {
@@ -351,16 +429,29 @@ fn judge_remainder(
                     sequence: header.sequence(),
                 });
             }
-            damaged_at.saturating_add(len_u64(header.frame_len()))
+            (
+                damaged_at.saturating_add(len_u64(header.frame_len())),
+                TailShape::Stale {
+                    sequence: header.sequence(),
+                },
+            )
         }
-        Slot::Torn(header) => damaged_at.saturating_add(len_u64(header.frame_len())),
+        Slot::Torn(header) => {
+            let frame_len = len_u64(header.frame_len());
+            let shape = if journal_len - damaged_at < frame_len {
+                TailShape::Incomplete { frame_len }
+            } else {
+                TailShape::ChecksumFailed
+            };
+            (damaged_at.saturating_add(frame_len), shape)
+        }
         Slot::Impossible(error) => {
             return Err(RecoveryError::ImpossibleHeader {
                 at: damaged_at,
                 error: *error,
             });
         }
-        Slot::Damaged => damaged_at.saturating_add(1),
+        Slot::Damaged => (damaged_at.saturating_add(1), TailShape::Unreadable),
     };
     if let Some((valid_at, sequence)) = find_later_frame(storage, resume_at, journal_len, last)? {
         return Err(RecoveryError::Corruption {
@@ -376,7 +467,7 @@ fn judge_remainder(
             len,
         });
     }
-    Ok(())
+    Ok(shape)
 }
 
 /// The length of the genesis frame `init` writes for `node` under `config`, if the
@@ -384,6 +475,147 @@ fn judge_remainder(
 fn genesis_frame_len(config: &Config, node: NodeId) -> Option<u64> {
     let genesis = Genesis::new(config, node, InstanceId::from_bytes([0; 16]))?;
     Some(len_u64(HEADER_LEN + genesis.encode().len() + TRAILER_LEN))
+}
+
+/// What reading a journal produced, shared by [`recover`] and the doctor's
+/// [`examine`](crate::examine): the genesis, the logical log rebuilt from the durable
+/// prefix, and the torn tail after it, if any.
+#[derive(Debug)]
+pub struct Scanned {
+    /// The genesis.
+    pub genesis: Genesis,
+    /// The logical log of the durable prefix.
+    pub log: LogicalLog,
+    /// The torn tail recovery discards, if there is one.
+    pub tail: Option<TornTail>,
+}
+
+/// A refusal, with what was read before it: for the doctor's report.
+#[derive(Debug)]
+pub struct Refusal {
+    /// Why the journal cannot be recovered.
+    pub error: RecoveryError,
+    /// The genesis, if one was read.
+    pub genesis: Option<Genesis>,
+    /// The logical log of the frames applied before the refusal, if the genesis was read.
+    pub log: Option<LogicalLog>,
+}
+
+/// The refusal `error`, before any genesis was read.
+fn refuse(error: RecoveryError) -> Box<Refusal> {
+    Box::new(Refusal {
+        error,
+        genesis: None,
+        log: None,
+    })
+}
+
+/// Reads and applies the frame at the log's end: `Ok(None)` once it is applied, or the
+/// torn tail's shape when the durable prefix ends there.
+fn next_frame(
+    storage: &impl JournalRead,
+    log: &mut LogicalLog,
+    journal_len: u64,
+) -> Result<Option<TailShape>, RecoveryError> {
+    let at = log.end();
+    let slot = read_slot(storage, at, journal_len)?;
+    let last = log.next_sequence() - 1;
+    let Slot::Valid { header, payload } = slot else {
+        return judge_remainder(storage, at, &slot, journal_len, last).map(Some);
+    };
+    if header.kind() != FrameKind::RaftBatch || header.sequence() != log.next_sequence() {
+        let slot = Slot::Valid { header, payload };
+        return judge_remainder(storage, at, &slot, journal_len, last).map(Some);
+    }
+    let batch = RaftBatch::decode(&payload).map_err(|error| RecoveryError::Record { at, error })?;
+    log.apply(at, header, batch)
+        .map_err(|error| RecoveryError::Apply { at, error })?;
+    Ok(None)
+}
+
+/// Reads the journal of `journal_len` bytes as startup recovery does (§7.6, §7.7 steps
+/// 2-4), into a logical log within `bounds`. Only reads.
+///
+/// With `binding`, the genesis is verified against that configuration and node (DUR-8),
+/// and a journal with no valid genesis is told apart from an interrupted `init` by the
+/// genesis frame's length for them. Without one, both checks are skipped: the doctor
+/// examines a directory without its configuration (O-7).
+///
+/// # Errors
+///
+/// A [`Refusal`]: the [`RecoveryError`] naming why the node must not start, with what was
+/// read before it.
+pub fn scan(
+    storage: &impl JournalRead,
+    journal_len: u64,
+    binding: Option<(&Config, NodeId)>,
+    bounds: LogBounds,
+) -> Result<Scanned, Box<Refusal>> {
+    if journal_len == 0 {
+        return Err(refuse(RecoveryError::Empty));
+    }
+    let first = read_slot(storage, 0, journal_len).map_err(refuse)?;
+    let Slot::Valid { header, payload } = first else {
+        judge_remainder(storage, 0, &first, journal_len, 0).map_err(refuse)?;
+        // An interrupted init leaves at most one genesis frame's worth of bytes: a torn
+        // prefix, perhaps filled out with zeros or garbage to the append's full length.
+        if let Some((config, node)) = binding
+            && let Some(genesis_len) = genesis_frame_len(config, node)
+            && journal_len > genesis_len
+        {
+            return Err(refuse(RecoveryError::NotAnInterruptedInit {
+                len: journal_len,
+                genesis_len,
+            }));
+        }
+        return Err(refuse(RecoveryError::IncompleteGenesis));
+    };
+    if header.kind() != FrameKind::Genesis || header.sequence() != 1 {
+        return Err(refuse(RecoveryError::NotGenesis {
+            kind: header.kind(),
+            sequence: header.sequence(),
+        }));
+    }
+    let genesis =
+        Genesis::decode(&payload).map_err(|error| refuse(RecoveryError::GenesisRecord(error)))?;
+    if let Some((config, node)) = binding
+        && let Err(mismatch) = genesis.verify(config, node)
+    {
+        return Err(Box::new(Refusal {
+            error: RecoveryError::Mismatch(mismatch),
+            genesis: Some(genesis),
+            log: None,
+        }));
+    }
+    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), genesis.voters(), bounds);
+    let mut tail = None;
+    while log.end() < journal_len {
+        match next_frame(storage, &mut log, journal_len) {
+            Ok(None) => {}
+            Ok(Some(shape)) => {
+                tail = Some(TornTail {
+                    start: log.end(),
+                    len: journal_len - log.end(),
+                    shape,
+                });
+                break;
+            }
+            Err(error) => {
+                return Err(Box::new(Refusal {
+                    error,
+                    genesis: Some(genesis),
+                    log: Some(log),
+                }));
+            }
+        }
+    }
+    types::invariant!(
+        log.end() <= journal_len,
+        "JOURNAL-RECOVERY-PREFIX",
+        "the durable prefix ends at {} beyond the journal's {journal_len} bytes",
+        log.end()
+    );
+    Ok(Scanned { genesis, log, tail })
 }
 
 /// Recovers the journal of `journal_len` bytes for `node` under `config`, into a logical
@@ -405,62 +637,11 @@ pub fn recover(
     bounds: LogBounds,
 ) -> Result<Recovered, RecoveryError> {
     let journal_len = journal_len.get();
-    if journal_len == 0 {
-        return Err(RecoveryError::Empty);
-    }
-    let first = read_slot(storage, 0, journal_len)?;
-    let Slot::Valid { header, payload } = first else {
-        judge_remainder(storage, 0, &first, journal_len, 0)?;
-        // An interrupted init leaves at most one genesis frame's worth of bytes: a torn
-        // prefix, perhaps filled out with zeros or garbage to the append's full length.
-        if let Some(genesis_len) = genesis_frame_len(config, node)
-            && journal_len > genesis_len
-        {
-            return Err(RecoveryError::NotAnInterruptedInit {
-                len: journal_len,
-                genesis_len,
-            });
-        }
-        return Err(RecoveryError::IncompleteGenesis);
-    };
-    if header.kind() != FrameKind::Genesis || header.sequence() != 1 {
-        return Err(RecoveryError::NotGenesis {
-            kind: header.kind(),
-            sequence: header.sequence(),
-        });
-    }
-    let genesis = Genesis::decode(&payload).map_err(RecoveryError::GenesisRecord)?;
-    genesis
-        .verify(config, node)
-        .map_err(RecoveryError::Mismatch)?;
-    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), genesis.voters(), bounds);
-    while log.end() < journal_len {
-        let at = log.end();
-        let slot = read_slot(storage, at, journal_len)?;
-        let last = log.next_sequence() - 1;
-        let Slot::Valid { header, payload } = slot else {
-            judge_remainder(storage, at, &slot, journal_len, last)?;
-            break;
-        };
-        if header.kind() != FrameKind::RaftBatch || header.sequence() != log.next_sequence() {
-            let slot = Slot::Valid { header, payload };
-            judge_remainder(storage, at, &slot, journal_len, last)?;
-            break;
-        }
-        let batch =
-            RaftBatch::decode(&payload).map_err(|error| RecoveryError::Record { at, error })?;
-        log.apply(at, header, batch)
-            .map_err(|error| RecoveryError::Apply { at, error })?;
-    }
-    types::invariant!(
-        log.end() <= journal_len,
-        "JOURNAL-RECOVERY-PREFIX",
-        "the durable prefix ends at {} beyond the journal's {journal_len} bytes",
-        log.end()
-    );
+    let scanned = scan(storage, journal_len, Some((config, node)), bounds)
+        .map_err(|refusal| refusal.error)?;
     Ok(Recovered {
-        genesis,
-        log,
+        genesis: scanned.genesis,
+        log: scanned.log,
         journal_len,
     })
 }
