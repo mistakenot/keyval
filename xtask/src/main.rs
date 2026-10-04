@@ -319,11 +319,11 @@ fn run_report(root: &Path, format: Format, report: ReportKind) -> Status {
     match report {
         ReportKind::Traceability { tree, artifacts } => {
             let layout = traceability::Layout {
-                root: root.to_path_buf(),
+                work: root.join(traceability::WORK),
                 artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
                 out: root.join(traceability::REPORT),
             };
-            match traceability::run(&layout, tree) {
+            match traceability::run(&git::Git::new(root), &layout, tree) {
                 Ok(report) => output::emit(format, &report),
                 Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
             }

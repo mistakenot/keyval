@@ -375,9 +375,12 @@ output only together with its schema, and bump the version when the change break
   `reports/traceability.md` (generated, gitignored; §10.13 "Reports", W05.3): each
   requirement with its declared and derived status, owner disposition, listing work items,
   covering checks with claim class and latest receipt, and whether it is passed on the
-  judged tree (default `HEAD^{tree}`): active, with every covering check's latest receipt
-  on that tree passed. It also lists the registry gate's violations and the conditions it
-  only reports (5 and 6 until W32). `--json` prints `keyval.dev.traceability/v1`.
+  judged tree (default `HEAD^{tree}`): active, with every covering check's newest full
+  run on that tree passed with at least its `min_cases`. A `--case` run never counts. The
+  registry, the work graph and the tracker export are read from the judged tree
+  (materialised into `.local/traceability/`), never from the working files. It also lists
+  the registry gate's violations and the conditions it only reports (5 and 6 until W32).
+  `--json` prints `keyval.dev.traceability/v2`.
 - `./dev prune [--dry-run]` — the `.local/` retention rule (§10.10, Q9) for accept
   trees, and the only sanctioned deleter of generated `.local/` artifacts:
   - keeps the newest 5 accept trees, and every tree with a failing or interrupted run

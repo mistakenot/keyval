@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/traceability.v2.schema.json",
+  "title": "keyval.dev.traceability/v2",
+  "description": "The `./dev report traceability --json` report (xtask/src/traceability.rs `TraceabilityReport`). For each §6 requirement it gives the declared and derived status, the listing work items, the covering checks with their latest receipts, and whether the requirement is passed on the judged tree (PLAN.md §10.13). Without a tree, nothing is judged. v2: only a full-selection run with at least the check's `min_cases` counts toward passed, and the registry is read from the judged tree (`inputs`).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "path", "tree", "inputs", "summary", "registry", "requirements"],
+  "allOf": [
+    {
+      "if": { "required": ["tree"], "properties": { "tree": { "type": "null" } } },
+      "then": {
+        "properties": {
+          "requirements": { "items": { "properties": { "passed": { "type": "null" } } } },
+          "summary": { "properties": { "passed": { "const": 0 } } }
+        }
+      }
+    },
+    {
+      "if": { "required": ["inputs"], "properties": { "inputs": { "const": "tree" } } },
+      "then": {
+        "description": "The registry is read from a tree only when one is judged.",
+        "properties": { "tree": { "type": "string" } }
+      }
+    }
+  ],
+  "properties": {
+    "schema": { "const": "keyval.dev.traceability/v2" },
+    "ok": { "type": "boolean" },
+    "path": { "type": "string", "minLength": 1 },
+    "tree": { "type": ["string", "null"], "minLength": 1 },
+    "inputs": {
+      "description": "Where the registry, the work graph and the tracker export were read from: the judged tree, or the working files when no tree is known (no git).",
+      "enum": ["tree", "working_tree"]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements", "active", "passed", "uncovered", "mismatched"],
+      "properties": {
+        "requirements": { "$ref": "#/$defs/count" },
+        "active": { "$ref": "#/$defs/count" },
+        "passed": { "$ref": "#/$defs/count" },
+        "uncovered": {
+          "description": "Active MUST requirements without an implemented covering check (§10.13 condition 2).",
+          "$ref": "#/$defs/ids"
+        },
+        "mismatched": {
+          "description": "Requirements whose declared status differs from the derived one.",
+          "$ref": "#/$defs/ids"
+        }
+      }
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["violations", "reported", "error"],
+      "properties": {
+        "violations": { "$ref": "#/$defs/lines" },
+        "reported": {
+          "description": "Conditions reported but not failed (5 and 6 until W32).",
+          "$ref": "#/$defs/lines"
+        },
+        "error": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "requirements": { "type": "array", "items": { "$ref": "#/$defs/requirement" } }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "ids": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "lines": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "status": { "enum": ["planned", "active"] },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "level",
+        "title",
+        "notes",
+        "status",
+        "derived",
+        "listed_by",
+        "checks",
+        "passed"
+      ],
+      "allOf": [
+        {
+          "if": { "required": ["status"], "properties": { "status": { "const": "planned" } } },
+          "then": {
+            "description": "A planned requirement is never passed (§10.13).",
+            "properties": { "passed": { "not": { "const": true } } }
+          }
+        },
+        {
+          "if": { "required": ["passed"], "properties": { "passed": { "const": true } } },
+          "then": {
+            "description": "A passed requirement has covering checks, and every one of them passes on the judged tree (§10.13, P10).",
+            "properties": {
+              "checks": { "minItems": 1, "items": { "properties": { "passes": { "const": true } } } }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "level": { "enum": ["MUST", "SHOULD", "MAY"] },
+        "title": { "type": "string", "minLength": 1 },
+        "notes": { "type": ["string", "null"], "minLength": 1 },
+        "status": { "$ref": "#/$defs/status" },
+        "derived": { "$ref": "#/$defs/status" },
+        "listed_by": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["item", "closed"],
+            "properties": {
+              "item": { "type": "string", "minLength": 1 },
+              "closed": { "type": "boolean" }
+            }
+          }
+        },
+        "checks": { "type": "array", "items": { "$ref": "#/$defs/covering" } },
+        "passed": { "type": ["boolean", "null"] }
+      }
+    },
+    "covering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "class",
+        "tier",
+        "status",
+        "min_cases",
+        "latest",
+        "on_tree",
+        "passes"
+      ],
+      "allOf": [
+        {
+          "if": { "required": ["on_tree"], "properties": { "on_tree": { "type": "object" } } },
+          "then": {
+            "description": "on_tree is the newest full-selection run on the judged tree; a `--case` run never stands in for the family (§10.13).",
+            "properties": { "on_tree": { "properties": { "full": { "const": true } } } }
+          }
+        },
+        {
+          "if": { "required": ["passes"], "properties": { "passes": { "const": true } } },
+          "then": {
+            "description": "A check passes only on a passed full run on the judged tree that counted its cases (at least min_cases, which the code compares).",
+            "properties": {
+              "on_tree": {
+                "type": "object",
+                "properties": { "outcome": { "const": "passed" }, "cases": { "type": "integer" } }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "class": { "type": "string", "minLength": 1 },
+        "tier": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "min_cases": {
+          "description": "The fewest cases a full run must execute (registry/checks.toml, P10).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/evidence" }] },
+        "on_tree": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/evidence" }] },
+        "passes": {
+          "description": "Whether on_tree passed with at least min_cases cases: what passed is judged by.",
+          "type": "boolean"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "outcome", "cases", "tree", "at", "receipt", "source", "full"],
+      "properties": {
+        "check": { "type": "string", "minLength": 1 },
+        "outcome": { "type": "string", "minLength": 1 },
+        "cases": { "type": ["integer", "null"], "minimum": 0 },
+        "tree": { "type": "string" },
+        "at": { "type": "string" },
+        "receipt": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["accept", "gate"] },
+        "full": {
+          "description": "Whether the run selected the check's whole family. An accept selector naming `--case`, or one with no recorded selector, did not.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

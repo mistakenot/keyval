@@ -1,0 +1,68 @@
+{
+  "rule": "a requirement is passed only when every covering check passes on the judged tree; DEV-SCHEMAS ran 2 cases, below its min_cases 3, so it does not pass and neither does O-6 (§10.13, P10)",
+  "error_at": "/requirements/0/checks/0/passes",
+  "instance": {
+    "schema": "keyval.dev.traceability/v2",
+    "ok": true,
+    "path": "reports/traceability.md",
+    "tree": "67383fcddc38ba4cd5820388358b06f5355d8610",
+    "inputs": "tree",
+    "summary": {
+      "requirements": 1,
+      "active": 1,
+      "passed": 1,
+      "uncovered": [],
+      "mismatched": []
+    },
+    "registry": {
+      "violations": [],
+      "reported": [
+        "condition 6 (reported until W32): operation put has no conformance test"
+      ],
+      "error": null
+    },
+    "requirements": [
+      {
+        "id": "O-6",
+        "level": "MUST",
+        "title": "Robot mode: every ./dev command has stable versioned JSON output",
+        "notes": null,
+        "status": "active",
+        "derived": "active",
+        "listed_by": [{ "item": "W01", "closed": true }],
+        "checks": [
+          {
+            "id": "DEV-SCHEMAS",
+            "kind": "test_group",
+            "class": "invariant",
+            "tier": "T0",
+            "status": "implemented",
+            "min_cases": 3,
+            "latest": {
+              "check": "DEV-SCHEMAS",
+              "outcome": "passed",
+              "cases": 2,
+              "tree": "67383fcddc38ba4cd5820388358b06f5355d8610",
+              "at": "2026-10-03T21:41:05Z",
+              "receipt": "artifacts/receipts/accept-br-dev-output-schemas-uvct-d07ccb46ef4e.json",
+              "source": "accept",
+              "full": true
+            },
+            "on_tree": {
+              "check": "DEV-SCHEMAS",
+              "outcome": "passed",
+              "cases": 2,
+              "tree": "67383fcddc38ba4cd5820388358b06f5355d8610",
+              "at": "2026-10-03T21:41:05Z",
+              "receipt": "artifacts/receipts/accept-br-dev-output-schemas-uvct-d07ccb46ef4e.json",
+              "source": "accept",
+              "full": true
+            },
+            "passes": false
+          }
+        ],
+        "passed": true
+      }
+    ]
+  }
+}

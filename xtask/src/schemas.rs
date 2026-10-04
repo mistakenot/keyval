@@ -184,7 +184,7 @@ mod tests {
     use crate::prune::{self, Action, Layout, Reason};
     use crate::steplog::{self, Outcome as StepOutcome, StepLog};
     use crate::test_support::{nested_cargo, scratch_dir};
-    use crate::traceability::{self, Source as EvidenceSource};
+    use crate::traceability::{self, InputSource, Source as EvidenceSource};
     use crate::tracker::{Bead, Tracker};
     use crate::{beads, vendor};
 
@@ -439,6 +439,13 @@ mod tests {
             traceability::SCHEMA,
             "/$defs/evidence/properties/source/enum",
             &sources,
+            false,
+        );
+        let inputs = variants!(InputSource: Tree, WorkingTree);
+        assert_enum(
+            traceability::SCHEMA,
+            "/properties/inputs/enum",
+            &inputs,
             false,
         );
     }
@@ -889,20 +896,41 @@ mod tests {
         let artifacts = scratch_dir("schemas-traceability-artifacts");
         let receipts = artifacts.join("receipts");
         fs::create_dir_all(&receipts).unwrap();
-        // A real accept receipt, so a covering check has evidence on the judged tree.
-        let tree = "0123456789abcdef0123456789abcdef01234567";
+        // The real registry, committed in a repository of its own, so the report reads it
+        // from a judged tree as `./dev report traceability` does.
+        let real = |path: &str| fs::read_to_string(workspace_root().join(path)).unwrap();
+        let paths = [
+            "registry/requirements.toml",
+            "registry/checks.toml",
+            "registry/workgraph.toml",
+            ".beads/issues.jsonl",
+        ];
+        let texts: Vec<String> = paths.iter().map(|path| real(path)).collect();
+        let files: Vec<(&str, &str)> = paths
+            .iter()
+            .copied()
+            .zip(texts.iter().map(String::as_str))
+            .collect();
+        let git = fixture::repo("schemas-traceability-repo", &files);
+        let judged = git.rev_parse("HEAD^{tree}").unwrap();
+        // Real accept receipts, a full run and a `--case` run, so covering checks have
+        // evidence of both kinds on the judged tree.
         let accept = json!({
-            "schema": accept::SCHEMA, "ok": true, "tree": tree,
+            "schema": accept::SCHEMA, "ok": true, "tree": judged,
             "finished_at": "2026-10-03T22:00:00Z",
-            "selectors": [{ "checks": ["DEV-SCHEMAS passed (18 cases)"] }],
+            "selectors": [
+                { "selector": "./dev check DEV-SCHEMAS", "checks": ["DEV-SCHEMAS passed (18 cases)"] },
+                { "selector": "./dev check XTASK --case schemas", "checks": ["XTASK passed (1 cases)"] },
+            ],
         });
         fs::write(receipts.join("accept-x.json"), accept.to_string()).unwrap();
         let layout = traceability::Layout {
-            root: workspace_root(),
+            work: scratch_dir("schemas-traceability-work"),
             artifacts,
             out: scratch_dir("schemas-traceability").join("traceability.md"),
         };
-        let report = traceability::run(&layout, Some(tree.to_owned())).unwrap();
+        let report = traceability::run(&git, &layout, Some(judged)).unwrap();
+        assert_eq!(report.inputs, InputSource::Tree);
         validators.assert_matches(&report, "traceability::run on the real registry");
         // Without a tree (a git-isolated candidate), nothing is judged.
         let mut untreed = traceability::build(&traceability::Inputs {
@@ -919,6 +947,7 @@ mod tests {
             evidence: Vec::new(),
             tree: None,
             registry: traceability::RegistryVerdict::default(),
+            source: InputSource::WorkingTree,
         });
         untreed.ok = true;
         traceability::REPORT.clone_into(&mut untreed.path);
