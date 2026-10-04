@@ -1029,8 +1029,9 @@ pub const CATALOGUE: &[CheckDef] = &[
     CheckDef {
         id: "FS-STORAGE",
         summary: "the real-file adapter syncs the parent directory when it creates the \
-                  data directory and refuses an existing one, its LOCK refuses a second \
-                  process until the holder exits, a missing directory is Missing while one \
+                  data directory and again when it finds one already there (an interrupted \
+                  init re-runs), its LOCK refuses a second process until the holder exits, \
+                  a missing directory is Missing while one \
                   that cannot be examined is Failed and every call stays within its \
                   documented errors on real OS failures, a failed write, truncate or sync \
                   latches the handle so no later call reports success, and failures keep \
@@ -1043,7 +1044,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "fs_storage",
             filters: &["tests::"],
         },
-        min_cases: 12,
+        min_cases: 13,
     },
     CheckDef {
         id: "RAFT-READY-LOOP",

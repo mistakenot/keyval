@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use fs_storage::{FsStorage, create_data_dir};
+use fs_storage::{DataDirCreated, FsStorage, create_data_dir};
 
 #[path = "../../types/tests/storage_contract/mod.rs"]
 mod storage_contract;
@@ -32,7 +32,7 @@ impl storage_contract::Harness for FsHarness {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        create_data_dir(&dir).unwrap();
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
         dir
     }
 

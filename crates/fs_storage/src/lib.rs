@@ -16,7 +16,9 @@
 //!   refused whether it is in another process or in this one.
 //!
 //! [`create_data_dir`] is §7.7 step 0's first step: create the directory and sync its
-//! parent, so its entry is durable before anything is written into it (DUR-7).
+//! parent, so its entry is durable before anything is written into it (DUR-7). A
+//! directory already there is reported ([`DataDirCreated::Existing`]) and its parent
+//! synced again, so an interrupted `init` can re-run (br-lkxg).
 //!
 //! A [`StorageError`] carries no cause, so the adapter keeps the last one it saw
 //! ([`FsStorage::last_failure`]) for the composition root to log. Each call returns only
@@ -99,21 +101,55 @@ impl Failure {
     }
 }
 
-/// Creates the data directory `dir` and syncs its parent, so the new entry is durable
-/// before anything depends on it (§7.7 step 0, DUR-7). An existing directory is refused:
-/// initialisation never reuses one.
+/// What [`create_data_dir`] found at the data directory's path (§7.7 step 0).
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataDirCreated {
+    /// Nothing was there: the directory was created.
+    New,
+    /// A directory was already there, as after an `init` interrupted once it had created
+    /// it: nothing was created. Whether `init` may continue in it is recovery's verdict on
+    /// its journal (`journal::RecoveryError::permits_init`), never this adapter's.
+    Existing,
+}
+
+/// Creates the data directory `dir`, or finds it already there, and syncs its parent, so
+/// the directory's entry is durable before anything depends on it (§7.7 step 0, DUR-7).
+///
+/// An existing directory is [`DataDirCreated::Existing`], not a failure, and its parent
+/// is synced again: §7.7 lets `init` re-run after a crash interrupted it, and the re-run
+/// must make the entry durable before writing into the directory, whether the first run
+/// died before its parent sync or that sync failed (br-lkxg).
 ///
 /// # Errors
 ///
 /// A [`Failure`] whose error is [`StorageError::Missing`] when the parent does not exist,
-/// and [`StorageError::Failed`] when `dir` exists or either step fails.
-pub fn create_data_dir(dir: &Path) -> Result<(), Failure> {
-    fs::create_dir(dir).map_err(|err| Failure::io_or_missing("create_data_dir", dir, &err))?;
+/// and [`StorageError::Failed`] when the path holds something other than a directory, the
+/// directory cannot be created, or the parent cannot be synced (op `sync_parent_dir`).
+pub fn create_data_dir(dir: &Path) -> Result<DataDirCreated, Failure> {
+    let created = match fs::create_dir(dir) {
+        Ok(()) => DataDirCreated::New,
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            let metadata =
+                fs::metadata(dir).map_err(|err| Failure::io("create_data_dir", dir, &err))?;
+            if !metadata.is_dir() {
+                return Err(Failure {
+                    op: "create_data_dir",
+                    path: dir.to_path_buf(),
+                    cause: "the path exists and is not a directory".to_owned(),
+                    error: StorageError::Failed,
+                });
+            }
+            DataDirCreated::Existing
+        }
+        Err(err) => return Err(Failure::io_or_missing("create_data_dir", dir, &err)),
+    };
     let parent = dir
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    sync_directory(parent).map_err(|err| Failure::io("sync_parent_dir", parent, &err))
+    sync_directory(parent).map_err(|err| Failure::io("sync_parent_dir", parent, &err))?;
+    Ok(created)
 }
 
 /// `fsync` of a directory: makes the entries created in it durable.
@@ -498,23 +534,32 @@ mod tests {
     /// A fresh data directory, created as init creates one.
     fn data_dir(name: &str) -> PathBuf {
         let dir = scratch(name);
-        create_data_dir(&dir).unwrap();
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
         dir
     }
 
     #[test]
-    fn create_data_dir_makes_the_directory_and_refuses_an_existing_or_orphaned_one() {
+    fn create_data_dir_makes_the_directory_reports_an_existing_one_and_refuses_the_rest() {
         let dir = scratch("create");
-        assert_eq!(create_data_dir(&dir), Ok(()));
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
         assert!(
             dir.is_dir(),
             "rule: init creates the data directory; dir={dir:?}"
         );
-        let again = create_data_dir(&dir).unwrap_err();
         assert_eq!(
-            (again.op, again.error),
+            create_data_dir(&dir),
+            Ok(DataDirCreated::Existing),
+            "rule: an existing directory is reported, not refused, so an interrupted init \
+             can re-run (§7.7 step 0, br-lkxg)"
+        );
+        let file = scratch("create-file");
+        fs::write(&file, b"").unwrap();
+        let taken = create_data_dir(&file).unwrap_err();
+        assert_eq!(
+            (taken.op, taken.error),
             ("create_data_dir", StorageError::Failed),
-            "rule: init never reuses an existing directory (§7.7 step 0); failure={again:?}"
+            "rule: a path holding something other than a directory is refused; \
+             failure={taken:?}"
         );
         let orphan = dir.join("no-such-parent").join("data");
         let missing = create_data_dir(&orphan).unwrap_err();
@@ -522,6 +567,36 @@ mod tests {
             missing.error,
             StorageError::Missing,
             "rule: a missing parent is Missing, never created on the way; failure={missing:?}"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_init_re_runs_in_the_directory_it_created() {
+        // The first init died after mkdir, before (or in) its parent sync.
+        let dir = scratch("re-run");
+        fs::create_dir(&dir).unwrap();
+        assert_eq!(
+            create_data_dir(&dir),
+            Ok(DataDirCreated::Existing),
+            "rule: the re-run finds the directory and syncs its parent (§7.7 step 0, DUR-7)"
+        );
+        let mut storage = FsStorage::open(&dir).unwrap();
+        assert_eq!(storage.lock(), Ok(()));
+        assert_eq!(storage.create_journal(), Ok(()));
+        assert_eq!(storage.sync_dir(), Ok(()));
+        assert_eq!(
+            storage.journal_len(),
+            Ok(ByteCount::new(0)),
+            "rule: init continues in the existing directory as in a new one"
+        );
+        drop(storage);
+        // A second interruption, after the journal was created: the directory is still
+        // reported, and the journal is left for recovery to judge (permits_init).
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::Existing));
+        assert_eq!(
+            FsStorage::open(&dir).unwrap().journal_len(),
+            Ok(ByteCount::new(0)),
+            "rule: reporting an existing directory never touches what is in it"
         );
     }
 
@@ -866,7 +941,7 @@ mod doctor_handle {
     /// A data directory a node has used: a LOCK file and a journal of `bytes`.
     fn used_dir(name: &str, bytes: &[u8]) -> PathBuf {
         let dir = scratch(name);
-        create_data_dir(&dir).unwrap();
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
         let mut node = FsStorage::open(&dir).unwrap();
         node.lock().unwrap();
         node.create_journal().unwrap();
@@ -895,7 +970,7 @@ mod doctor_handle {
             "rule: the doctor's handle leaves every file byte for byte as it was (O-7)"
         );
         let blank = scratch("blank");
-        create_data_dir(&blank).unwrap();
+        assert_eq!(create_data_dir(&blank), Ok(DataDirCreated::New));
         let mut doctor = ReadOnlyDir::open(&blank).unwrap();
         assert_eq!(
             (doctor.journal_len(), doctor.probe_lock()),

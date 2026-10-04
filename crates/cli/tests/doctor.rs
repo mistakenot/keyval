@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use fs_storage::{FsStorage, create_data_dir};
+use fs_storage::{DataDirCreated, FsStorage, create_data_dir};
 use journal::{FrameKind, Genesis, encode};
 use serde_json::Value;
 use types::{Config, DataDir, InstanceId, NodeId};
@@ -53,7 +53,7 @@ fn genesis_frame() -> Vec<u8> {
 /// `journal` as its journal file.
 fn data_dir(name: &str, journal: &[u8]) -> PathBuf {
     let dir = scratch(name);
-    create_data_dir(&dir).unwrap();
+    assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
     let mut node = FsStorage::open(&dir).unwrap();
     node.lock().unwrap();
     drop(node);
@@ -328,7 +328,7 @@ mod doctor_cli {
     #[test]
     fn blank_and_missing_directories_are_reported_and_left_alone() {
         let blank = scratch("blank");
-        create_data_dir(&blank).unwrap();
+        assert_eq!(create_data_dir(&blank), Ok(DataDirCreated::New));
         let (report, code) = doctor_json(&blank, &[]);
         assert_eq!(
             (report["verdict"].as_str(), report["lock"].as_str(), code),
