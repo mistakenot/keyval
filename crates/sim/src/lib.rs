@@ -35,6 +35,6 @@ pub use scheduler::{
     VirtualTime,
 };
 pub use trace::{
-    Comparison, DIAGNOSTIC_TEXT_BYTES, DiskOp, Endpoint, INCOMPLETE_MARKER, Name, ObservationBound,
-    Overflow, PacketFate, Record, Trace, TraceHash, compare, marks_incomplete,
+    ClientId, Comparison, DIAGNOSTIC_TEXT_BYTES, DiskOp, Endpoint, INCOMPLETE_MARKER, Name,
+    ObservationBound, Overflow, PacketFate, Record, Trace, TraceHash, compare, marks_incomplete,
 };

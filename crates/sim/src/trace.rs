@@ -26,7 +26,8 @@ use std::error::Error;
 use std::fmt;
 
 use types::{
-    ByteCount, Incarnation, Limit, LogIndex, NodeId, RequestId, Role, StorageOp, SyncSeq, Term,
+    ByteCount, Incarnation, ItemCount, Limit, LogIndex, NodeId, RequestId, Role, StorageOp,
+    SyncSeq, Term,
 };
 
 use crate::scheduler::{Event, EventSeq, NodeIncarnation};
@@ -55,20 +56,47 @@ impl Name {
     }
 }
 
+/// A simulated client, numbered within its run (CD-4). It is the run's own logical
+/// identity, never a host or connection identifier, and is written `c<number>`.
+///
+/// Invariant: none beyond its 64 bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClientId(u64);
+
+impl ClientId {
+    /// The client numbered `number` in its run.
+    #[must_use]
+    pub const fn new(number: u64) -> Self {
+        Self(number)
+    }
+
+    /// The client's number.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ClientId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "c{}", self.0)
+    }
+}
+
 /// A logical packet endpoint: never a socket address or a host name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Endpoint {
     /// A node.
     Node(NodeId),
-    /// A simulated client, numbered within the run.
-    Client(u64),
+    /// A simulated client.
+    Client(ClientId),
 }
 
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Node(node) => write!(f, "n{}", node.get()),
-            Self::Client(client) => write!(f, "c{client}"),
+            Self::Client(client) => write!(f, "{client}"),
         }
     }
 }
@@ -271,7 +299,7 @@ pub enum Record {
     /// A client invoked an operation.
     Invoked {
         /// The client.
-        client: u64,
+        client: ClientId,
         /// The request ID.
         request: RequestId,
         /// The encoded operation.
@@ -280,7 +308,7 @@ pub enum Record {
     /// A client received a response.
     Responded {
         /// The client.
-        client: u64,
+        client: ClientId,
         /// The request ID.
         request: RequestId,
         /// The encoded response.
@@ -343,12 +371,12 @@ impl fmt::Display for Record {
                 client,
                 request,
                 op,
-            } => write!(f, "invoke c{client} {request} {}", Hex(op)),
+            } => write!(f, "invoke {client} {request} {}", Hex(op)),
             Self::Responded {
                 client,
                 request,
                 result,
-            } => write!(f, "respond c{client} {request} {}", Hex(result)),
+            } => write!(f, "respond {client} {request} {}", Hex(result)),
             Self::FirstExecution { request, index } => {
                 write!(f, "first {request} {}", index.get())
             }
@@ -534,14 +562,14 @@ impl Trace {
 
     /// Diagnostics dropped by the bound.
     #[must_use]
-    pub const fn dropped_diagnostics(&self) -> u64 {
-        self.dropped_diagnostics
+    pub const fn dropped_diagnostics(&self) -> ItemCount {
+        ItemCount::new(self.dropped_diagnostics)
     }
 
     /// Diagnostics whose text was cut to [`DIAGNOSTIC_TEXT_BYTES`].
     #[must_use]
-    pub const fn truncated_diagnostics(&self) -> u64 {
-        self.truncated_diagnostics
+    pub const fn truncated_diagnostics(&self) -> ItemCount {
+        ItemCount::new(self.truncated_diagnostics)
     }
 
     /// The canonical bytes: every line, then the metrics, each ending in a newline. An
@@ -724,7 +752,7 @@ mod tests {
         let packet = Record::Packet {
             fate: PacketFate::Delivered,
             from: Endpoint::Node(node(2)),
-            to: Endpoint::Client(7),
+            to: Endpoint::Client(ClientId::new(7)),
             bytes: vec![0x00, 0xFF, 0x10],
         };
         assert_eq!(
@@ -734,7 +762,7 @@ mod tests {
         );
         let empty = Record::Packet {
             fate: PacketFate::Dropped,
-            from: Endpoint::Client(1),
+            from: Endpoint::Client(ClientId::new(1)),
             to: Endpoint::Node(node(3)),
             bytes: Vec::new(),
         };
@@ -828,7 +856,7 @@ mod tests {
         let cases = [
             (
                 Record::Invoked {
-                    client: 3,
+                    client: ClientId::new(3),
                     request: request(1),
                     op: b"put".to_vec(),
                 },
@@ -836,7 +864,7 @@ mod tests {
             ),
             (
                 Record::Responded {
-                    client: 3,
+                    client: ClientId::new(3),
                     request: request(1),
                     result: Vec::new(),
                 },
@@ -925,7 +953,7 @@ mod tests {
             trace.diagnostic(text);
         }
         assert_eq!(trace.diagnostics(), ["a", "b"]);
-        assert_eq!(trace.dropped_diagnostics(), 2);
+        assert_eq!(trace.dropped_diagnostics(), ItemCount::new(2));
         assert!(
             trace.is_complete(),
             "rule: dropping diagnostics never makes a run incomplete (O-3)"
@@ -992,7 +1020,10 @@ mod tests {
         trace.diagnostic("five");
         assert_eq!(
             (trace.diagnostics(), trace.dropped_diagnostics()),
-            (["one", "two", "three"].map(str::to_owned).as_slice(), 2),
+            (
+                ["one", "two", "three"].map(str::to_owned).as_slice(),
+                ItemCount::new(2)
+            ),
             "rule: N+1 and later are dropped and counted; a new step does not reset the \
              bound, which is per run (CD-9)"
         );
@@ -1021,7 +1052,7 @@ mod tests {
             "rule: text up to the limit is kept whole; longer text is cut at a character \
              boundary (CD-9)"
         );
-        assert_eq!(trace.truncated_diagnostics(), 1);
+        assert_eq!(trace.truncated_diagnostics(), ItemCount::new(1));
         assert!(
             trace.canonical().ends_with("M diagnostics.truncated 1\n"),
             "rule: the cut is counted and reported; canonical={:?}",

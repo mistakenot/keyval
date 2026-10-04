@@ -37,7 +37,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use types::{Entropy as _, EntropyStream, Incarnation, NodeId};
+use types::{Entropy as _, EntropyStream, Incarnation, ItemCount, NodeId};
 
 use crate::entropy::{MasterSeed, NodeStreams, Subsystem};
 use crate::scheduler::{
@@ -114,14 +114,14 @@ pub struct MachineryRun {
     /// Its canonical trace.
     pub trace: Trace,
     /// Events dispatched.
-    pub events: u64,
+    pub events: ItemCount,
     /// Node restarts.
-    pub restarts: u64,
+    pub restarts: ItemCount,
     /// Timeouts armed by an earlier incarnation, fired after its node restarted.
-    pub stale_timeouts: u64,
+    pub stale_timeouts: ItemCount,
     /// Events dispatched at the same virtual time as the event before them, so ordered by
     /// the seeded tie priority.
-    pub same_time: u64,
+    pub same_time: ItemCount,
 }
 
 /// Why a run has no complete trace. It is never a pass (P10).
@@ -134,9 +134,9 @@ pub enum RunError {
     /// The run hit a bound before it finished.
     Incomplete {
         /// Events dispatched.
-        events: u64,
+        events: ItemCount,
         /// Events still queued.
-        pending: usize,
+        pending: ItemCount,
         /// Which bound it hit.
         reason: Shortfall,
     },
@@ -161,7 +161,9 @@ impl fmt::Display for RunError {
                 reason,
             } => write!(
                 f,
-                "the run is incomplete ({reason:?}) after {events} events with {pending} pending"
+                "the run is incomplete ({reason:?}) after {} events with {} pending",
+                events.get(),
+                pending.get()
             ),
             Self::Unobserved => write!(f, "a required observation overflowed its bound"),
         }
@@ -204,7 +206,7 @@ fn run(
     for (slot, node) in nodes.iter_mut().enumerate() {
         arm(&mut scheduler, slot, node, &mut skew)?;
     }
-    let (mut restarts, mut stale_timeouts, mut same_time) = (0, 0, 0);
+    let (mut restarts, mut stale_timeouts, mut same_time) = (0_u64, 0_u64, 0_u64);
     let mut last = None;
     let events = loop {
         let event = match scheduler.step() {
@@ -256,7 +258,7 @@ fn run(
             }
         }
     };
-    trace.metric(name("events")?, events);
+    trace.metric(name("events")?, events.get());
     trace.metric(name("restarts")?, restarts);
     trace.metric(name("stale_timeouts")?, stale_timeouts);
     trace.metric(name("same_time")?, same_time);
@@ -266,9 +268,9 @@ fn run(
     Ok(MachineryRun {
         trace,
         events,
-        restarts,
-        stale_timeouts,
-        same_time,
+        restarts: ItemCount::new(restarts),
+        stale_timeouts: ItemCount::new(stale_timeouts),
+        same_time: ItemCount::new(same_time),
     })
 }
 
@@ -1137,7 +1139,10 @@ mod tests {
             let run = machinery(MasterSeed::new(seed)).unwrap();
             let text = run.trace.canonical();
             assert!(
-                run.events > 100 && run.same_time > 0 && run.restarts > 0 && run.stale_timeouts > 0,
+                run.events.get() > 100
+                    && run.same_time.get() > 0
+                    && run.restarts.get() > 0
+                    && run.stale_timeouts.get() > 0,
                 "rule: K-14's run is not vacuous: many events, seeded ties, restarts and \
                  stale timers; seed={seed} events={} same_time={} restarts={} stale={}",
                 run.events,
@@ -1147,13 +1152,16 @@ mod tests {
             );
             assert_eq!(
                 u64::try_from(events(&text)).unwrap(),
-                run.events,
+                run.events.get(),
                 "rule: every dispatched event is traced"
             );
             assert!(
                 text.ends_with(&format!(
                     "M events {}\nM restarts {}\nM same_time {}\nM stale_timeouts {}\n",
-                    run.events, run.restarts, run.same_time, run.stale_timeouts
+                    run.events.get(),
+                    run.restarts.get(),
+                    run.same_time.get(),
+                    run.stale_timeouts.get()
                 )),
                 "rule: the run's metrics close the trace in name order; seed={seed}"
             );

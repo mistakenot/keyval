@@ -22,7 +22,7 @@
 use std::error::Error;
 use std::fmt;
 
-use types::{BoundedMap, Incarnation, Limit, NodeId};
+use types::{BoundedMap, Incarnation, ItemCount, Limit, NodeId};
 
 use crate::entropy::SplitMix64;
 
@@ -164,14 +164,14 @@ pub enum Step<E> {
     /// The queue is empty: the run completed within its budget.
     Complete {
         /// Events dispatched.
-        events: u64,
+        events: ItemCount,
     },
     /// The run cannot finish within its bounds: it is incomplete, which fails (P10).
     Incomplete {
         /// Events dispatched.
-        events: u64,
+        events: ItemCount,
         /// Events still queued, never to be dispatched.
-        pending: usize,
+        pending: ItemCount,
         /// Which bound it hit.
         reason: Shortfall,
     },
@@ -232,14 +232,14 @@ impl<E> Scheduler<E> {
 
     /// Events dispatched so far.
     #[must_use]
-    pub const fn dispatched(&self) -> u64 {
-        self.dispatched
+    pub const fn dispatched(&self) -> ItemCount {
+        ItemCount::new(self.dispatched)
     }
 
     /// Events scheduled but not yet dispatched.
     #[must_use]
-    pub fn pending(&self) -> usize {
-        self.queue.len()
+    pub fn pending(&self) -> ItemCount {
+        ItemCount::new(u64::try_from(self.queue.len()).unwrap_or(u64::MAX))
     }
 
     /// Schedules `payload` at `at`, concerning `node` if any. Its causal parent is the
@@ -292,20 +292,20 @@ impl<E> Scheduler<E> {
     pub fn step(&mut self) -> Step<E> {
         if self.refused {
             return Step::Incomplete {
-                events: self.dispatched,
-                pending: self.queue.len(),
+                events: self.dispatched(),
+                pending: self.pending(),
                 reason: Shortfall::QueueFull,
             };
         }
         if self.queue.is_empty() {
             return Step::Complete {
-                events: self.dispatched,
+                events: self.dispatched(),
             };
         }
         if self.dispatched >= self.budget.get() {
             return Step::Incomplete {
-                events: self.dispatched,
-                pending: self.queue.len(),
+                events: self.dispatched(),
+                pending: self.pending(),
                 reason: Shortfall::BudgetExhausted,
             };
         }
@@ -314,7 +314,7 @@ impl<E> Scheduler<E> {
             next.and_then(|order| self.queue.remove(&order).map(|pending| (order, pending)))
         else {
             return Step::Complete {
-                events: self.dispatched,
+                events: self.dispatched(),
             };
         };
         self.now = order.time;
@@ -336,6 +336,10 @@ mod tests {
     // check: SIM-SCHEDULER
     use super::*;
     use crate::entropy::{MasterSeed, Subsystem};
+
+    fn count(items: u64) -> ItemCount {
+        ItemCount::new(items)
+    }
 
     fn scheduler(seed: u64, budget: EventBudget) -> Scheduler<u32> {
         Scheduler::new(MasterSeed::new(seed).stream(Subsystem::Scheduler), budget)
@@ -380,7 +384,7 @@ mod tests {
             at(30),
             "rule: time advances to the event dispatched last"
         );
-        assert_eq!(done, Step::Complete { events: 3 });
+        assert_eq!(done, Step::Complete { events: count(3) });
     }
 
     #[test]
@@ -485,7 +489,7 @@ mod tests {
                 at: at(99),
             })
         );
-        assert_eq!(s.pending(), 0, "rule: a refused event is not queued");
+        assert_eq!(s.pending(), count(0), "rule: a refused event is not queued");
         assert!(
             s.schedule(at(100), None, 3).is_ok(),
             "rule: the current time is not the past"
@@ -512,8 +516,8 @@ mod tests {
         };
         assert_eq!(payloads(&events), [0, 1, 10]);
         let incomplete = Step::Incomplete {
-            events: 3,
-            pending: 2,
+            events: count(3),
+            pending: count(2),
             reason: Shortfall::BudgetExhausted,
         };
         assert_eq!(
@@ -521,7 +525,7 @@ mod tests {
             "rule: an exhausted budget with work left is incomplete, never a pass (P10)"
         );
         assert_eq!(s.step(), incomplete, "rule: nothing more is dispatched");
-        assert_eq!(s.dispatched(), 3);
+        assert_eq!(s.dispatched(), count(3));
     }
 
     #[test]
@@ -531,7 +535,7 @@ mod tests {
         for payload in 0..3 {
             s.schedule(at(5), None, payload).unwrap();
         }
-        assert_eq!(s.pending(), 3, "rule: N-1 pending events fit");
+        assert_eq!(s.pending(), count(3), "rule: N-1 pending events fit");
         assert!(
             s.schedule(at(5), None, 3).is_ok(),
             "rule: N pending events fit"
@@ -541,10 +545,10 @@ mod tests {
             Err(ScheduleError::QueueFull { bound }),
             "rule: the (N+1)th pending event is a typed refusal, not silent growth (CD-9)"
         );
-        assert_eq!(s.pending(), 4, "rule: a refused event is not queued");
+        assert_eq!(s.pending(), count(4), "rule: a refused event is not queued");
         let incomplete = Step::Incomplete {
-            events: 0,
-            pending: 4,
+            events: count(0),
+            pending: count(4),
             reason: Shortfall::QueueFull,
         };
         assert_eq!(
@@ -553,7 +557,7 @@ mod tests {
             "rule: after a refusal the run is incomplete, even if the caller ignores the error"
         );
         assert_eq!(s.step(), incomplete, "rule: it never turns complete");
-        assert_eq!(s.dispatched(), 0);
+        assert_eq!(s.dispatched(), count(0));
     }
 
     #[test]
@@ -582,7 +586,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(
             done,
-            Step::Complete { events: 3 },
+            Step::Complete { events: count(3) },
             "rule: spending the whole budget with nothing pending is complete"
         );
     }
