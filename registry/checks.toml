@@ -642,7 +642,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check RAFT-ADAPTER"
-min_cases = 35
+min_cases = 38
 status = "implemented"
 
 [[check]]
@@ -859,4 +859,16 @@ class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check RAFT-CLUSTER"
 min_cases = 3
+status = "implemented"
+
+[[check]]
+id = "FIXTURE-LISTS"
+summary = "config/fixtures/ holds no fixture that the parser's acceptance list (types, CONFIG-RULES) or the RawNode construction list (raft_adapter, RAFT-ADAPTER) lacks, so the D-78 tests cover every committed fixture (O-5, D-78, P10)"
+kind = "test_group"
+covers = ["O-5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check FIXTURE-LISTS"
+min_cases = 2
 status = "implemented"

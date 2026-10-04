@@ -115,3 +115,31 @@ fn an_oversized_command_breaks_its_invariant() {
     node.propose(vec![0; 70_000]).unwrap();
     let _ = node.ready();
 }
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-APPLIED-RANGE violated: node 1: applied index 5 reported outside \
+                [applied 0, commit 0]"
+)]
+fn an_applied_index_past_the_commit_breaks_its_invariant() {
+    let mut node = node("one-voter", 1);
+    node.applied(LogIndex::new(5).unwrap());
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-INDEX-RANGE violated: node 1: the library reported commit index \
+                9007199254740992, past 2^53 - 1"
+)]
+fn an_index_past_two_to_the_53_breaks_its_invariant() {
+    let _ = super::log_index(NodeId::new(1).unwrap(), 1 << 53, "commit");
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-TERM-RANGE violated: node 1: the library reported term \
+                9007199254740992, past 2^53 - 1"
+)]
+fn a_status_term_past_two_to_the_53_breaks_its_invariant() {
+    let _ = super::term(NodeId::new(1).unwrap(), 1 << 53);
+}

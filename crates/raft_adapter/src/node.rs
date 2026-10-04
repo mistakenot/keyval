@@ -153,7 +153,7 @@ impl<R: JournalRead> RaftNode<R> {
     /// The index the library holds as applied: the replayed index at construction, then
     /// whatever [`applied`](Consensus::applied) last reported.
     pub fn applied_index(&self) -> LogIndex {
-        log_index(self.raw.raft.raft_log.applied)
+        log_index(self.node, self.raw.raft.raft_log.applied, "applied")
     }
 
     /// Writes the outstanding Ready's entries and hard state as the journal's next frame,
@@ -303,13 +303,43 @@ impl<R: JournalRead> RaftNode<R> {
             .raft_log
             .unstable
             .maybe_last_index()
-            .map_or_else(|| self.log().last_index(), log_index)
+            .map_or_else(
+                || self.log().last_index(),
+                |raw| log_index(self.node, raw, "last"),
+            )
     }
 }
 
-/// A library index as a core one; library indices stay within 2^53 − 1 because entries do.
-fn log_index(raw: u64) -> LogIndex {
-    LogIndex::new(raw).unwrap_or(LogIndex::ZERO)
+/// A library index as a core one.
+///
+/// # Panics
+///
+/// `RA-INDEX-RANGE` if it is 2^53 or more. Library indices stay within 2^53 − 1: admission
+/// bounds every peer entry's index (br-xx08), and DM-7 bounds the log.
+fn log_index(node: NodeId, raw: u64, what: &str) -> LogIndex {
+    let index = LogIndex::new(raw);
+    invariant!(
+        index.is_ok(),
+        "RA-INDEX-RANGE",
+        "node {node}: the library reported {what} index {raw}, past 2^53 - 1"
+    );
+    index.unwrap_or(LogIndex::ZERO)
+}
+
+/// A library term as a core one.
+///
+/// # Panics
+///
+/// `RA-TERM-RANGE` if it is 2^53 or more: admission bounds every peer's term (br-xx08), and a
+/// node's own term grows by one per election.
+fn term(node: NodeId, raw: u64) -> Term {
+    let term = Term::new(raw);
+    invariant!(
+        term.is_ok(),
+        "RA-TERM-RANGE",
+        "node {node}: the library reported term {raw}, past 2^53 - 1"
+    );
+    term.unwrap_or(Term::ZERO)
 }
 
 impl<R: JournalRead> Consensus for RaftNode<R> {
@@ -433,13 +463,28 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
         // applied, through `applied` (§7.4 step 7).
         let mut light = self.raw.advance_append(ready);
         LightReady {
-            commit: light.commit_index().map(log_index),
+            commit: light
+                .commit_index()
+                .map(|commit| log_index(self.node, commit, "commit")),
             messages: self.core_messages(&light.take_messages()),
             committed: self.core_entries(&light.take_committed_entries(), "a committed entry"),
         }
     }
 
+    /// # Panics
+    ///
+    /// `RA-APPLIED-RANGE` if `index` is below the applied index already reported, or past the
+    /// commit index. The library would `fatal!` without naming the node (`applied_to`).
     fn applied(&mut self, index: LogIndex) {
+        let log = &self.raw.raft.raft_log;
+        invariant!(
+            index.get() >= log.applied && index.get() <= log.committed,
+            "RA-APPLIED-RANGE",
+            "node {}: applied index {index} reported outside [applied {}, commit {}]",
+            self.node,
+            log.applied,
+            log.committed
+        );
         self.raw.advance_apply_to(index.get());
     }
 
@@ -462,7 +507,7 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
                     .filter_map(|(id, pr)| {
                         Some(Progress {
                             node: NodeId::new(*id).ok()?,
-                            matched: log_index(pr.matched),
+                            matched: log_index(self.node, pr.matched, "a matched"),
                         })
                     })
                     .collect()
@@ -471,9 +516,9 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
         progress.sort_by_key(|entry| entry.node);
         Status {
             role,
-            term: Term::new(status.hs.term).unwrap_or(Term::ZERO),
+            term: term(self.node, status.hs.term),
             leader: NodeId::new(status.ss.leader_id).ok(),
-            commit: log_index(status.hs.commit),
+            commit: log_index(self.node, status.hs.commit, "commit"),
             last: self.last_index(),
             progress,
         }

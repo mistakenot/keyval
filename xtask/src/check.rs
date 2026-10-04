@@ -980,7 +980,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "node::invariant_fixtures::",
             ],
         },
-        min_cases: 35,
+        min_cases: 38,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-SIM",
@@ -1292,6 +1292,21 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["cluster_tests::"],
         },
         min_cases: 3,
+    },
+    CheckDef {
+        id: "FIXTURE-LISTS",
+        summary: "config/fixtures/ holds no fixture that the parser's acceptance list (types, \
+                  CONFIG-RULES) or the RawNode construction list (raft_adapter, RAFT-ADAPTER) \
+                  lacks, so the D-78 tests cover every committed fixture (O-5, D-78, P10)",
+        kind: Kind::TestGroup,
+        covers: &["O-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["fixture_lists::"],
+        },
+        min_cases: 2,
     },
 ];
 

@@ -14,6 +14,8 @@ mod clock;
 mod closure;
 mod commit;
 mod doctor;
+#[cfg(test)]
+mod fixture_lists;
 mod gate;
 mod git;
 mod ledger;
