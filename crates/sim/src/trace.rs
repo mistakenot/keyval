@@ -25,7 +25,9 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use types::{Limit, LogIndex, NodeId, RequestId, Role, Term};
+use types::{
+    ByteCount, Incarnation, Limit, LogIndex, NodeId, RequestId, Role, StorageOp, SyncSeq, Term,
+};
 
 use crate::scheduler::{Event, EventSeq, NodeIncarnation};
 
@@ -95,34 +97,90 @@ impl PacketFate {
     }
 }
 
-/// A simulated disk operation (§10.2 event model).
+/// A simulated disk operation (§10.2 event model): what one storage effect did on the
+/// device, a sync's completion reaching the node, or a storage failure.
+///
+/// Every storage effect has a record (`types::Effect::{Append, Truncate, Sync,
+/// CreateJournal, SyncDir}`), and so does `types::Input::StorageFailed`. A completion or
+/// failure names its sync and the incarnation that requested it. A stale completion
+/// delivered to a later incarnation (§10.2, B-17) therefore reads differently from a
+/// current one, and nothing inconvenient is left out of the trace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskOp {
     /// Append progress: `len` bytes at `offset` reached the device.
     Append {
         /// The byte offset.
-        offset: u64,
+        offset: ByteCount,
         /// The byte count.
-        len: u64,
+        len: ByteCount,
     },
-    /// Everything appended up to byte `upto` became durable.
+    /// The journal was cut to `len` bytes, discarding a torn tail (DUR-6).
+    Truncate {
+        /// The length kept.
+        len: ByteCount,
+    },
+    /// Sync `seq` made the journal durable up to byte `upto`.
     Sync {
+        /// The sync.
+        seq: SyncSeq,
         /// The durable length.
-        upto: u64,
+        upto: ByteCount,
     },
-    /// The sync's completion notification was delivered.
+    /// The empty journal file was created. Its directory entry stays volatile until a
+    /// directory sync (DUR-7).
+    CreateJournal,
+    /// Directory sync `seq` made every earlier file creation durable (DUR-7).
+    SyncDir {
+        /// The sync.
+        seq: SyncSeq,
+    },
+    /// The completion of sync `seq` (a journal or directory sync) reached the node. It is
+    /// stale if `requested_by` is not the node's current incarnation (B-17).
     SyncDone {
-        /// The durable length it reports.
-        upto: u64,
+        /// The sync it completes.
+        seq: SyncSeq,
+        /// The incarnation that requested it.
+        requested_by: Incarnation,
+    },
+    /// The storage effect `op`, requested by `requested_by`, failed (§7.11), and its
+    /// failure reached the node.
+    Failed {
+        /// The effect that failed.
+        op: StorageOp,
+        /// The incarnation that requested it.
+        requested_by: Incarnation,
     },
 }
 
 impl fmt::Display for DiskOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Append { offset, len } => write!(f, "append {offset} {len}"),
-            Self::Sync { upto } => write!(f, "sync {upto}"),
-            Self::SyncDone { upto } => write!(f, "sync-done {upto}"),
+            Self::Append { offset, len } => write!(f, "append {} {}", offset.get(), len.get()),
+            Self::Truncate { len } => write!(f, "truncate {}", len.get()),
+            Self::Sync { seq, upto } => write!(f, "sync {} {}", seq.get(), upto.get()),
+            Self::CreateJournal => f.write_str("create-journal"),
+            Self::SyncDir { seq } => write!(f, "sync-dir {}", seq.get()),
+            Self::SyncDone { seq, requested_by } => {
+                write!(f, "sync-done {} {}", seq.get(), requested_by.get())
+            }
+            Self::Failed { op, requested_by } => {
+                write!(f, "failed {} {}", Op(*op), requested_by.get())
+            }
+        }
+    }
+}
+
+/// A storage effect as `<kind> <sync or ->`: every kind has the same two fields.
+struct Op(StorageOp);
+
+impl fmt::Display for Op {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            StorageOp::Append => f.write_str("append -"),
+            StorageOp::Truncate => f.write_str("truncate -"),
+            StorageOp::Sync(seq) => write!(f, "sync {}", seq.get()),
+            StorageOp::CreateJournal => f.write_str("create-journal -"),
+            StorageOp::SyncDir(seq) => write!(f, "sync-dir {}", seq.get()),
         }
     }
 }
@@ -691,8 +749,8 @@ mod tests {
                 Record::Disk {
                     node: n,
                     op: DiskOp::Append {
-                        offset: 4_096,
-                        len: 512,
+                        offset: ByteCount::new(4_096),
+                        len: ByteCount::new(512),
                     },
                 },
                 "disk n1/2 append 4096 512",
@@ -700,16 +758,22 @@ mod tests {
             (
                 Record::Disk {
                     node: n,
-                    op: DiskOp::Sync { upto: 4_608 },
+                    op: DiskOp::Sync {
+                        seq: SyncSeq::new(7),
+                        upto: ByteCount::new(4_608),
+                    },
                 },
-                "disk n1/2 sync 4608",
+                "disk n1/2 sync 7 4608",
             ),
             (
                 Record::Disk {
                     node: n,
-                    op: DiskOp::SyncDone { upto: 4_608 },
+                    op: DiskOp::SyncDone {
+                        seq: SyncSeq::new(7),
+                        requested_by: Incarnation::new(2),
+                    },
                 },
-                "disk n1/2 sync-done 4608",
+                "disk n1/2 sync-done 7 2",
             ),
             (
                 Record::Role {
@@ -1043,6 +1107,104 @@ mod tests {
             }),
             "rule: N+1 in one step overflows"
         );
+    }
+
+    #[test]
+    fn every_storage_effect_and_failure_has_a_fixed_disk_line() {
+        let n = on(1, 3);
+        let disk = |op| Record::Disk { node: n, op }.to_string();
+        let cases = [
+            (
+                DiskOp::Truncate {
+                    len: ByteCount::new(4_096),
+                },
+                "disk n1/3 truncate 4096",
+            ),
+            (DiskOp::CreateJournal, "disk n1/3 create-journal"),
+            (
+                DiskOp::SyncDir {
+                    seq: SyncSeq::new(1),
+                },
+                "disk n1/3 sync-dir 1",
+            ),
+            (
+                DiskOp::Failed {
+                    op: StorageOp::Append,
+                    requested_by: Incarnation::new(3),
+                },
+                "disk n1/3 failed append - 3",
+            ),
+            (
+                DiskOp::Failed {
+                    op: StorageOp::Truncate,
+                    requested_by: Incarnation::new(3),
+                },
+                "disk n1/3 failed truncate - 3",
+            ),
+            (
+                DiskOp::Failed {
+                    op: StorageOp::Sync(SyncSeq::new(9)),
+                    requested_by: Incarnation::new(3),
+                },
+                "disk n1/3 failed sync 9 3",
+            ),
+            (
+                DiskOp::Failed {
+                    op: StorageOp::CreateJournal,
+                    requested_by: Incarnation::new(3),
+                },
+                "disk n1/3 failed create-journal - 3",
+            ),
+            (
+                DiskOp::Failed {
+                    op: StorageOp::SyncDir(SyncSeq::new(2)),
+                    requested_by: Incarnation::new(3),
+                },
+                "disk n1/3 failed sync-dir 2 3",
+            ),
+        ];
+        for (op, line) in cases {
+            assert_eq!(
+                disk(op),
+                line,
+                "rule: every storage effect and StorageFailed has a fixed-format disk line \
+                 (§10.2: the trace contains disk operations and completions)"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_completion_reads_differently_from_a_current_one() {
+        // Node 1 restarted as incarnation 3; incarnation 2's sync 7 completes after it.
+        let at = on(1, 3);
+        let done = |requested_by| {
+            Record::Disk {
+                node: at,
+                op: DiskOp::SyncDone {
+                    seq: SyncSeq::new(7),
+                    requested_by: Incarnation::new(requested_by),
+                },
+            }
+            .to_string()
+        };
+        assert_eq!(done(2), "disk n1/3 sync-done 7 2");
+        assert_ne!(
+            done(2),
+            done(3),
+            "rule: a completion names the incarnation that asked for it, so a stale one \
+             delivered to the next incarnation is visible in the trace (B-17)"
+        );
+        let failed = |requested_by| {
+            Record::Disk {
+                node: at,
+                op: DiskOp::Failed {
+                    op: StorageOp::Sync(SyncSeq::new(7)),
+                    requested_by: Incarnation::new(requested_by),
+                },
+            }
+            .to_string()
+        };
+        assert_ne!(failed(2), failed(3), "rule: the same holds for a failure");
     }
 
     #[test]
