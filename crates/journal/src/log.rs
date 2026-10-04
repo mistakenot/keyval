@@ -8,6 +8,14 @@
 //! - **Logical truncation.** A Raft batch whose first entry index is at or below the
 //!   last index replaces the logical log from that index. The old bytes stay in the file,
 //!   which is append-only. Replacing at or below the persisted commit index is refused.
+//! - **Possible histories only** (§7.6 "an impossible index relationship", DUR-2). A
+//!   persisted term or commit never goes back, a vote never changes within its term, and
+//!   entry terms are at least 1, never decrease along the log and never exceed the term
+//!   in force. A correct Raft writer never breaks these, so on the live path a refusal is
+//!   a writer bug, and in recovery it is damage: refuse.
+//! - **Hard stop** (DM-7). [`LogicalLog::append`] refuses a frame that would take the
+//!   journal past `max_journal_bytes`, before changing anything. That refusal is the
+//!   node's input to `failed`.
 //! - **Offset index.** `LogIndex → (frame offset, term)`, about 16 bytes per entry,
 //!   bounded by DM-7's admission ceiling.
 //! - **Entry cache.** Recent entries up to a byte bound (`Limit::EntryCacheBytes`, §7.11),
@@ -18,11 +26,11 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use types::{
-    ByteCount, Entry, EntryIndex, EntryPayload, HardState, JournalRead, LogIndex, ReadLen,
-    StorageError, Term,
+    ByteCount, Config, Entry, EntryIndex, EntryPayload, HardState, JournalRead, Limit, LogIndex,
+    NodeId, ReadLen, StorageError, Term,
 };
 
-use crate::frame::{FrameError, FrameKind, HEADER_LEN, decode, decode_header, encode};
+use crate::frame::{FrameError, FrameKind, HEADER_LEN, Header, decode, decode_header, encode};
 use crate::record::{RaftBatch, RecordError};
 
 /// Why a frame cannot be applied to the logical log, or an entry cannot be read back.
@@ -63,12 +71,68 @@ pub enum JournalError {
         /// The last index after the batch.
         last: u64,
     },
+    /// An entry with term 0: only the dummy entry at index 0 has term 0.
+    ZeroTerm {
+        /// The entry's index.
+        index: u64,
+    },
+    /// An entry's term is below the term of the entry before it.
+    TermDecreases {
+        /// The entry's index.
+        index: u64,
+        /// The entry's term.
+        term: Term,
+        /// The term of the entry before it.
+        previous: Term,
+    },
+    /// An entry's term is above the term in force after the batch.
+    TermAhead {
+        /// The entry's index.
+        index: u64,
+        /// The entry's term.
+        term: Term,
+        /// The batch's hard-state term, or the persisted term without one.
+        in_force: Term,
+    },
+    /// The hard state's term is below the persisted term.
+    TermRegression {
+        /// The persisted term.
+        persisted: Term,
+        /// The batch's term.
+        found: Term,
+    },
+    /// The hard state's commit index is below the persisted commit index.
+    CommitRegression {
+        /// The persisted commit index.
+        persisted: u64,
+        /// The batch's commit index.
+        found: u64,
+    },
+    /// The hard state changes a vote already persisted in the same term.
+    VoteChanged {
+        /// The term.
+        term: Term,
+        /// The persisted vote.
+        persisted: NodeId,
+        /// The batch's vote.
+        found: Option<NodeId>,
+    },
+    /// The frame would take the journal past its hard stop (DM-7): the node stops
+    /// appending and moves to `failed`.
+    HardStop {
+        /// The journal's length.
+        end: u64,
+        /// The frame's length.
+        frame_len: u64,
+        /// `max_journal_bytes`.
+        limit: u64,
+    },
     /// The index is not in the logical log.
     NotInLog {
         /// The index asked for.
         index: u64,
     },
-    /// The frame at the index's offset is not a Raft batch.
+    /// The frame at the offset is not a Raft batch.
     NotRaftBatch {
         /// The frame's offset.
         offset: u64,
@@ -111,6 +175,57 @@ impl fmt::Display for JournalError {
             Self::CommitBeyondLog { commit, last } => {
                 write!(f, "commit index {commit} is beyond the last index {last}")
             }
+            Self::ZeroTerm { index } => write!(f, "entry {index} has term 0"),
+            Self::TermDecreases {
+                index,
+                term,
+                previous,
+            } => write!(
+                f,
+                "entry {index} has term {}, below the previous entry's term {}",
+                term.get(),
+                previous.get()
+            ),
+            Self::TermAhead {
+                index,
+                term,
+                in_force,
+            } => write!(
+                f,
+                "entry {index} has term {}, above the term in force {}",
+                term.get(),
+                in_force.get()
+            ),
+            Self::TermRegression { persisted, found } => write!(
+                f,
+                "hard-state term {} is below the persisted term {}",
+                found.get(),
+                persisted.get()
+            ),
+            Self::CommitRegression { persisted, found } => write!(
+                f,
+                "hard-state commit {found} is below the persisted commit {persisted}"
+            ),
+            Self::VoteChanged {
+                term,
+                persisted,
+                found,
+            } => write!(
+                f,
+                "in term {} the vote for {} would become {:?}",
+                term.get(),
+                persisted.get(),
+                found.map(NodeId::get)
+            ),
+            Self::HardStop {
+                end,
+                frame_len,
+                limit,
+            } => write!(
+                f,
+                "a {frame_len}-byte frame at {end} would pass the journal hard stop of \
+                 {limit} bytes (DM-7)"
+            ),
             Self::NotInLog { index } => write!(f, "index {index} is not in the logical log"),
             Self::NotRaftBatch { offset } => write!(f, "the frame at {offset} is not a Raft batch"),
             Self::EntryMismatch { index } => {
@@ -189,11 +304,53 @@ impl EntryCache {
     }
 }
 
+/// The logical log's bounds (§7.11, CD-9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogBounds {
+    /// The entry cache's byte bound (`Limit::EntryCacheBytes`).
+    cache_bytes: ByteCount,
+    /// The journal's hard stop (DM-7, `max_journal_bytes`).
+    max_journal_bytes: ByteCount,
+}
+
+impl LogBounds {
+    /// Bounds of an entry cache of `cache_bytes` and a hard stop of `max_journal_bytes`.
+    #[must_use]
+    pub const fn new(cache_bytes: ByteCount, max_journal_bytes: ByteCount) -> Self {
+        Self {
+            cache_bytes,
+            max_journal_bytes,
+        }
+    }
+
+    /// The bounds `config` sets: the fixed entry-cache bound and `max_journal_bytes`.
+    #[must_use]
+    pub const fn of(config: &Config) -> Self {
+        Self::new(
+            ByteCount::new(config.limit(Limit::EntryCacheBytes)),
+            config.max_journal_bytes(),
+        )
+    }
+
+    /// The entry cache's byte bound.
+    #[must_use]
+    pub const fn cache_bytes(self) -> ByteCount {
+        self.cache_bytes
+    }
+
+    /// The journal's hard stop.
+    #[must_use]
+    pub const fn max_journal_bytes(self) -> ByteCount {
+        self.max_journal_bytes
+    }
+}
+
 /// The logical log of one journal.
 ///
 /// Invariants:
 /// - `positions[i]` describes entry `i + 1`, so the log holds entries 1 to
-///   `positions.len()`;
+///   `positions.len()`, with terms of at least 1 that never decrease and never exceed
+///   the persisted term;
 /// - the persisted commit index is at most that last index;
 /// - `end` is the journal's length in bytes and `next_sequence` the next frame's
 ///   sequence.
@@ -209,13 +366,15 @@ pub struct LogicalLog {
     next_sequence: u64,
     /// Recent entries.
     cache: EntryCache,
+    /// The hard stop: no append takes `end` past it (DM-7).
+    max_journal_bytes: u64,
 }
 
 impl LogicalLog {
     /// The empty logical log that follows a genesis frame of `genesis_len` bytes at
-    /// sequence 1, with an entry cache of `cache_bytes` (`Limit::EntryCacheBytes`).
+    /// sequence 1, within `bounds`.
     #[must_use]
-    pub const fn after_genesis(genesis_len: u64, cache_bytes: u64) -> Self {
+    pub const fn after_genesis(genesis_len: u64, bounds: LogBounds) -> Self {
         Self {
             positions: Vec::new(),
             hard_state: HardState {
@@ -228,8 +387,9 @@ impl LogicalLog {
             cache: EntryCache {
                 entries: BTreeMap::new(),
                 bytes: 0,
-                limit: cache_bytes,
+                limit: bounds.cache_bytes.get(),
             },
+            max_journal_bytes: bounds.max_journal_bytes.get(),
         }
     }
 
@@ -238,19 +398,31 @@ impl LogicalLog {
     ///
     /// # Errors
     ///
-    /// Any [`LogicalLog::apply`] error, or [`JournalError::Frame`] if the batch exceeds
-    /// a frame. The live path treats an error as an invariant failure: the Raft library
-    /// never truncates committed entries (CD-7).
+    /// Nothing changes on any error.
+    /// - [`JournalError::HardStop`] if the frame would take the journal past
+    ///   `max_journal_bytes`: the node stops appending and moves to `failed` (DM-7).
+    /// - [`JournalError::Frame`] if the batch exceeds a frame.
+    /// - Any [`LogicalLog::apply`] error. The live path treats it as an invariant
+    ///   failure: a correct Raft library never writes an impossible history (CD-7).
     pub fn append(&mut self, batch: RaftBatch) -> Result<Vec<u8>, JournalError> {
         let frame = encode(FrameKind::RaftBatch, self.next_sequence, &batch.encode())
             .map_err(JournalError::Frame)?;
-        let len = u64::try_from(frame.len()).unwrap_or(u64::MAX);
-        self.apply(self.end, self.next_sequence, len, batch)?;
+        let header = decode_header(&frame).map_err(JournalError::Frame)?;
+        let frame_len = u64::try_from(frame.len()).unwrap_or(u64::MAX);
+        if self.end.saturating_add(frame_len) > self.max_journal_bytes {
+            return Err(JournalError::HardStop {
+                end: self.end,
+                frame_len,
+                limit: self.max_journal_bytes,
+            });
+        }
+        self.apply(self.end, header, batch)?;
         Ok(frame)
     }
 
-    /// Applies the Raft-batch frame of `frame_len` bytes at `offset` with `sequence`:
-    /// the live path and recovery replay alike (CD-10).
+    /// Applies the Raft-batch frame with `header` at `offset`, whose payload is `batch`:
+    /// the live path and recovery replay alike (CD-10). The frame's length comes from
+    /// its decoded header, never from the caller.
     ///
     /// # Errors
     ///
@@ -258,10 +430,13 @@ impl LogicalLog {
     pub fn apply(
         &mut self,
         offset: u64,
-        sequence: u64,
-        frame_len: u64,
+        header: Header,
         batch: RaftBatch,
     ) -> Result<(), JournalError> {
+        if header.kind() != FrameKind::RaftBatch {
+            return Err(JournalError::NotRaftBatch { offset });
+        }
+        let sequence = header.sequence();
         if sequence != self.next_sequence {
             return Err(JournalError::Sequence {
                 expected: self.next_sequence,
@@ -293,6 +468,11 @@ impl LogicalLog {
                 usize::try_from(first - 1).unwrap_or(usize::MAX)
             }
         };
+        if let Some(state) = hard_state {
+            self.check_hard_state(state)?;
+        }
+        let in_force = hard_state.map_or(self.hard_state.term, |state| state.term);
+        self.check_terms(kept, &entries, in_force)?;
         let new_last = u64::try_from(kept + entries.len()).unwrap_or(u64::MAX);
         if let Some(state) = hard_state
             && state.commit.get() > new_last
@@ -315,8 +495,89 @@ impl LogicalLog {
         if let Some(state) = hard_state {
             self.hard_state = state;
         }
+        let frame_len = u64::try_from(header.frame_len()).unwrap_or(u64::MAX);
         self.end = offset.saturating_add(frame_len);
         self.next_sequence = sequence.saturating_add(1);
+        types::invariant!(
+            self.positions
+                .last()
+                .is_none_or(|last| last.term <= self.hard_state.term),
+            "JOURNAL-TERM-IN-FORCE",
+            "the last entry's term exceeds the persisted term {} after the frame at {offset}",
+            self.hard_state.term.get()
+        );
+        Ok(())
+    }
+
+    /// Refuses a hard state that would lower the persisted term or commit, or change the
+    /// vote persisted in its term (DUR-2, §7.6).
+    const fn check_hard_state(&self, state: HardState) -> Result<(), JournalError> {
+        let persisted = self.hard_state;
+        if state.term.get() < persisted.term.get() {
+            return Err(JournalError::TermRegression {
+                persisted: persisted.term,
+                found: state.term,
+            });
+        }
+        if state.commit.get() < persisted.commit.get() {
+            return Err(JournalError::CommitRegression {
+                persisted: persisted.commit.get(),
+                found: state.commit.get(),
+            });
+        }
+        if state.term.get() == persisted.term.get()
+            && let Some(vote) = persisted.vote
+        {
+            let same = match state.vote {
+                Some(found) => found.get() == vote.get(),
+                None => false,
+            };
+            if !same {
+                return Err(JournalError::VoteChanged {
+                    term: persisted.term,
+                    persisted: vote,
+                    found: state.vote,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses entry terms of 0, terms that decrease from the kept entry before the batch
+    /// or within it, and terms above `in_force`.
+    fn check_terms(
+        &self,
+        kept: usize,
+        entries: &[Entry],
+        in_force: Term,
+    ) -> Result<(), JournalError> {
+        let mut previous = kept
+            .checked_sub(1)
+            .and_then(|at| self.positions.get(at))
+            .map(|position| position.term);
+        for entry in entries {
+            let index = entry.index.get();
+            if entry.term == Term::ZERO {
+                return Err(JournalError::ZeroTerm { index });
+            }
+            if let Some(previous) = previous
+                && entry.term < previous
+            {
+                return Err(JournalError::TermDecreases {
+                    index,
+                    term: entry.term,
+                    previous,
+                });
+            }
+            if entry.term > in_force {
+                return Err(JournalError::TermAhead {
+                    index,
+                    term: entry.term,
+                    in_force,
+                });
+            }
+            previous = Some(entry.term);
+        }
         Ok(())
     }
 

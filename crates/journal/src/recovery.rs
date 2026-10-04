@@ -10,8 +10,9 @@
 //! 2. Frames are read in order and applied to a [`LogicalLog`], exactly as live appends
 //!    are (CD-10). The first frame that fails validation (bad magic, a checksum, an
 //!    impossible length, the wrong kind or sequence) ends the durable prefix at the last
-//!    valid frame N. A checksum-valid frame of the right sequence whose batch is invalid,
-//!    or cannot apply (an impossible index relationship, DUR-6), is refused.
+//!    valid frame N. A checksum-valid frame of the right sequence is refused if its batch
+//!    is invalid, cannot apply (an impossible index or term relationship, DUR-6), or
+//!    votes for a node outside the genesis voters.
 //! 3. The **resync scan** then searches the entire remainder, at every offset, for a
 //!    complete, checksum-valid frame with a sequence greater than N (D-60). Its memory
 //!    is bounded by one frame; how far it looks is not.
@@ -33,7 +34,7 @@ use types::{
 };
 
 use crate::frame::{FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode, decode_header};
-use crate::log::{JournalError, LogicalLog, read_exact};
+use crate::log::{JournalError, LogBounds, LogicalLog, read_exact};
 use crate::record::{Genesis, GenesisMismatch, RaftBatch, RecordError};
 
 /// The longest frame in bytes: a full payload plus the header and trailer. A torn tail
@@ -115,13 +116,21 @@ pub enum RecoveryError {
         /// What is wrong with the batch.
         error: RecordError,
     },
-    /// A batch that cannot apply: an impossible index relationship, such as replacing
-    /// entries at or below the persisted commit (DUR-6).
+    /// A batch that cannot apply: an impossible index or term relationship, such as
+    /// replacing entries at or below the persisted commit, or a term or commit regression
+    /// (DUR-6, DUR-2).
     Apply {
         /// The frame's offset.
         at: u64,
         /// The rule it breaks.
         error: JournalError,
+    },
+    /// A hard state votes for a node outside the genesis voter set.
+    VoteForNonVoter {
+        /// The frame's offset.
+        at: u64,
+        /// The vote.
+        vote: NodeId,
     },
     /// Damage inside the durable prefix: beyond the first invalid frame lies a valid
     /// frame with a later sequence (D-60).
@@ -158,6 +167,7 @@ impl RecoveryError {
             | Self::Mismatch(_)
             | Self::Record { .. }
             | Self::Apply { .. }
+            | Self::VoteForNonVoter { .. }
             | Self::Corruption { .. }
             | Self::TailTooLong { .. }
             | Self::Storage(_) => false,
@@ -181,6 +191,11 @@ impl fmt::Display for RecoveryError {
             Self::Mismatch(error) => write!(f, "{error}"),
             Self::Record { at, error } => write!(f, "frame at offset {at}: {error}"),
             Self::Apply { at, error } => write!(f, "frame at offset {at}: {error}"),
+            Self::VoteForNonVoter { at, vote } => write!(
+                f,
+                "frame at offset {at}: a vote for node {}, outside the genesis voters",
+                vote.get()
+            ),
             Self::Corruption {
                 damaged_at,
                 valid_at,
@@ -330,11 +345,13 @@ fn judge_remainder(
     Ok(())
 }
 
-/// Recovers the journal of `journal_len` bytes for `node` under `config`, with an entry
-/// cache of `cache_bytes` (`Limit::EntryCacheBytes`). Only reads.
+/// Recovers the journal of `journal_len` bytes for `node` under `config`, into a logical
+/// log within `bounds` (in production, [`LogBounds::of`] the same config). Only reads.
 ///
 /// The caller has already taken the data-directory lock and refused a missing journal
-/// (§7.7 step 1).
+/// (§7.7 step 1). A journal at or past its hard stop still recovers: the recovered log
+/// keeps the stop, so the first append that would pass it is refused and the node
+/// re-enters `failed` (DM-7).
 ///
 /// # Errors
 ///
@@ -344,7 +361,7 @@ pub fn recover(
     journal_len: ByteCount,
     config: &Config,
     node: NodeId,
-    cache_bytes: u64,
+    bounds: LogBounds,
 ) -> Result<Recovered, RecoveryError> {
     let journal_len = journal_len.get();
     if journal_len == 0 {
@@ -365,7 +382,7 @@ pub fn recover(
     genesis
         .verify(config, node)
         .map_err(RecoveryError::Mismatch)?;
-    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), cache_bytes);
+    let mut log = LogicalLog::after_genesis(len_u64(header.frame_len()), bounds);
     while log.end() < journal_len {
         let at = log.end();
         let slot = read_slot(storage, at, journal_len)?;
@@ -381,7 +398,12 @@ pub fn recover(
         }
         let batch =
             RaftBatch::decode(&payload).map_err(|error| RecoveryError::Record { at, error })?;
-        log.apply(at, header.sequence(), len_u64(header.frame_len()), batch)
+        if let Some(vote) = batch.hard_state().and_then(|state| state.vote)
+            && !genesis.voters().contains(&vote)
+        {
+            return Err(RecoveryError::VoteForNonVoter { at, vote });
+        }
+        log.apply(at, header, batch)
             .map_err(|error| RecoveryError::Apply { at, error })?;
     }
     types::invariant!(

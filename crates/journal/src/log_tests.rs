@@ -12,7 +12,8 @@ use types::{
 };
 
 use crate::{
-    FrameKind, Genesis, GenesisMismatch, JournalError, LogicalLog, RaftBatch, decode, encode,
+    FrameKind, Genesis, GenesisMismatch, JournalError, LogBounds, LogicalLog, RaftBatch, decode,
+    decode_header, encode,
 };
 
 /// The repository's local cluster config.
@@ -62,13 +63,21 @@ fn batch(entries: Vec<Entry>, hard_state: Option<HardState>) -> RaftBatch {
     RaftBatch::new(entries, hard_state).unwrap()
 }
 
+/// Bounds of a `cache`-byte entry cache and a `stop`-byte journal hard stop.
+fn bounds(cache: u64, stop: u64) -> LogBounds {
+    LogBounds::new(ByteCount::new(cache), ByteCount::new(stop))
+}
+
 /// A logical log after a 100-byte genesis, and its journal, with a cache of `cache` bytes.
 fn fresh(cache: u64) -> (LogicalLog, Memory) {
     let memory = Memory {
         bytes: vec![0; 100],
         ..Memory::default()
     };
-    (LogicalLog::after_genesis(100, cache), memory)
+    (
+        LogicalLog::after_genesis(100, bounds(cache, 1 << 40)),
+        memory,
+    )
 }
 
 /// Appends `batch` to `log` and writes its frame to `memory`.
@@ -88,7 +97,7 @@ fn appends_assign_consecutive_sequences_and_offsets() {
     append(
         &mut log,
         &mut memory,
-        batch(vec![entry(1, 1, 3), entry(2, 1, 3)], None),
+        batch(vec![entry(1, 1, 3), entry(2, 1, 3)], Some(state(1, 0))),
     );
     append(
         &mut log,
@@ -130,7 +139,10 @@ fn a_batch_at_or_below_the_last_index_replaces_the_suffix() {
     append(
         &mut log,
         &mut memory,
-        batch(vec![entry(2, 2, 5), entry(3, 2, 5), entry(4, 2, 5)], None),
+        batch(
+            vec![entry(2, 2, 5), entry(3, 2, 5), entry(4, 2, 5)],
+            Some(state(2, 1)),
+        ),
     );
     assert_eq!(
         log.last_index().get(),
@@ -150,7 +162,11 @@ fn a_batch_at_or_below_the_last_index_replaces_the_suffix() {
             "rule: the replacing entries are the log's from the truncation point"
         );
     }
-    append(&mut log, &mut memory, batch(vec![entry(3, 3, 1)], None));
+    append(
+        &mut log,
+        &mut memory,
+        batch(vec![entry(3, 3, 1)], Some(state(3, 1))),
+    );
     assert_eq!(
         log.last_index().get(),
         3,
@@ -170,44 +186,55 @@ fn every_refusal_leaves_the_log_unchanged() {
     let before = log.clone();
     let end = log.end();
     let next = log.next_sequence();
+    let apply = |offset: u64, kind: FrameKind, sequence: u64, batch: RaftBatch| {
+        let frame = encode(kind, sequence, &batch.encode()).unwrap();
+        log.clone()
+            .apply(offset, decode_header(&frame).unwrap(), batch)
+    };
+    let raft = FrameKind::RaftBatch;
     let cases = [
         (
-            log.clone()
-                .apply(end, next + 1, 40, batch(vec![entry(3, 1, 1)], None)),
+            apply(
+                end,
+                FrameKind::Genesis,
+                next,
+                batch(vec![entry(3, 1, 1)], None),
+            ),
+            JournalError::NotRaftBatch { offset: end },
+        ),
+        (
+            apply(end, raft, next + 1, batch(vec![entry(3, 1, 1)], None)),
             JournalError::Sequence {
                 expected: next,
                 found: next + 1,
             },
         ),
         (
-            log.clone()
-                .apply(end + 1, next, 40, batch(vec![entry(3, 1, 1)], None)),
+            apply(end + 1, raft, next, batch(vec![entry(3, 1, 1)], None)),
             JournalError::Offset {
                 expected: end,
                 found: end + 1,
             },
         ),
         (
-            log.clone()
-                .apply(end, next, 40, batch(vec![entry(4, 1, 1)], None)),
+            apply(end, raft, next, batch(vec![entry(4, 1, 1)], None)),
             JournalError::Gap {
                 expected: 3,
                 found: 4,
             },
         ),
         (
-            log.clone()
-                .apply(end, next, 40, batch(vec![entry(2, 2, 1)], None)),
+            apply(end, raft, next, batch(vec![entry(2, 2, 1)], None)),
             JournalError::TruncatesCommitted {
                 first: 2,
                 commit: 2,
             },
         ),
         (
-            log.clone().apply(
+            apply(
                 end,
+                raft,
                 next,
-                40,
                 batch(vec![entry(3, 1, 1)], Some(state(1, 4))),
             ),
             JournalError::CommitBeyondLog { commit: 4, last: 3 },
@@ -231,13 +258,10 @@ fn eviction_never_changes_results() {
     let (mut roomy, mut memory) = fresh(1 << 20);
     let (mut tiny, _) = fresh(100);
     for index in 1..=40_u64 {
+        let term = 1 + index / 10;
         let next = batch(
-            vec![entry(
-                index,
-                1 + index / 10,
-                usize::try_from(index).unwrap(),
-            )],
-            None,
+            vec![entry(index, term, usize::try_from(index).unwrap())],
+            Some(state(term, 0)),
         );
         let frame = roomy.append(next.clone()).unwrap();
         memory.bytes.extend_from_slice(&frame);
@@ -247,8 +271,8 @@ fn eviction_never_changes_results() {
             "rule: the cache stays within its bound (CD-9)"
         );
     }
-    append(&mut roomy, &mut memory, batch(vec![entry(30, 9, 7)], None));
-    let truncating = batch(vec![entry(30, 9, 7)], None);
+    let truncating = batch(vec![entry(30, 9, 7)], Some(state(9, 0)));
+    append(&mut roomy, &mut memory, truncating.clone());
     tiny.append(truncating).unwrap();
     for index in 1..=30_u64 {
         let at = EntryIndex::new(index).unwrap();
@@ -268,7 +292,7 @@ fn eviction_never_changes_results() {
 fn a_miss_reads_its_frame_in_chunks_of_at_most_256_kib() {
     let (mut log, mut memory) = fresh(0);
     let large: Vec<Entry> = (1..=15).map(|index| entry(index, 1, 65_000)).collect();
-    append(&mut log, &mut memory, batch(large, None));
+    append(&mut log, &mut memory, batch(large, Some(state(1, 0))));
     let read = log.entry(EntryIndex::new(15).unwrap(), &memory).unwrap();
     assert_eq!(read, entry(15, 1, 65_000));
     let reads = memory.reads.borrow();
@@ -285,7 +309,11 @@ fn a_miss_reads_its_frame_in_chunks_of_at_most_256_kib() {
 #[test]
 fn reads_report_storage_and_index_failures() {
     let (mut log, mut memory) = fresh(0);
-    append(&mut log, &mut memory, batch(vec![entry(1, 1, 4)], None));
+    append(
+        &mut log,
+        &mut memory,
+        batch(vec![entry(1, 1, 4)], Some(state(1, 0))),
+    );
     assert_eq!(
         log.entry(EntryIndex::new(2).unwrap(), &memory),
         Err(JournalError::NotInLog { index: 2 }),
@@ -378,12 +406,261 @@ fn a_replaced_entry_is_never_served_from_a_stale_cache() {
     append(
         &mut log,
         &mut memory,
-        batch(vec![entry(1, 1, 1), entry(2, 1, 1)], None),
+        batch(vec![entry(1, 1, 1), entry(2, 1, 1)], Some(state(1, 0))),
     );
-    append(&mut log, &mut memory, batch(vec![entry(2, 2, 500)], None));
+    append(
+        &mut log,
+        &mut memory,
+        batch(vec![entry(2, 2, 500)], Some(state(2, 0))),
+    );
     assert_eq!(
         log.entry(EntryIndex::new(2).unwrap(), &memory),
         Ok(entry(2, 2, 500)),
         "rule: after logical truncation the replacing entry is read, never the replaced one"
     );
+}
+
+/// A hard state in `term` with `vote`, committing `commit`.
+fn voted(term: u64, vote: Option<u64>, commit: u64) -> HardState {
+    HardState {
+        term: Term::new(term).unwrap(),
+        vote: vote.map(|id| NodeId::new(id).unwrap()),
+        commit: LogIndex::new(commit).unwrap(),
+    }
+}
+
+/// Appends `batches` to a fresh log, then asserts that appending `refused` fails with
+/// `expected` and changes nothing.
+fn assert_refused(
+    batches: Vec<RaftBatch>,
+    refused: RaftBatch,
+    expected: &JournalError,
+    rule: &str,
+) {
+    let (mut log, mut memory) = fresh(1 << 20);
+    for batch in batches {
+        append(&mut log, &mut memory, batch);
+    }
+    let before = log.clone();
+    assert_eq!(log.append(refused), Err(expected.clone()), "rule: {rule}");
+    assert_eq!(log, before, "rule: a refused frame changes nothing; {rule}");
+}
+
+#[test]
+fn impossible_hard_states_are_refused_and_change_nothing() {
+    // br-n60a's counterexample 1: entries 1-3 committed, then a commit regression, then a
+    // replacement from index 2 that the regression would have let through.
+    let committed = || {
+        vec![batch(
+            vec![entry(1, 1, 1), entry(2, 1, 1), entry(3, 1, 1)],
+            Some(state(1, 3)),
+        )]
+    };
+    assert_refused(
+        committed(),
+        batch(Vec::new(), Some(state(1, 1))),
+        &JournalError::CommitRegression {
+            persisted: 3,
+            found: 1,
+        },
+        "a persisted commit never goes back (§7.6)",
+    );
+    assert_refused(
+        committed(),
+        batch(vec![entry(2, 2, 1)], Some(state(2, 1))),
+        &JournalError::TruncatesCommitted {
+            first: 2,
+            commit: 3,
+        },
+        "committed entries are never replaced (§7.6)",
+    );
+    // Counterexample 2: a second vote in a term, and a term regression.
+    let term_five = || vec![batch(Vec::new(), Some(voted(5, Some(2), 0)))];
+    assert_refused(
+        term_five(),
+        batch(Vec::new(), Some(voted(5, Some(3), 0))),
+        &JournalError::VoteChanged {
+            term: Term::new(5).unwrap(),
+            persisted: NodeId::new(2).unwrap(),
+            found: NodeId::new(3).ok(),
+        },
+        "a vote never changes within its term (DUR-2)",
+    );
+    assert_refused(
+        term_five(),
+        batch(Vec::new(), Some(voted(5, None, 0))),
+        &JournalError::VoteChanged {
+            term: Term::new(5).unwrap(),
+            persisted: NodeId::new(2).unwrap(),
+            found: None,
+        },
+        "a vote is never withdrawn within its term (DUR-2)",
+    );
+    assert_refused(
+        term_five(),
+        batch(Vec::new(), Some(voted(3, Some(1), 0))),
+        &JournalError::TermRegression {
+            persisted: Term::new(5).unwrap(),
+            found: Term::new(3).unwrap(),
+        },
+        "a persisted term never goes back (DUR-2)",
+    );
+}
+
+#[test]
+fn impossible_entry_terms_are_refused_and_change_nothing() {
+    // Entry terms: never 0, never decreasing, never ahead of the term in force.
+    assert_refused(
+        Vec::new(),
+        batch(vec![entry(1, 0, 1)], Some(state(1, 0))),
+        &JournalError::ZeroTerm { index: 1 },
+        "only the dummy index 0 has term 0",
+    );
+    assert_refused(
+        Vec::new(),
+        batch(vec![entry(1, 2, 1), entry(2, 1, 1)], Some(state(2, 0))),
+        &JournalError::TermDecreases {
+            index: 2,
+            term: Term::new(1).unwrap(),
+            previous: Term::new(2).unwrap(),
+        },
+        "entry terms never decrease within a batch",
+    );
+    assert_refused(
+        vec![batch(vec![entry(1, 2, 1)], Some(state(2, 0)))],
+        batch(vec![entry(2, 1, 1)], None),
+        &JournalError::TermDecreases {
+            index: 2,
+            term: Term::new(1).unwrap(),
+            previous: Term::new(2).unwrap(),
+        },
+        "entry terms never decrease from the kept entry before the batch",
+    );
+    // Counterexample 3: terms ahead of the persisted term.
+    assert_refused(
+        vec![batch(Vec::new(), Some(state(2, 0)))],
+        batch(vec![entry(1, 9, 1), entry(2, 4, 1)], None),
+        &JournalError::TermAhead {
+            index: 1,
+            term: Term::new(9).unwrap(),
+            in_force: Term::new(2).unwrap(),
+        },
+        "an entry's term is at most the persisted term",
+    );
+    assert_refused(
+        Vec::new(),
+        batch(vec![entry(1, 3, 1)], Some(state(2, 0))),
+        &JournalError::TermAhead {
+            index: 1,
+            term: Term::new(3).unwrap(),
+            in_force: Term::new(2).unwrap(),
+        },
+        "an entry's term is at most its batch's hard-state term",
+    );
+    // The possible histories next to them are accepted.
+    let (mut log, mut memory) = fresh(1 << 20);
+    for state in [
+        voted(4, None, 0),
+        voted(4, Some(1), 0),
+        voted(5, Some(3), 0),
+    ] {
+        append(&mut log, &mut memory, batch(Vec::new(), Some(state)));
+    }
+    append(
+        &mut log,
+        &mut memory,
+        batch(vec![entry(1, 2, 1), entry(2, 5, 1)], None),
+    );
+    assert_eq!(
+        (log.hard_state(), log.last_index().get()),
+        (voted(5, Some(3), 0), 2),
+        "rule: a first vote in a term, a new vote in a new term, and entries up to the \
+         term in force are possible"
+    );
+}
+
+#[test]
+fn the_hard_stop_refuses_before_changing_anything() {
+    let config = Config::parse(LOCAL, Path::new("config")).unwrap();
+    assert_eq!(
+        LogBounds::of(&config),
+        bounds(8 << 20, 4 << 30),
+        "rule: production bounds are the fixed entry-cache bound and max_journal_bytes \
+         (DM-7, §7.11)"
+    );
+    let first = batch(vec![entry(1, 1, 10)], Some(state(1, 0)));
+    let second = batch(vec![entry(2, 1, 20)], None);
+    let frame_len = |sequence: u64, batch: &RaftBatch| {
+        u64::try_from(
+            encode(FrameKind::RaftBatch, sequence, &batch.encode())
+                .unwrap()
+                .len(),
+        )
+        .unwrap()
+    };
+    let full = 100 + frame_len(2, &first) + frame_len(3, &second);
+    for stop in [full - 1, full, full + 1] {
+        let mut log = LogicalLog::after_genesis(100, bounds(1 << 20, stop));
+        log.append(first.clone()).unwrap();
+        let before = log.clone();
+        let result = log.append(second.clone());
+        if stop < full {
+            assert_eq!(
+                result,
+                Err(JournalError::HardStop {
+                    end: before.end(),
+                    frame_len: frame_len(3, &second),
+                    limit: stop
+                }),
+                "rule: a frame that would end past the stop ({stop}) is refused (DM-7)"
+            );
+            assert_eq!(log, before, "rule: the refusal comes before any change");
+        } else {
+            assert!(
+                result.is_ok(),
+                "rule: a frame ending at or before the stop ({stop}) is appended"
+            );
+        }
+    }
+    let mut log = LogicalLog::after_genesis(100, bounds(1 << 20, full));
+    log.append(first).unwrap();
+    log.append(second).unwrap();
+    let third = batch(Vec::new(), Some(state(1, 1)));
+    assert_eq!(
+        log.append(third.clone()),
+        Err(JournalError::HardStop {
+            end: full,
+            frame_len: frame_len(4, &third),
+            limit: full
+        }),
+        "rule: at the stop every further append is refused: the node stays failed (DM-7)"
+    );
+}
+
+#[test]
+fn the_cache_bound_holds_at_n_minus_one_n_and_n_plus_one() {
+    // Three entries of 100 bytes each (32 fixed + 68 command bytes).
+    for (limit, cached) in [(299, 200), (300, 300), (301, 300), (99, 0), (100, 100)] {
+        let (mut log, mut memory) = fresh(limit);
+        append(
+            &mut log,
+            &mut memory,
+            batch(
+                (1..=3).map(|index| entry(index, 1, 68)).collect(),
+                Some(state(1, 0)),
+            ),
+        );
+        assert_eq!(
+            log.cached_bytes(),
+            cached,
+            "rule: a {limit}-byte cache holds {cached} bytes of three 100-byte entries (CD-9)"
+        );
+        for index in 1..=3 {
+            assert_eq!(
+                log.entry(EntryIndex::new(index).unwrap(), &memory).unwrap(),
+                entry(index, 1, 68),
+                "rule: eviction never changes results; limit={limit} index={index}"
+            );
+        }
+    }
 }

@@ -12,15 +12,15 @@ use types::{
 };
 
 use crate::{
-    FrameKind, Genesis, GenesisMismatch, JournalError, LogicalLog, MAX_FRAME_LEN, RaftBatch,
-    Recovered, RecoveryError, encode, recover,
+    FrameKind, Genesis, GenesisMismatch, JournalError, LogBounds, LogicalLog, MAX_FRAME_LEN,
+    RaftBatch, Recovered, RecoveryError, encode, recover,
 };
 
 /// The repository's local cluster config.
 const LOCAL: &str = include_str!("../../../config/local.toml");
 
-/// The entry cache's size in these tests.
-const CACHE: u64 = 1 << 20;
+/// The bounds in these tests: a 1 MiB entry cache and a hard stop far away.
+const BOUNDS: LogBounds = LogBounds::new(ByteCount::new(1 << 20), ByteCount::new(1 << 40));
 
 /// A journal held in memory: the byte-storage port's read side, recording each read's
 /// length.
@@ -112,7 +112,7 @@ impl Journal {
         let node = NodeId::new(2).unwrap();
         let genesis = Genesis::new(&config, node, InstanceId::from_bytes([7; 16])).unwrap();
         let mut bytes = encode(FrameKind::Genesis, 1, &genesis.encode()).unwrap();
-        let mut live = LogicalLog::after_genesis(len(&bytes), CACHE);
+        let mut live = LogicalLog::after_genesis(len(&bytes), BOUNDS);
         let mut starts = Vec::new();
         for batch in batches {
             starts.push(live.end());
@@ -146,7 +146,7 @@ impl Journal {
             ByteCount::new(len(bytes)),
             &self.config,
             self.node,
-            CACHE,
+            BOUNDS,
         )
     }
 }
@@ -618,7 +618,7 @@ fn reads_are_bounded_and_storage_failures_refuse() {
         ..Memory::default()
     };
     let journal_len = ByteCount::new(len(&memory.bytes));
-    let recovered = recover(&memory, journal_len, &journal.config, journal.node, CACHE).unwrap();
+    let recovered = recover(&memory, journal_len, &journal.config, journal.node, BOUNDS).unwrap();
     assert_eq!(
         recovered.truncate_to(),
         Some(ByteCount::new(big)),
@@ -642,7 +642,7 @@ fn reads_are_bounded_and_storage_failures_refuse() {
     };
     let journal_len = ByteCount::new(len(&journal.bytes));
     assert_eq!(
-        recover(&failing, journal_len, &journal.config, journal.node, CACHE),
+        recover(&failing, journal_len, &journal.config, journal.node, BOUNDS),
         Err(RecoveryError::Storage(StorageError::Failed)),
         "rule: a failed read refuses the start"
     );
@@ -651,7 +651,7 @@ fn reads_are_bounded_and_storage_failures_refuse() {
         short: true,
         ..Memory::default()
     };
-    let result = recover(&short, journal_len, &journal.config, journal.node, CACHE);
+    let result = recover(&short, journal_len, &journal.config, journal.node, BOUNDS);
     assert!(
         is_short_read(&result),
         "rule: a short read is a storage error, never a torn tail: {result:?}"
@@ -699,4 +699,90 @@ fn recovery_converges_and_appends_continue_the_live_log() {
         (&journal.live, None),
         "rule: the continued journal recovers to the live log"
     );
+}
+
+#[test]
+fn an_impossible_history_in_the_journal_is_refused() {
+    let journal = Journal::new(vec![batch(
+        vec![entry(1, 1, 10), entry(2, 1, 10), entry(3, 1, 10)],
+        Some(state(1, 3)),
+    )]);
+    let at = len(&journal.bytes);
+    let with = |hard_state: HardState| {
+        let mut bytes = journal.bytes.clone();
+        let frame = batch(Vec::new(), Some(hard_state)).encode();
+        bytes.extend_from_slice(&encode(FrameKind::RaftBatch, 3, &frame).unwrap());
+        bytes
+    };
+    let refused = journal.recover(&with(state(1, 1))).unwrap_err();
+    assert_eq!(
+        refused,
+        RecoveryError::Apply {
+            at,
+            error: JournalError::CommitRegression {
+                persisted: 3,
+                found: 1
+            }
+        },
+        "rule: a commit regression in the journal is an impossible relationship: refuse \
+         (br-n60a counterexample 1, §7.6)"
+    );
+    assert!(!refused.permits_init(), "rule: never re-initialised");
+    let vote = |id: u64| HardState {
+        term: Term::new(1).unwrap(),
+        vote: NodeId::new(id).ok(),
+        commit: LogIndex::new(3).unwrap(),
+    };
+    assert_eq!(
+        journal.recover(&with(vote(9))),
+        Err(RecoveryError::VoteForNonVoter {
+            at,
+            vote: NodeId::new(9).unwrap()
+        }),
+        "rule: a vote for a node outside the genesis voters is refused"
+    );
+    assert_eq!(
+        journal.recover(&with(vote(3))).unwrap().log().hard_state(),
+        vote(3),
+        "rule: a vote for a voter recovers"
+    );
+}
+
+#[test]
+fn the_recovered_log_keeps_the_hard_stop() {
+    let journal = Journal::new(standard());
+    let end = len(&journal.bytes);
+    let next = batch(vec![entry(5, 2, 10)], None);
+    let next_len = len(&encode(FrameKind::RaftBatch, 5, &next.encode()).unwrap());
+    for stop in [end - 1, end + next_len - 1, end + next_len] {
+        let memory = Memory {
+            bytes: journal.bytes.clone(),
+            ..Memory::default()
+        };
+        let bounds = LogBounds::new(ByteCount::new(1 << 20), ByteCount::new(stop));
+        let recovered = recover(
+            &memory,
+            ByteCount::new(end),
+            &journal.config,
+            journal.node,
+            bounds,
+        )
+        .unwrap();
+        let (_, mut log) = recovered.into_parts();
+        let result = log.append(next.clone());
+        if stop < end + next_len {
+            assert_eq!(
+                result,
+                Err(JournalError::HardStop {
+                    end,
+                    frame_len: next_len,
+                    limit: stop
+                }),
+                "rule: a journal recovered under a {stop}-byte stop refuses the first append \
+                 that would pass it, so the node re-enters failed (DM-7)"
+            );
+        } else {
+            assert!(result.is_ok(), "rule: an append ending at the stop fits");
+        }
+    }
 }
