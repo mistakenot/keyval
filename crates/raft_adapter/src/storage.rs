@@ -23,6 +23,13 @@ use crate::convert::{entry_to_library, hard_state_to_library};
 ///   gives the library no input and no advance meanwhile, and every library read asserts
 ///   the seal is off (invariant `RA-VIEW-SEALED`), so nothing can read them early.
 ///
+/// - **Bounded scans (W02 audit U-1, U-2; §7.3).** On every election attempt (`hup`) and on a
+///   commit fast-forwarded by a vote (`maybe_commit_by_vote`), raft-rs reads the whole
+///   committed-but-unapplied range, however long, only to count pending configuration changes
+///   (`num_pending_conf`). v1's log never holds one: membership is static, `propose` appends
+///   only normal entries, admission refuses any other kind from peers (br-xx08), and
+///   `RA-ENTRY` fires before one could be persisted. So for those two scans the exact answer
+///   is no entries at all, which costs no memory and no journal read.
 /// - **A failed read fails the node, never the library** (§7.11, CD-6). raft-rs panics on
 ///   almost every storage error, but it accepts a short read like a size-capped one. A journal
 ///   read that fails is therefore recorded as a [`ReadFailure`], and the library gets only the
@@ -126,6 +133,16 @@ impl<R> JournalStorage<R> {
     }
 }
 
+/// Whether the library reads entries only to count pending configuration changes: the
+/// election attempt's scan (`hup`, U-1) or a vote's commit fast-forward (`CommitByVote`, U-2).
+/// raft-rs 0.7 keeps the context's kind crate-private, so its `Debug` form identifies it. The
+/// vendored source is pinned byte for byte (RAFT-VENDOR), and `large_log_tests` fails if the
+/// scans ever read the log again.
+fn pending_conf_scan(context: &GetEntriesContext) -> bool {
+    let kind = format!("{context:?}");
+    kind == "GetEntriesContext(TransferLeader)" || kind == "GetEntriesContext(CommitByVote)"
+}
+
 /// The library's "not in storage" error.
 const fn unavailable() -> raft::Error {
     raft::Error::Store(StorageError::Unavailable)
@@ -149,9 +166,12 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
         low: u64,
         high: u64,
         max_size: impl Into<Option<u64>>,
-        _context: GetEntriesContext,
+        context: GetEntriesContext,
     ) -> raft::Result<Vec<eraftpb::Entry>> {
         self.check_visible("entries");
+        if pending_conf_scan(&context) {
+            return Ok(Vec::new());
+        }
         let max_size = max_size.into();
         let mut log = self.log.borrow_mut();
         let mut entries = Vec::new();

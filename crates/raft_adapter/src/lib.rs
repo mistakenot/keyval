@@ -95,12 +95,16 @@
 mod admit;
 #[cfg(test)]
 mod admit_tests;
+#[cfg(test)]
+mod cluster_tests;
 mod config;
 mod convert;
 mod entropy;
 mod envelope;
 #[cfg(test)]
 mod envelope_tests;
+#[cfg(test)]
+mod large_log_tests;
 mod node;
 #[cfg(test)]
 mod node_tests;

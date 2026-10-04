@@ -1253,6 +1253,39 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 6,
     },
+    CheckDef {
+        id: "RAFT-BOUNDS",
+        summary: "however far commit runs ahead of applied, the library's election-attempt and \
+                  vote-commit scans for pending configuration changes read nothing from the \
+                  journal (W02 audit U-1, U-2), and a Ready hands over committed entries only \
+                  within max_committed_size_per_ready (U-3), on a 2,000-entry log (§7.3, §7.11)",
+        kind: Kind::TestGroup,
+        covers: &["CD-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "raft_adapter",
+            filters: &["large_log_tests::"],
+        },
+        min_cases: 3,
+    },
+    CheckDef {
+        id: "RAFT-CLUSTER",
+        summary: "scripted in-memory clusters of Ready loops, one and three voters, elect one \
+                  leader, commit and apply the same entries at the same indices in log order on \
+                  every node (C-1), and every entry committed before a restart, of a lone voter \
+                  through journal recovery or of a majority, is applied again at the same index \
+                  (C-2) (§7.4, D-45)",
+        kind: Kind::TestGroup,
+        covers: &["C-1", "C-2"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "raft_adapter",
+            filters: &["cluster_tests::"],
+        },
+        min_cases: 3,
+    },
 ];
 
 /// Outcome of one requested check.

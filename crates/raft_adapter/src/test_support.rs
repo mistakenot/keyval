@@ -39,11 +39,13 @@ impl Entropy for Seeded {
 }
 
 /// An in-memory journal, shared between a test that appends frames and the storage view
-/// that reads them back. A test can make every later read fail, as an I/O error would.
+/// that reads them back. A test can make every later read fail, as an I/O error would, and
+/// can count the bytes read back.
 #[derive(Clone, Debug, Default)]
 pub struct Journal {
     bytes: Rc<RefCell<Vec<u8>>>,
     failing: Rc<Cell<bool>>,
+    read: Rc<Cell<u64>>,
 }
 
 impl Journal {
@@ -63,6 +65,11 @@ impl Journal {
     pub fn fail_reads(&self) {
         self.failing.set(true);
     }
+
+    /// The bytes read back since the journal was made.
+    pub fn bytes_read(&self) -> u64 {
+        self.read.get()
+    }
 }
 
 impl JournalRead for Journal {
@@ -70,6 +77,7 @@ impl JournalRead for Journal {
         if self.failing.get() {
             return Err(StorageError::Failed);
         }
+        self.read.set(self.read.get() + u64::from(len.get()));
         let bytes = self.bytes.borrow();
         let start = usize::try_from(offset.get()).map_err(|_| StorageError::Failed)?;
         let wanted = usize::try_from(len.get()).map_err(|_| StorageError::Failed)?;
