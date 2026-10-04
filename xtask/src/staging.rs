@@ -115,8 +115,10 @@ pub fn stage(
     Ok(staging)
 }
 
-/// The first work item whose `accept` list runs `./dev check` with `id`.
-fn work_item_for(id: &str, items: &[WorkItem]) -> Option<String> {
+/// The first work item whose `accept` list runs `./dev check` with `id`: any selector
+/// naming it among its arguments, so multi-ID and `--case` selectors count too. REGISTRY-FILES
+/// matches a planned row the same way (br-cirk).
+pub fn work_item_for(id: &str, items: &[WorkItem]) -> Option<String> {
     items
         .iter()
         .find(|item| {

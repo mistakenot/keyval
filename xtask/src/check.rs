@@ -463,8 +463,10 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "REGISTRY-FILES",
-        summary: "registry/requirements.toml equals PLAN.md §6 with derived statuses, and \
-                  registry/checks.toml mirrors the check catalogue",
+        summary: "registry/requirements.toml equals PLAN.md §6 with derived statuses; \
+                  registry/checks.toml mirrors the catalogue row for row, in order, and every \
+                  other row is a planned check with a floor that runs its own ID and is named \
+                  by an accept list as staging matches it; a broken fixture fails each rule",
         kind: Kind::TestGroup,
         covers: &["P5"],
         class: ClaimClass::Invariant,
@@ -473,7 +475,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["registry::files::"],
         },
-        min_cases: 4,
+        min_cases: 14,
     },
     CheckDef {
         id: "REGISTRY",

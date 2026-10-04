@@ -503,7 +503,7 @@ title = "Robot mode"
 mod files {
     // check: REGISTRY-FILES
     use super::*;
-    use crate::check::CATALOGUE;
+    use crate::check::{CATALOGUE, CheckDef};
     use crate::test_support::workspace_root;
     use std::fs;
 
@@ -656,81 +656,428 @@ mod files {
         );
     }
 
+    /// A check's declared fields, as its `checks.toml` row records them.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Declared {
+        summary: String,
+        kind: String,
+        covers: Vec<String>,
+        class: String,
+        tier: String,
+        run: String,
+        min_cases: u32,
+    }
+
+    fn declared(def: &CheckDef) -> Declared {
+        let name = |value: serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+        Declared {
+            summary: def.summary.to_owned(),
+            kind: name(serde_json::to_value(def.kind).unwrap()),
+            covers: def.covers.iter().map(|c| (*c).to_owned()).collect(),
+            class: name(serde_json::to_value(def.class).unwrap()),
+            tier: name(serde_json::to_value(def.tier).unwrap()),
+            run: format!("./dev check {}", def.id),
+            min_cases: def.min_cases,
+        }
+    }
+
+    fn recorded(row: &CheckEntry) -> Declared {
+        Declared {
+            summary: row.summary.clone(),
+            kind: row.kind.clone(),
+            covers: row.covers.clone(),
+            class: row.class.clone(),
+            tier: row.tier.clone(),
+            run: row.run.clone(),
+            min_cases: row.min_cases,
+        }
+    }
+
+    /// Every way the `checks` text fails to mirror `catalogue` under the `workgraph` text, as
+    /// (rule, detail) pairs; empty when it mirrors. Implemented rows mirror the catalogue
+    /// field for field, in catalogue order, one per check. A planned row has no executable
+    /// yet, so it is not in the catalogue: it runs its own check, has a floor, and is named
+    /// by the accept list of the work item that implements it, matched exactly as staging
+    /// matches it (W05.2's planned rows; owner decision on br-w10-3-differential-tests-6ez;
+    /// br-cirk). A repeated ID is reported once and its later rows are not judged further.
+    fn checks_file_violations(
+        checks: &str,
+        workgraph: &str,
+        catalogue: &[CheckDef],
+    ) -> Vec<(&'static str, String)> {
+        let file: ChecksFile = match toml::from_str(checks) {
+            Ok(file) => file,
+            Err(err) => return vec![("parse", err.to_string())],
+        };
+        let graph = match crate::workgraph::parse(workgraph) {
+            Ok(graph) => graph,
+            Err(err) => return vec![("workgraph", err)],
+        };
+        let mut violations = Vec::new();
+        if file.schema != "keyval.registry.checks/v1" {
+            violations.push(("schema", file.schema.clone()));
+        }
+        let mut seen = BTreeSet::new();
+        let mut implemented = Vec::new();
+        for row in &file.check {
+            if !seen.insert(row.id.as_str()) {
+                violations.push(("duplicate", row.id.clone()));
+                continue;
+            }
+            if row.min_cases == 0 {
+                violations.push(("zero-floor", row.id.clone()));
+            }
+            if !row.api.is_empty() || !row.catches.is_empty() {
+                violations.push(("api-or-catches", row.id.clone()));
+            }
+            let def = catalogue.iter().find(|def| def.id == row.id);
+            match (row.status.as_str(), def) {
+                ("implemented", Some(def)) => {
+                    implemented.push(def.id);
+                    let (observed, expected) = (recorded(row), declared(def));
+                    if observed != expected {
+                        violations.push((
+                            "mirror",
+                            format!("{}: {observed:?} != {expected:?}", row.id),
+                        ));
+                    }
+                }
+                ("implemented", None) => {
+                    violations.push(("uncatalogued-implemented", row.id.clone()));
+                }
+                ("planned", Some(_)) => violations.push(("planned-in-catalogue", row.id.clone())),
+                ("planned", None) => {
+                    if row.run != format!("./dev check {}", row.id) {
+                        violations.push(("planned-run", format!("{}: {}", row.id, row.run)));
+                    }
+                    if crate::staging::work_item_for(&row.id, &graph).is_none() {
+                        violations.push(("orphan-planned", row.id.clone()));
+                    }
+                }
+                (other, _) => violations.push(("status", format!("{}: {other:?}", row.id))),
+            }
+        }
+        for def in catalogue {
+            if !implemented.contains(&def.id) {
+                violations.push(("missing-row", def.id.to_owned()));
+            }
+        }
+        let order: Vec<&str> = catalogue
+            .iter()
+            .map(|def| def.id)
+            .filter(|id| implemented.contains(id))
+            .collect();
+        if implemented != order {
+            violations.push((
+                "order",
+                format!("{implemented:?}, catalogue order {order:?}"),
+            ));
+        }
+        violations
+    }
+
     #[test]
     fn checks_toml_mirrors_the_bootstrap_catalogue() {
-        let file: ChecksFile =
-            toml::from_str(&read(CHECKS)).unwrap_or_else(|err| panic!("{CHECKS}: {err}"));
-        assert_eq!(file.schema, "keyval.registry.checks/v1");
-        // Implemented rows mirror the catalogue exactly, in order. A planned row has no
-        // executable yet, so it is not in the catalogue; the work item whose accept list
-        // names it will implement it (W05.2's planned rows; owner decision on
-        // br-w10-3-differential-tests-6ez).
-        let (implemented, planned): (Vec<&CheckEntry>, Vec<&CheckEntry>) =
-            file.check.iter().partition(|c| c.status == "implemented");
-        let ids: Vec<&str> = implemented.iter().map(|c| c.id.as_str()).collect();
-        let catalogue: Vec<&str> = CATALOGUE.iter().map(|def| def.id).collect();
-        assert_eq!(
-            ids, catalogue,
-            "rule: checks.toml has one implemented row per catalogue check, in catalogue \
-             order; a new check lands with its row (§11.5 rule 12)"
+        let violations = checks_file_violations(&read(CHECKS), &read(WORKGRAPH), CATALOGUE);
+        assert!(
+            violations.is_empty(),
+            "rule: checks.toml has one implemented row per catalogue check, mirroring it, in \
+             catalogue order, and every other row is planned, runs its own check, has a floor \
+             and is named by the accept list of the work item that implements it (§10.13, \
+             §11.5 rule 12, D-56): {violations:?}"
         );
-        let graph = crate::workgraph::parse(&read("registry/workgraph.toml"))
-            .unwrap_or_else(|err| panic!("registry/workgraph.toml: {err}"));
-        let accepted: BTreeSet<&str> = graph
-            .iter()
-            .flat_map(|item| item.accept.iter().map(String::as_str))
-            .collect();
-        for row in &planned {
-            assert!(
-                row.status == "planned"
-                    && row.min_cases > 0
-                    && !catalogue.contains(&row.id.as_str())
-                    && accepted.contains(format!("./dev check {}", row.id).as_str()),
-                "rule: every other row is planned, has a floor, has no catalogue entry yet, and \
-                 is named by the accept list of the work item that implements it; {row:?}"
-            );
-            assert!(
-                row.api.is_empty() && row.catches.is_empty(),
-                "rule: no current check names API operations or catches bug variants; {row:?}"
-            );
+    }
+
+    /// One `[[check]]` row of a fixture registry.
+    #[derive(Clone, Debug)]
+    struct Row {
+        id: String,
+        declared: Declared,
+        status: String,
+    }
+
+    impl Row {
+        fn implemented(def: &CheckDef) -> Self {
+            Self {
+                id: def.id.to_owned(),
+                declared: declared(def),
+                status: "implemented".to_owned(),
+            }
         }
-        for (row, def) in implemented.iter().zip(CATALOGUE) {
-            let json = |value: serde_json::Value| value.as_str().unwrap_or_default().to_owned();
-            let expected = (
-                def.summary.to_owned(),
-                json(serde_json::to_value(def.kind).unwrap()),
-                def.covers
-                    .iter()
-                    .map(|c| (*c).to_owned())
-                    .collect::<Vec<_>>(),
-                json(serde_json::to_value(def.class).unwrap()),
-                json(serde_json::to_value(def.tier).unwrap()),
-                format!("./dev check {}", def.id),
-                def.min_cases,
+
+        fn planned(id: &str) -> Self {
+            Self {
+                id: id.to_owned(),
+                declared: Declared {
+                    summary: "a check its work item will implement".to_owned(),
+                    kind: "test_group".to_owned(),
+                    covers: vec!["T-7".to_owned()],
+                    class: "invariant".to_owned(),
+                    tier: "T0".to_owned(),
+                    run: format!("./dev check {id}"),
+                    min_cases: 3,
+                },
+                status: "planned".to_owned(),
+            }
+        }
+    }
+
+    /// The fixture registry's `checks.toml` text. Strings are JSON-quoted, which TOML
+    /// basic strings accept.
+    fn render(rows: &[Row]) -> String {
+        use std::fmt::Write as _;
+        let quote = |text: &str| serde_json::to_string(text).unwrap();
+        let mut text = "schema = \"keyval.registry.checks/v1\"\n".to_owned();
+        for row in rows {
+            let declared = &row.declared;
+            write!(
+                text,
+                "\n[[check]]\nid = {}\nsummary = {}\nkind = {}\ncovers = {}\napi = []\n\
+                 class = {}\ntier = {}\nrun = {}\nmin_cases = {}\nstatus = {}\n",
+                quote(&row.id),
+                quote(&declared.summary),
+                quote(&declared.kind),
+                serde_json::to_string(&declared.covers).unwrap(),
+                quote(&declared.class),
+                quote(&declared.tier),
+                quote(&declared.run),
+                declared.min_cases,
+                quote(&row.status),
+            )
+            .unwrap();
+        }
+        text
+    }
+
+    /// A fixture work graph with one item, W99, whose accept list is `accept`.
+    fn graph(accept: &[&str]) -> String {
+        format!(
+            "schema = \"keyval.registry.workgraph/v1\"\n\n[[item]]\nid = \"W99\"\n\
+             title = \"fixture\"\ndeps = []\nreqs = []\narea = []\nmilestone = \"m0\"\n\
+             accept = {}\nbead = \"\"\n",
+            serde_json::to_string(accept).unwrap()
+        )
+    }
+
+    /// The fixture's catalogue: the first two real checks.
+    fn catalogue() -> &'static [CheckDef] {
+        &CATALOGUE[..2]
+    }
+
+    /// A well-formed fixture: both catalogue checks' implemented rows, then a planned row
+    /// `PLANNED-X` that W99's accept list names.
+    fn fixture() -> (Vec<Row>, String) {
+        let mut rows: Vec<Row> = catalogue().iter().map(Row::implemented).collect();
+        rows.push(Row::planned("PLANNED-X"));
+        (rows, graph(&["./dev check PLANNED-X"]))
+    }
+
+    /// Asserts that the well-formed fixture passes (the negative control) and that the
+    /// `checks` text under `workgraph` trips exactly the `expected` rules.
+    fn assert_trips(checks: &str, workgraph: &str, expected: &[&str], broken: &str) {
+        let (good, good_graph) = fixture();
+        let control = checks_file_violations(&render(&good), &good_graph, catalogue());
+        assert!(
+            control.is_empty(),
+            "negative control: the unbroken fixture registry passes; violations={control:?}"
+        );
+        let violations = checks_file_violations(checks, workgraph, catalogue());
+        let tripped: BTreeSet<&str> = violations.iter().map(|(rule, _)| *rule).collect();
+        assert_eq!(
+            tripped,
+            expected.iter().copied().collect::<BTreeSet<&str>>(),
+            "rule: {broken} fails REGISTRY-FILES on exactly the rules {expected:?}; \
+             violations={violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_planned_row_is_named_by_any_selector_staging_credits() {
+        let (rows, _) = fixture();
+        for accept in [
+            "./dev check PLANNED-X",
+            "./dev check XTASK PLANNED-X",
+            "./dev check PLANNED-X --case one_case",
+        ] {
+            let workgraph = graph(&[accept]);
+            let violations = checks_file_violations(&render(&rows), &workgraph, catalogue());
+            assert!(
+                violations.is_empty(),
+                "rule: a planned row named by this accept selector passes (br-cirk); \
+                 accept={accept:?}; violations={violations:?}"
             );
-            let observed = (
-                row.summary.clone(),
-                row.kind.clone(),
-                row.covers.clone(),
-                row.class.clone(),
-                row.tier.clone(),
-                row.run.clone(),
-                row.min_cases,
-            );
+            let items = crate::workgraph::parse(&workgraph).unwrap();
+            let staged = crate::staging::stage(&render(&rows), &items, "T0", catalogue())
+                .unwrap()
+                .planned;
             assert_eq!(
-                observed, expected,
-                "rule: checks.toml row {} mirrors check.rs",
-                def.id
-            );
-            assert!(
-                row.min_cases > 0 && row.status == "implemented",
-                "rule: min_cases is never zero, and every catalogue check is implemented \
-                 (D-56); {row:?}"
-            );
-            assert!(
-                row.api.is_empty() && row.catches.is_empty(),
-                "rule: no current check names API operations or catches bug variants; {row:?}"
+                staged,
+                vec![crate::staging::Planned {
+                    id: "PLANNED-X".to_owned(),
+                    work_item: Some("W99".to_owned()),
+                }],
+                "rule: staging credits the same selector to the same work item, so the two \
+                 agree (br-cirk); accept={accept:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_orphan_planned_row_fails() {
+        let (rows, _) = fixture();
+        for accept in [
+            &[][..],
+            &["./dev check PLANNED-XY"][..],
+            &["./dev check DEV-DOCTOR"][..],
+        ] {
+            assert_trips(
+                &render(&rows),
+                &graph(accept),
+                &["orphan-planned"],
+                &format!("a planned row no accept list names (accept={accept:?})"),
+            );
+        }
+    }
+
+    #[test]
+    fn an_uncatalogued_implemented_row_fails() {
+        let (mut rows, workgraph) = fixture();
+        let mut ghost = Row::planned("GHOST");
+        ghost.status = "implemented".to_owned();
+        rows.insert(2, ghost);
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["uncatalogued-implemented"],
+            "an implemented row with no catalogue check",
+        );
+    }
+
+    #[test]
+    fn a_zero_floor_fails() {
+        let (mut rows, workgraph) = fixture();
+        rows[2].declared.min_cases = 0;
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["zero-floor"],
+            "a planned row with min_cases 0",
+        );
+    }
+
+    #[test]
+    fn a_planned_row_that_runs_another_check_fails() {
+        let (mut rows, workgraph) = fixture();
+        rows[2].declared.run = "./dev check XTASK".to_owned();
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["planned-run"],
+            "a planned row whose run is not ./dev check <its ID>",
+        );
+    }
+
+    #[test]
+    fn a_catalogue_check_marked_planned_or_misspelt_fails() {
+        let (mut rows, workgraph) = fixture();
+        rows[1].status = "planned".to_owned();
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["planned-in-catalogue", "missing-row"],
+            "a catalogue check marked planned",
+        );
+        let (mut rows, workgraph) = fixture();
+        rows[1].status = "implmented".to_owned();
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["status", "missing-row"],
+            "a row with a misspelt status",
+        );
+    }
+
+    /// A field's name and a change to it.
+    type FieldChange = (&'static str, fn(&mut Declared));
+
+    #[test]
+    fn an_implemented_row_that_differs_from_its_check_or_its_place_fails() {
+        let changes: [FieldChange; 7] = [
+            ("summary", |d| d.summary.push('!')),
+            ("kind", |d| d.kind = "static".to_owned()),
+            ("covers", |d| d.covers.push("P10".to_owned())),
+            ("class", |d| d.class = "simulation".to_owned()),
+            ("tier", |d| d.tier = "T1".to_owned()),
+            ("run", |d| d.run = "./dev check DEV-DOCTOR".to_owned()),
+            ("min_cases", |d| d.min_cases += 1),
+        ];
+        for (field, change) in changes {
+            let (mut rows, workgraph) = fixture();
+            change(&mut rows[0].declared);
+            assert_trips(
+                &render(&rows),
+                &workgraph,
+                &["mirror"],
+                &format!("an implemented row whose {field} differs from check.rs"),
+            );
+        }
+        let (mut rows, workgraph) = fixture();
+        rows.swap(0, 1);
+        assert_trips(
+            &render(&rows),
+            &workgraph,
+            &["order"],
+            "implemented rows out of catalogue order",
+        );
+    }
+
+    #[test]
+    fn a_repeated_row_fails() {
+        for repeated in [0, 2] {
+            let (mut rows, workgraph) = fixture();
+            rows.push(rows[repeated].clone());
+            assert_trips(
+                &render(&rows),
+                &workgraph,
+                &["duplicate"],
+                &format!("a repeated {} row", rows[repeated].status),
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrong_schema_fails() {
+        let (rows, workgraph) = fixture();
+        let text =
+            render(&rows).replacen("keyval.registry.checks/v1", "keyval.registry.checks/v2", 1);
+        assert_trips(
+            &text,
+            &workgraph,
+            &["schema"],
+            "a checks.toml of another schema",
+        );
+    }
+
+    #[test]
+    fn a_row_naming_api_operations_or_bug_variants_fails() {
+        let (rows, workgraph) = fixture();
+        let named = render(&rows).replacen("api = []", "api = [\"putKey\"]", 1);
+        assert_trips(
+            &named,
+            &workgraph,
+            &["api-or-catches"],
+            "a row naming an API operation",
+        );
+        let catches = render(&rows).replacen(
+            "status = \"planned\"\n",
+            "status = \"planned\"\ncatches = [\"BV-1\"]\n",
+            1,
+        );
+        assert_trips(
+            &catches,
+            &workgraph,
+            &["api-or-catches"],
+            "a row naming a bug variant",
+        );
     }
 }
