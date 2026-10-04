@@ -29,6 +29,7 @@ use types::{
 };
 
 use crate::node::RaftNode;
+use crate::storage::ReadFailure;
 
 /// Applies committed entries for the loop (§7.4 step 5): the state machine, the request
 /// history and waiting client attempts, all the controller's (W14).
@@ -75,8 +76,8 @@ pub enum Synced {
     Stale,
 }
 
-/// Why the loop could not continue.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why the loop could not continue. Each one moves the node to `failed`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoopError {
     /// A Ready's frame would take the journal past its hard stop (DM-7). Nothing was
     /// written; the node moves to `failed`, and the loop stops.
@@ -88,7 +89,10 @@ pub enum LoopError {
         /// `max_journal_bytes`.
         limit: u64,
     },
-    /// The loop stopped at an earlier hard stop and takes no more work.
+    /// A journal read under the library failed (§7.11). The library got only the entries
+    /// before it; nothing more was persisted or sent, and the loop stops.
+    StorageFailed(ReadFailure),
+    /// The loop stopped earlier and takes no more work.
     Stopped,
 }
 
@@ -106,7 +110,7 @@ enum Phase {
         /// The Ready's committed entries, applied after the release (step 5).
         committed: Vec<Entry>,
     },
-    /// A hard stop ended the loop.
+    /// A hard stop or a failed read ended the loop.
     Stopped,
 }
 
@@ -222,6 +226,7 @@ impl<R: JournalRead> ReadyLoop<R> {
             RaftInput::Peer(message) => Fed::Stepped(self.node.step(message)),
             RaftInput::Propose(command) => Fed::Proposed(self.node.propose(command)),
         };
+        self.check_reads()?;
         self.drain(apply, effects)?;
         Ok(fed)
     }
@@ -270,7 +275,7 @@ impl<R: JournalRead> ReadyLoop<R> {
             return Ok(Synced::Completed);
         };
         self.node.synced();
-        self.finish(messages, &committed, apply, effects);
+        self.finish(messages, &committed, apply, effects)?;
         self.drain(apply, effects)?;
         Ok(Synced::Completed)
     }
@@ -282,7 +287,9 @@ impl<R: JournalRead> ReadyLoop<R> {
         effects: &mut Vec<Effect>,
     ) -> Result<(), LoopError> {
         loop {
-            let Some(ready) = self.node.ready() else {
+            let ready = self.node.ready();
+            self.check_reads()?;
+            let Some(ready) = ready else {
                 self.status = self.node.status();
                 return Ok(());
             };
@@ -316,7 +323,7 @@ impl<R: JournalRead> ReadyLoop<R> {
                     };
                     return Ok(());
                 }
-                Ok(None) => self.finish(messages, &committed, apply, effects),
+                Ok(None) => self.finish(messages, &committed, apply, effects)?,
                 Err(error) => return Err(self.stop(&error)),
             }
         }
@@ -329,11 +336,12 @@ impl<R: JournalRead> ReadyLoop<R> {
         committed: &[Entry],
         apply: &mut impl Apply,
         effects: &mut Vec<Effect>,
-    ) {
+    ) -> Result<(), LoopError> {
         let reported = self.applied;
         send(messages, effects);
         self.apply_all(committed, apply, effects);
         let light = self.node.advance();
+        self.check_reads()?;
         if let Some(commit) = light.commit {
             self.commit = self.commit.max(commit);
         }
@@ -341,6 +349,19 @@ impl<R: JournalRead> ReadyLoop<R> {
         self.apply_all(&light.committed, apply, effects);
         if self.applied > reported {
             self.node.applied(self.applied);
+        }
+        self.check_reads()
+    }
+
+    /// Stops the loop if a journal read under the library failed. The library got only the
+    /// entries before it, and nothing more is persisted, sent or applied (§7.11).
+    fn check_reads(&mut self) -> Result<(), LoopError> {
+        match self.node.storage_failure() {
+            None => Ok(()),
+            Some(failure) => {
+                self.phase = Phase::Stopped;
+                Err(LoopError::StorageFailed(failure))
+            }
         }
     }
 

@@ -977,7 +977,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "node_tests::",
             ],
         },
-        min_cases: 22,
+        min_cases: 23,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-SIM",
@@ -1061,7 +1061,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["ready_loop_tests::"],
         },
-        min_cases: 12,
+        min_cases: 13,
     },
     CheckDef {
         id: "JOURNAL-EXAMINE",

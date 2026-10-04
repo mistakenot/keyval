@@ -642,7 +642,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check RAFT-ADAPTER"
-min_cases = 22
+min_cases = 23
 status = "implemented"
 
 [[check]]
@@ -702,7 +702,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check RAFT-READY-LOOP"
-min_cases = 12
+min_cases = 13
 status = "implemented"
 
 [[check]]

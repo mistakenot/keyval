@@ -4,7 +4,7 @@
 //! - the committed fixture configs.
 #![cfg(test)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -39,27 +39,38 @@ impl Entropy for Seeded {
 }
 
 /// An in-memory journal, shared between a test that appends frames and the storage view
-/// that reads them back.
+/// that reads them back. A test can make every later read fail, as an I/O error would.
 #[derive(Clone, Debug, Default)]
-pub struct Journal(Rc<RefCell<Vec<u8>>>);
+pub struct Journal {
+    bytes: Rc<RefCell<Vec<u8>>>,
+    failing: Rc<Cell<bool>>,
+}
 
 impl Journal {
     pub fn push(&self, frame: &[u8]) {
-        self.0.borrow_mut().extend_from_slice(frame);
+        self.bytes.borrow_mut().extend_from_slice(frame);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.borrow().is_empty()
+        self.bytes.borrow().is_empty()
     }
 
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.borrow().clone()
+        self.bytes.borrow().clone()
+    }
+
+    /// Makes every later read fail with `StorageError::Failed`.
+    pub fn fail_reads(&self) {
+        self.failing.set(true);
     }
 }
 
 impl JournalRead for Journal {
     fn read_at(&self, offset: ByteCount, len: ReadLen) -> Result<Vec<u8>, StorageError> {
-        let bytes = self.0.borrow();
+        if self.failing.get() {
+            return Err(StorageError::Failed);
+        }
+        let bytes = self.bytes.borrow();
         let start = usize::try_from(offset.get()).map_err(|_| StorageError::Failed)?;
         let wanted = usize::try_from(len.get()).map_err(|_| StorageError::Failed)?;
         let available = bytes.get(start..).unwrap_or_default();

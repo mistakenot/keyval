@@ -11,7 +11,7 @@ use types::{
 use crate::config::library_config;
 use crate::convert::{decode_message, entries_from_library, hard_state_from_library, outbound};
 use crate::entropy::EntropySource;
-use crate::storage::JournalStorage;
+use crate::storage::{JournalStorage, ReadFailure};
 
 /// Why a node could not be constructed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +115,12 @@ impl<R: JournalRead> RaftNode<R> {
     /// The library's storage view: the logical log.
     pub fn storage(&self) -> &JournalStorage<R> {
         self.raw.store()
+    }
+
+    /// The first journal read that failed under the library, if any: the node must stop
+    /// (§7.11).
+    pub fn storage_failure(&self) -> Option<ReadFailure> {
+        self.raw.store().failure()
     }
 
     /// The index the library holds as applied: the replayed index at construction, then

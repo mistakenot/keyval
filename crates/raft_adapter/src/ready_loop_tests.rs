@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
-use journal::{LogBounds, LogicalLog, RaftBatch};
+use journal::{JournalError, LogBounds, LogicalLog, RaftBatch};
 use raft::eraftpb::MessageType;
 use types::{
     ByteCount, Config, Effect, Entry, EntryPayload, HardState, Incarnation, LogIndex, NodeId, Role,
@@ -1063,5 +1063,48 @@ fn a_hard_stop_stops_the_loop() {
             Err(LoopError::Stopped)
         ),
         "rule: a stopped loop takes no more work; the node is failed (DM-7)"
+    );
+}
+
+#[test]
+fn a_failed_journal_read_stops_the_loop_with_its_cause() {
+    let (mut member, _) = lone(&config("one-voter"));
+    member.elect();
+    // Entries larger than the 16-byte entry cache are read back from the journal.
+    member.commit(&[b'a'; 100]);
+    assert_eq!(
+        member.lp.applied().get(),
+        2,
+        "fixture: the no-op and one command applied"
+    );
+    member.journal.fail_reads();
+    assert_eq!(
+        member.feed(RaftInput::Propose(vec![b'b'; 100])),
+        Ok(Fed::Proposed(Ok(()))),
+        "fixture: the proposal is taken and its frame written"
+    );
+    let seq = member.lp.outstanding_sync().unwrap();
+    let before = member.effects.len();
+    let failed = member.sync_done(seq, INCARNATION);
+    let Err(LoopError::StorageFailed(failure)) = failed else {
+        panic!(
+            "rule: a failed journal read under the library stops the loop with its cause; got \
+             {failed:?}"
+        );
+    };
+    assert_eq!(
+        (failure.index.get(), failure.error),
+        (3, JournalError::Storage(types::StorageError::Failed)),
+        "rule: the error names the entry and the cause (§7.11)"
+    );
+    assert_eq!(
+        (member.effects.len(), member.lp.applied().get()),
+        (before, 2),
+        "rule: nothing more is persisted, sent or applied after the failure"
+    );
+    assert_eq!(
+        (member.feed(RaftInput::Tick), member.poll()),
+        (Err(LoopError::Stopped), Err(LoopError::Stopped)),
+        "rule: the loop takes no more work; the node is failed (§7.11)"
     );
 }

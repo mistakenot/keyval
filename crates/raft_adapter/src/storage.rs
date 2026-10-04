@@ -2,7 +2,7 @@
 
 use std::cell::{Ref, RefCell};
 
-use journal::LogicalLog;
+use journal::{JournalError, LogicalLog};
 use protobuf::Message as _;
 use raft::eraftpb::{self, ConfState};
 use raft::{GetEntriesContext, RaftState, StorageError};
@@ -23,6 +23,12 @@ use crate::convert::{entry_to_library, hard_state_to_library};
 ///   gives the library no input and no advance meanwhile, and every library read asserts
 ///   the seal is off (invariant `RA-VIEW-SEALED`), so nothing can read them early.
 ///
+/// - **A failed read fails the node, never the library** (§7.11, CD-6). raft-rs panics on
+///   almost every storage error, but it accepts a short read like a size-capped one. A journal
+///   read that fails is therefore recorded as a [`ReadFailure`], and the library gets only the
+///   entries before it. The loop checks after every library call and stops, persisting and
+///   sending nothing more (`LoopError::StorageFailed`).
+///
 /// Invariant: the voter set is sorted and holds no duplicates.
 #[derive(Debug)]
 pub struct JournalStorage<R> {
@@ -37,6 +43,18 @@ pub struct JournalStorage<R> {
     voters: Vec<u64>,
     /// Whether a frame in the logical log is not yet synced (§7.4 step 4).
     sealed: bool,
+    /// The first journal read that failed under the library, if any.
+    failure: RefCell<Option<ReadFailure>>,
+}
+
+/// A journal read under the library that failed: an unexpected I/O error or damage, which
+/// moves the node to `failed` (§7.11).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadFailure {
+    /// The entry being read.
+    pub index: EntryIndex,
+    /// Why its read failed.
+    pub error: JournalError,
 }
 
 impl<R> JournalStorage<R> {
@@ -57,7 +75,13 @@ impl<R> JournalStorage<R> {
             reader,
             voters,
             sealed: false,
+            failure: RefCell::new(None),
         }
+    }
+
+    /// The first journal read that failed under the library, if any.
+    pub fn failure(&self) -> Option<ReadFailure> {
+        self.failure.borrow().clone()
     }
 
     /// Whether a frame in the logical log is not yet synced, so the library may not read.
@@ -117,8 +141,9 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
     }
 
     /// Entries `[low, high)`, at least one, then as many more as fit `max_size` bytes (the
-    /// library's own size rule). A read that fails is `Unavailable`; the library treats that as
-    /// fatal, and the node fails (§7.11).
+    /// library's own size rule). A journal read that fails ends the list there and is recorded
+    /// (the first one only), so the library gets the readable prefix and the loop fails the
+    /// node (§7.11).
     fn entries(
         &self,
         low: u64,
@@ -133,7 +158,15 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
         let mut size = 0_u64;
         for raw in low..high {
             let index = EntryIndex::new(raw).map_err(|_| unavailable())?;
-            let entry = log.entry(index, &self.reader).map_err(|_| unavailable())?;
+            let entry = match log.entry(index, &self.reader) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    self.failure
+                        .borrow_mut()
+                        .get_or_insert(ReadFailure { index, error });
+                    break;
+                }
+            };
             let library = entry_to_library(&entry);
             size = size.saturating_add(u64::from(library.compute_size()));
             if !entries.is_empty() && max_size.is_some_and(|max| size > max) {
@@ -299,5 +332,48 @@ mod tests {
         );
         storage.seal();
         let _ = storage.last_index();
+    }
+
+    #[test]
+    fn a_failed_journal_read_is_recorded_and_the_library_gets_only_what_came_before() {
+        let journal = Journal::default();
+        let mut log = empty_log();
+        let entries: Vec<Entry> = (1..=4).map(|i| entry(i, 1, b"0123456789")).collect();
+        let state = HardState {
+            term: Term::new(1).unwrap(),
+            vote: None,
+            commit: LogIndex::ZERO,
+        };
+        persist_batch(&mut log, &journal, entries, Some(state));
+        let one = NodeId::new(1).unwrap();
+        let storage = JournalStorage::new(one, log, journal.clone(), [one]);
+        assert_eq!(storage.failure(), None, "fixture: no read has failed");
+        journal.fail_reads();
+        let read = storage
+            .entries(1, 5, None, GetEntriesContext::empty(false))
+            .unwrap();
+        assert!(
+            read.is_empty(),
+            "rule: the library gets only the entries before the failed read, never an error it \
+             would turn into a panic (§7.11); got {} entries",
+            read.len()
+        );
+        let failure = storage.failure().unwrap();
+        assert_eq!(
+            (failure.index.get(), failure.error),
+            (1, JournalError::Storage(types::StorageError::Failed)),
+            "rule: the failure keeps its index and cause for the node's `failed` state"
+        );
+        let _ = storage.entries(2, 5, None, GetEntriesContext::empty(false));
+        assert_eq!(
+            storage.failure().map(|failure| failure.index.get()),
+            Some(1),
+            "rule: the first failure is the one kept"
+        );
+        assert_eq!(
+            storage.term(3).unwrap(),
+            1,
+            "rule: terms come from the offset index and never touch the journal"
+        );
     }
 }

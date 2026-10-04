@@ -42,7 +42,8 @@
 //!   stays sealed, and every message stays held, until that sync's `SyncDone`. Committed
 //!   entries are applied in index order through [`Apply`], and further ready work is drained
 //!   before the next input. No vote grant or append acknowledgement leaves on unsynced state
-//!   (DUR-2).
+//!   (DUR-2). A journal read that fails under the library stops the loop with its cause, and
+//!   the node moves to `failed` (§7.11).
 //!
 //! W13.3 adds the peer-envelope codec around the messages the loop sends.
 
@@ -63,4 +64,4 @@ pub use config::library_config;
 pub use entropy::EntropySource;
 pub use node::{ConstructError, RaftNode};
 pub use ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
-pub use storage::JournalStorage;
+pub use storage::{JournalStorage, ReadFailure};
