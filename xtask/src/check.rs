@@ -1458,9 +1458,12 @@ pub const CATALOGUE: &[CheckDef] = &[
                   request_id_conflict from the applied history on any Ready node, attach to a \
                   pending same-ID proposal (at most 16 waiters), not_leader naming the believed \
                   leader or unavailable with none, history_full at max_log_entries or \
-                  max_history_bytes (entries named first), busy past max_uncommitted_bytes, then \
-                  propose; an attempt is submitted when handed to the library and answered only \
-                  by the application of its own command's entry; a synchronous drop is busy and \
+                  max_history_bytes (entries named first), busy past max_uncommitted_bytes \
+                  (exact at the bound, submitted proposals counted, reopening as proposals \
+                  apply), then propose; a proposal is handed to the library once, even after a \
+                  queued owner's deadline and a retry or the waiter behind it (br-nxsb); an \
+                  attempt is submitted when handed to the library and answered only by the \
+                  application of its own command's entry; a synchronous drop is busy and \
                   attached waiters unknown_outcome; a same-ID attempt with another command \
                   waits, then gets request_id_conflict on apply or proposes its own if the \
                   proposal failed unapplied; at its deadline a submitted or attached attempt is \
@@ -1478,7 +1481,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "node",
             filters: &["write_path_tests::", "write_path::invariant_fixtures::"],
         },
-        min_cases: 29,
+        min_cases: 33,
     },
     CheckDef {
         id: "NODE-READ-PATH",

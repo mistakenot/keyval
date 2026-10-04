@@ -176,7 +176,9 @@ impl CancelDeadline for Applying<'_> {
 ///   `waiters_per_request` waiters;
 /// - every attempt a pending proposal names waits in the table on that proposal's request
 ///   ID, in the role the proposal names it in, and every waiting attempt is named once;
-/// - every queued proposal is in `to_propose`.
+/// - `to_propose` holds exactly the queued proposals' request IDs, each once (the W14.2 review): a
+///   proposal leaves it when it is handed over or taken out, so it is never handed over
+///   twice.
 #[derive(Debug)]
 pub struct WritePath {
     /// This node.
@@ -305,7 +307,7 @@ impl WritePath {
             let Some(pending) = self.pending.get_mut(&request_id) else {
                 continue;
             };
-            let Some(owner) = pending.owner else {
+            let (Stage::Queued, Some(owner)) = (pending.stage, pending.owner) else {
                 continue;
             };
             pending.stage = Stage::Submitted;
@@ -338,7 +340,14 @@ impl WritePath {
         else {
             return;
         };
-        let Some(mut pending) = self.pending.remove(&request_id) else {
+        // Only the proposal just handed over, owned by `attempt`, appended nothing (br-nxsb).
+        let handed_over = self.pending.get(&request_id).is_some_and(|pending| {
+            pending.stage == Stage::Submitted && pending.owner == Some(attempt)
+        });
+        if !handed_over {
+            return;
+        }
+        let Some(mut pending) = self.take_pending(&request_id) else {
             return;
         };
         // Nothing was appended: the owner was never submitted.
@@ -374,7 +383,7 @@ impl WritePath {
             // proposal resolves when its own entry applies, or when its leadership is lost.
             return;
         }
-        let Some(pending) = self.pending.remove(&request_id) else {
+        let Some(pending) = self.take_pending(&request_id) else {
             return;
         };
         let served_by = ServedBy {
@@ -438,7 +447,7 @@ impl WritePath {
                     .is_some_and(|pending| pending.stage == Stage::Queued);
                 if queued {
                     // Never proposed: the proposal is withdrawn with its owner.
-                    if let Some(pending) = self.pending.remove(&request_id) {
+                    if let Some(pending) = self.take_pending(&request_id) {
                         self.fail_pending(view, pending, Some(Refusal::Busy), effects);
                     }
                 } else {
@@ -481,6 +490,7 @@ impl WritePath {
     pub fn status_changed(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>) {
         if self.pending.is_empty() {
             self.leader_term = None;
+            self.to_propose.clear();
             return;
         }
         if self.leads_as_admitted(view) {
@@ -701,6 +711,14 @@ impl WritePath {
         self.decide(view, attempt, waiting.write, false, effects);
     }
 
+    /// Takes the pending proposal for `request_id` out of the table and out of
+    /// `to_propose`, so a proposal with the same ID made later is queued once.
+    fn take_pending(&mut self, request_id: &RequestId) -> Option<Pending> {
+        let pending = self.pending.remove(request_id)?;
+        self.to_propose.retain(|queued| queued != request_id);
+        Some(pending)
+    }
+
     /// Answers `attempt` with `response`, taking it out of the table and cancelling its
     /// deadline if it waited.
     fn answer(
@@ -770,23 +788,41 @@ impl WritePath {
                     .iter()
                     .all(|attempt| is(attempt, Wait::Behind))
                 && pending.waiters() <= self.limits.waiters_per_request
-                && (pending.stage == Stage::Submitted || self.to_propose.contains(request_id))
         });
+        let queued = self
+            .pending
+            .values()
+            .filter(|pending| pending.stage == Stage::Queued)
+            .count();
+        let to_propose_exact = self.to_propose.len() == queued
+            && self.to_propose.iter().enumerate().all(|(at, request_id)| {
+                self.pending
+                    .get(request_id)
+                    .is_some_and(|pending| pending.stage == Stage::Queued)
+                    && !self
+                        .to_propose
+                        .iter()
+                        .skip(at + 1)
+                        .any(|later| later == request_id)
+            });
         invariant!(
             bytes == self.attempt_bytes
                 && self.attempts.len() <= self.limits.pending_attempts
                 && self.attempt_bytes <= self.limits.pending_attempt_bytes
                 && self.pending.len() <= self.limits.pending_attempts
                 && named == self.attempts.len()
-                && roles_agree,
+                && roles_agree
+                && to_propose_exact,
             "NODE-WRITE-TABLE",
             "node {}: {} attempts wait ({} bytes counted, {bytes} held), {} named by {} pending \
-             proposals; roles agree: {roles_agree}",
+             proposals; roles agree: {roles_agree}; to_propose holds {} for {queued} queued \
+             (exact: {to_propose_exact})",
             self.node,
             self.attempts.len(),
             self.attempt_bytes,
             named,
-            self.pending.len()
+            self.pending.len(),
+            self.to_propose.len()
         );
     }
 }

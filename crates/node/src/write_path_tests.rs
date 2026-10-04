@@ -782,6 +782,112 @@ fn shutdown_answers_unknown_outcome_if_submitted_and_unavailable_otherwise() {
     );
 }
 
+#[test]
+fn a_retry_after_a_withdrawn_proposal_is_handed_over_once() {
+    // SunnyDog's review of W14.2: a queued owner's expiry left its request ID in the queue
+    // of proposals, so the client's retry was handed to the library twice; had the library
+    // dropped the second copy, the submitted attempt would have answered busy (A-5).
+    let mut bench = Bench::leader("one-voter");
+    let op = put(1, "k", "v");
+    bench.attempt(1, op.clone());
+    assert_eq!(
+        bench.expire(1),
+        vec![refused(1, Refusal::Busy)],
+        "fixture: the queued owner expires, never proposed"
+    );
+    bench.attempt(2, op);
+    let first = bench.next_proposal().map(|proposal| proposal.attempt);
+    bench.proposed(2, Ok(()));
+    assert_eq!(
+        (first, bench.next_proposal()),
+        (Some(AttemptId::new(2)), None),
+        "rule: the retry's proposal is handed to the library once; a withdrawn proposal \
+         leaves no trace in the queue of proposals"
+    );
+}
+
+#[test]
+fn a_waiter_behind_a_withdrawn_proposal_is_handed_over_once() {
+    let mut bench = Bench::leader("one-voter");
+    bench.attempt(1, put(1, "k", "a"));
+    bench.attempt(2, put(1, "k", "b"));
+    assert_eq!(
+        bench.expire(1),
+        vec![refused(1, Refusal::Busy)],
+        "fixture: the queued owner expires; the waiter behind it enters the order again and \
+         proposes its own command"
+    );
+    let first = bench.next_proposal().map(|proposal| proposal.attempt);
+    bench.proposed(2, Ok(()));
+    assert_eq!(
+        (first, bench.next_proposal()),
+        (Some(AttemptId::new(2)), None),
+        "rule: the waiter's proposal is handed to the library once (A-5)"
+    );
+}
+
+/// A PUT to key `k` with request ID `n` whose canonical command is exactly `len` bytes.
+fn put_of_len(n: u8, len: usize) -> ClientOp {
+    (1..=64)
+        .map(|value_len| put(n, "k", &"v".repeat(value_len)))
+        .find(|op| command(op).len() == len)
+        .expect("fixture: a PUT of that command length")
+}
+
+#[test]
+fn the_uncommitted_bound_is_exact_counts_submitted_proposals_and_reopens_on_apply() {
+    // small-limits: max_uncommitted_bytes = 1,024; values of 1 to 64 bytes.
+    let mut bench = Bench::leader("small-limits");
+    let shortest = command(&put(1, "k", "v")).len();
+    let longest = command(&put(1, "k", &"v".repeat(64))).len();
+    let mut n = 0_u8;
+    let mut in_flight = 0;
+    let admit = |bench: &mut Bench, n: &mut u8, len: usize| {
+        *n += 1;
+        let op = put_of_len(*n, len);
+        assert!(
+            bench.attempt(u64::from(*n), op).is_empty(),
+            "fixture: write {n} of {len} bytes is admitted"
+        );
+        len
+    };
+    while in_flight + longest + shortest <= 1_024 {
+        in_flight += admit(&mut bench, &mut n, longest);
+    }
+    let room = 1_024 - in_flight;
+    if room <= longest {
+        in_flight += admit(&mut bench, &mut n, room);
+    } else {
+        in_flight += admit(&mut bench, &mut n, room - shortest);
+        in_flight += admit(&mut bench, &mut n, shortest);
+    }
+    assert_eq!(
+        (in_flight, bench.path.in_flight_bytes()),
+        (1_024, 1_024),
+        "fixture: the proposals in flight fill max_uncommitted_bytes exactly"
+    );
+    assert_eq!(
+        bench.attempt(100, put_of_len(100, shortest)),
+        vec![refused(100, Refusal::Busy)],
+        "rule: at exactly max_uncommitted_bytes, one more byte is busy (§7.11)"
+    );
+    let mut submitted = Vec::new();
+    while let Some(proposal) = bench.next_proposal() {
+        bench.proposed(proposal.attempt.get(), Ok(()));
+        submitted.push(proposal.command);
+    }
+    assert_eq!(
+        bench.attempt(101, put_of_len(101, shortest)),
+        vec![refused(101, Refusal::Busy)],
+        "rule: submitted proposals count until they apply, not only queued ones"
+    );
+    bench.apply(submitted[0].clone());
+    assert!(
+        bench.attempt(102, put_of_len(102, shortest)).is_empty(),
+        "rule: the bound reopens by the applied command's bytes"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // End to end, through the controller
 // ---------------------------------------------------------------------------------------

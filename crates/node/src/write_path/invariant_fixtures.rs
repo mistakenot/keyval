@@ -106,3 +106,21 @@ fn a_byte_count_that_disagrees_fires_node_write_table() {
         path.check();
     });
 }
+
+#[test]
+#[should_panic(expected = "to_propose holds 2 for 1 queued (exact: false)")]
+fn a_proposal_queued_twice_fires_node_write_table() {
+    // br-nxsb: a request ID queued twice would be handed to the library twice.
+    on_leader("one-voter", 4, |path, view, effects| {
+        let ClientOp::Write {
+            request_id,
+            mutation,
+        } = put(1, "a", "v")
+        else {
+            panic!("fixture: a write");
+        };
+        path.attempt(view, AttemptId::new(1), request_id, mutation, effects);
+        path.to_propose.push_back(request_id);
+        path.check();
+    });
+}
