@@ -114,8 +114,10 @@ pub struct Counters {
 ///   owed until the loop can take it.
 /// - **Raft (§7.4):** while a sync is outstanding the library takes no input, so peer
 ///   envelopes stay queued and client attempts are still handed over: reads and replays
-///   are answered at once. Peer envelopes are opened here ([`PeerCodec::open`]), and every
-///   message the loop sends is sealed before it leaves the core (§8.2).
+///   are answered at once. The start-up truncation's sync counts too, so nothing is
+///   appended over a truncation that is not yet durable (§7.6). Peer envelopes are opened
+///   here ([`PeerCodec::open`]), and every message the loop sends is sealed before it
+///   leaves the core (§8.2).
 /// - **Failure (DM-7, §7.11):** a loop error or a failed storage effect moves the node to
 ///   `failed`. It stops feeding the library, and peer envelopes are dropped and counted;
 ///   ticks and client attempts still reach [`Requests`], which answers `recovering`.
@@ -136,7 +138,8 @@ pub struct Controller<R: JournalRead, Q: Requests> {
     queue: InboundQueue,
     /// Library ticks owed: ticks processed while the loop could not take them.
     raft_ticks_owed: u64,
-    /// The start-up truncation's sync, until it completes (§7.7, DUR-6).
+    /// The start-up truncation's sync, until it completes (§7.7, DUR-6). While it is
+    /// outstanding the library takes no input, as during a loop sync (§7.6).
     startup_sync: Option<SyncSeq>,
     /// Why the node failed, once it has.
     failure: Option<Failure>,
@@ -411,7 +414,7 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
         if self.library_idle() && !self.queue.has_peers() && self.propose(effects) {
             return true;
         }
-        let peers_wait = self.raft.outstanding_sync().is_some();
+        let peers_wait = self.syncing();
         match self.queue.next(peers_wait) {
             Some(Queued::Client { attempt, op }) => {
                 let mut view = View::new(&mut self.core, self.raft.status());
@@ -540,10 +543,11 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
             self.library_idle(),
             "NODE-FEED-IDLE",
             "node {}: an input was fed while the loop could not take it (lifecycle {:?}, \
-             outstanding sync {:?})",
+             outstanding sync {:?}, start-up sync {:?})",
             self.core.node,
             self.core.lifecycle,
-            self.raft.outstanding_sync()
+            self.raft.outstanding_sync(),
+            self.startup_sync
         );
         let start = effects.len();
         let mut applier = Applier {
@@ -586,9 +590,17 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
     }
 
     /// Whether the loop can take an input: the node is not failed and no sync is
-    /// outstanding.
+    /// outstanding, the start-up truncation's included.
     fn library_idle(&self) -> bool {
-        self.core.lifecycle != Lifecycle::Failed && self.raft.outstanding_sync().is_none()
+        self.core.lifecycle != Lifecycle::Failed && !self.syncing()
+    }
+
+    /// Whether a sync is outstanding: the start-up truncation's, or the loop's. Until it
+    /// completes the library takes no input and peer envelopes wait, so nothing is
+    /// appended over a truncation that is not yet durable (§7.6) and at most one sync is
+    /// outstanding (§7.11, br-0fha).
+    const fn syncing(&self) -> bool {
+        self.startup_sync.is_some() || self.raft.outstanding_sync().is_some()
     }
 
     /// Seals every message the loop sent from `effects[start..]` into a peer envelope
