@@ -16,6 +16,9 @@ use crate::convert::{entries_from_library, hard_state_from_library, outbound};
 use crate::entropy::EntropySource;
 use crate::storage::{JournalStorage, ReadFailure};
 
+#[cfg(test)]
+mod invariant_fixtures;
+
 /// Why a node could not be constructed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConstructError {

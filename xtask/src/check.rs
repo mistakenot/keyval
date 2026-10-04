@@ -975,9 +975,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "entropy::tests::",
                 "storage::tests::",
                 "node_tests::",
+                "node::invariant_fixtures::",
             ],
         },
-        min_cases: 23,
+        min_cases: 33,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-SIM",
@@ -1062,9 +1063,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "raft_adapter",
-            filters: &["ready_loop_tests::"],
+            filters: &["ready_loop_tests::", "ready_loop::invariant_fixtures::"],
         },
-        min_cases: 13,
+        min_cases: 18,
     },
     CheckDef {
         id: "JOURNAL-EXAMINE",

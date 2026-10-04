@@ -1,17 +1,21 @@
-//! W13.1's tests of [`RaftNode`] through the Consensus port (PLAN.md §7.3, §7.4, D-78).
+//! Tests of [`RaftNode`] through the Consensus port (PLAN.md §7.3, §7.4, §7.7, D-78): W13.1's,
+//! and br-kky5's recovery, happy-path step and invariant fixtures.
 #![cfg(test)]
 
 // check: RAFT-ADAPTER
 
+use journal::{JournalError, LogBounds, LogicalLog};
 use raft::eraftpb::{self, MessageType};
 use types::{
-    Config, Consensus, Entry, EntryPayload, LightReady, LogIndex, NodeId, ProposeError, Ready,
-    Role, StepError,
+    ByteCount, Config, Consensus, Entry, EntryPayload, LightReady, LogIndex, NodeId, ProposeError,
+    Ready, Role, StepError,
 };
 
 use crate::convert::decode_message;
 use crate::node::{ConstructError, RaftNode};
-use crate::test_support::{CONFIGS, Journal, Seeded, config, empty_log};
+use crate::test_support::{
+    BOUNDS, CONFIGS, Journal, Seeded, config, empty_log, journal_with_genesis,
+};
 
 fn node(config: &Config, id: u64, journal: &Journal, seed: u64) -> RaftNode<Journal> {
     let id = NodeId::new(id).unwrap();
@@ -379,4 +383,207 @@ fn a_peer_message_while_a_ready_is_outstanding_breaks_its_invariant() {
 )]
 fn a_proposal_while_a_ready_is_outstanding_breaks_its_invariant() {
     let _ = holding_a_ready().propose(b"x".to_vec());
+}
+
+#[test]
+fn a_restart_through_recovery_resumes_the_persisted_term_vote_commit_and_log() {
+    let config = config("one-voter");
+    let id = config.voters().next().unwrap();
+    let settings = config.consensus(id).unwrap();
+    let (journal, log) = journal_with_genesis(&config, id);
+    let mut first = RaftNode::new(
+        &settings,
+        config.voters(),
+        log,
+        journal.clone(),
+        Seeded::new(7),
+        LogIndex::ZERO,
+    )
+    .unwrap();
+    elect(&mut first, &journal);
+    for command in [b"one".as_slice(), b"two"] {
+        first.propose(command.to_vec()).unwrap();
+        while turn(&mut first, &journal).is_some() {}
+    }
+    let live = first.log().hard_state();
+    let live_last = first.log().last_index();
+    let bytes = journal.bytes();
+    let recovered = journal::recover(
+        &journal,
+        ByteCount::new(u64::try_from(bytes.len()).unwrap()),
+        &config,
+        id,
+        BOUNDS,
+    )
+    .unwrap();
+    assert_eq!(
+        recovered.truncate_to(),
+        None,
+        "fixture: every frame synced, so there is no torn tail"
+    );
+    let (_, log) = recovered.into_parts();
+    assert_eq!(
+        (log.hard_state(), log.last_index()),
+        (live, live_last),
+        "rule: recovery rebuilds the persisted hard state and log from the journal bytes \
+         (§7.7 step 4)"
+    );
+    let restarted = RaftNode::new(
+        &settings,
+        config.voters(),
+        log,
+        journal.clone(),
+        Seeded::new(8),
+        live.commit,
+    )
+    .unwrap();
+    let status = restarted.status();
+    assert_eq!(
+        (
+            status.term,
+            status.commit,
+            status.last,
+            restarted.log().hard_state().vote
+        ),
+        (live.term, live.commit, live_last, Some(id)),
+        "rule: a node constructed from the recovered log resumes its persisted term, vote, \
+         commit index and last index (§7.7 step 6)"
+    );
+    assert!(
+        live.term.get() >= 1 && live_last.get() >= 3,
+        "fixture: an election and two commands were persisted; term {} last {live_last}",
+        live.term.get()
+    );
+}
+
+#[test]
+fn a_valid_peer_message_steps_to_its_response() {
+    let config = config("three-voters");
+    let mut voters = config.voters();
+    let (asker, granter) = (voters.next().unwrap(), voters.next().unwrap());
+    let journal = Journal::default();
+    let mut candidate = node(&config, asker.get(), &journal, 3);
+    let request = (0..1_000)
+        .find_map(|_| {
+            candidate.tick();
+            let ready = candidate.ready()?;
+            let request = ready.messages().iter().find(|m| m.to == granter).cloned();
+            if candidate.persist().unwrap().is_some() {
+                candidate.synced();
+            }
+            candidate.advance();
+            request
+        })
+        .unwrap();
+    assert_eq!(
+        decode_message(&request.bytes).unwrap().get_msg_type(),
+        MessageType::MsgRequestPreVote,
+        "fixture: the candidate asks for a pre-vote first"
+    );
+    let mut voter = node(&config, granter.get(), &Journal::default(), 4);
+    assert_eq!(
+        voter.step(request.bytes),
+        Ok(()),
+        "rule: a valid peer message is stepped into the library"
+    );
+    let ready = voter.ready().unwrap();
+    let replies: Vec<(NodeId, MessageType, bool)> = ready
+        .messages()
+        .iter()
+        .map(|m| {
+            let decoded = decode_message(&m.bytes).unwrap();
+            (m.to, decoded.get_msg_type(), decoded.get_reject())
+        })
+        .collect();
+    assert_eq!(
+        replies,
+        vec![(asker, MessageType::MsgRequestPreVoteResponse, false)],
+        "rule: the stepped request produces its granted response in the next Ready"
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-PERSIST-WITHOUT-READY violated: node 1: persist with no \
+                outstanding Ready"
+)]
+fn persisting_with_no_ready_breaks_its_invariant() {
+    let _ = node(&config("one-voter"), 1, &Journal::default(), 7).persist();
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-ADVANCE-WITHOUT-READY violated: node 1: advance with no \
+                outstanding Ready"
+)]
+fn advancing_with_no_ready_breaks_its_invariant() {
+    let _ = node(&config("one-voter"), 1, &Journal::default(), 7).advance();
+}
+
+#[test]
+fn a_frame_refused_at_the_hard_stop_stays_owed() {
+    let config = config("one-voter");
+    let id = config.voters().next().unwrap();
+    let voters: Vec<NodeId> = config.voters().collect();
+    let tiny = LogicalLog::after_genesis(
+        0,
+        &voters,
+        LogBounds::new(ByteCount::new(16), ByteCount::new(1)),
+    );
+    let mut node = RaftNode::new(
+        &config.consensus(id).unwrap(),
+        config.voters(),
+        tiny,
+        Journal::default(),
+        Seeded::new(7),
+        LogIndex::ZERO,
+    )
+    .unwrap();
+    let ready = (0..1_000)
+        .find_map(|_| {
+            node.tick();
+            node.ready()
+        })
+        .unwrap();
+    assert!(ready.must_sync(), "fixture: the first Ready must sync");
+    for attempt in 1..=2 {
+        let refused = node.persist();
+        assert!(
+            is_hard_stop(&refused),
+            "rule: a frame past max_journal_bytes is refused (DM-7), and the refusal leaves it \
+             owed rather than dropped; attempt {attempt}: {refused:?}"
+        );
+    }
+    assert!(
+        !node.storage().is_sealed() && node.log().last_index() == LogIndex::ZERO,
+        "rule: a refused frame changes nothing: the log is untouched and the view unsealed"
+    );
+}
+
+/// Whether `result` is the journal's hard-stop refusal.
+const fn is_hard_stop(result: &Result<Option<Vec<u8>>, JournalError>) -> bool {
+    match result {
+        Err(JournalError::HardStop { .. }) => true,
+        Ok(_)
+        | Err(
+            JournalError::Sequence { .. }
+            | JournalError::Offset { .. }
+            | JournalError::Gap { .. }
+            | JournalError::TruncatesCommitted { .. }
+            | JournalError::CommitBeyondLog { .. }
+            | JournalError::ZeroTerm { .. }
+            | JournalError::TermDecreases { .. }
+            | JournalError::TermAhead { .. }
+            | JournalError::TermRegression { .. }
+            | JournalError::CommitRegression { .. }
+            | JournalError::VoteChanged { .. }
+            | JournalError::VoteForNonVoter { .. }
+            | JournalError::NotInLog { .. }
+            | JournalError::NotRaftBatch { .. }
+            | JournalError::EntryMismatch { .. }
+            | JournalError::Frame(_)
+            | JournalError::Record(_)
+            | JournalError::Storage(_),
+        ) => false,
+    }
 }

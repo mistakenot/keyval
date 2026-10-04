@@ -1,6 +1,6 @@
 //! Test-only helpers shared by this crate's tests:
 //! - seeded entropy;
-//! - an in-memory journal;
+//! - an in-memory journal, empty or starting with a real genesis frame;
 //! - the committed fixture configs.
 #![cfg(test)]
 
@@ -8,10 +8,10 @@ use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
-use journal::{LogBounds, LogicalLog, RaftBatch};
+use journal::{FrameKind, Genesis, LogBounds, LogicalLog, RaftBatch};
 use types::{
     ByteCount, Config, Entropy, EntropyStream, Entry, EntryIndex, EntryPayload, HardState,
-    JournalRead, NodeId, ReadLen, StorageError, Term,
+    InstanceId, JournalRead, NodeId, ReadLen, StorageError, Term,
 };
 
 /// A seeded `SplitMix64` entropy port: these tests' only randomness (§7.14).
@@ -98,6 +98,22 @@ pub fn empty_log() -> LogicalLog {
         &voters,
         LogBounds::new(ByteCount::new(16), ByteCount::new(1 << 30)),
     )
+}
+
+/// The bounds of these tests' logs: a 16-byte entry cache, and a hard stop far away.
+pub const BOUNDS: LogBounds = LogBounds::new(ByteCount::new(16), ByteCount::new(1 << 30));
+
+/// A journal holding only node `node`'s genesis frame under `config` (§7.7 step 0), and the
+/// empty logical log that follows it: what `journal::recover` reads back.
+pub fn journal_with_genesis(config: &Config, node: NodeId) -> (Journal, LogicalLog) {
+    let instance = InstanceId::parse("00112233445566778899aabbccddeeff").unwrap();
+    let genesis = Genesis::new(config, node, instance).unwrap();
+    let frame = journal::encode(FrameKind::Genesis, 1, &genesis.encode()).unwrap();
+    let journal = Journal::default();
+    journal.push(&frame);
+    let voters: Vec<NodeId> = config.voters().collect();
+    let log = LogicalLog::after_genesis(u64::try_from(frame.len()).unwrap(), &voters, BOUNDS);
+    (journal, log)
 }
 
 pub fn entry(index: u64, term: u64, command: &[u8]) -> Entry {

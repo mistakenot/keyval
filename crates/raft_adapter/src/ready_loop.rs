@@ -31,6 +31,9 @@ use types::{
 use crate::node::RaftNode;
 use crate::storage::ReadFailure;
 
+#[cfg(test)]
+mod invariant_fixtures;
+
 /// Applies committed entries for the loop (§7.4 step 5): the state machine, the request
 /// history and waiting client attempts, all the controller's (W14).
 pub trait Apply {
