@@ -2,7 +2,7 @@
   "rule": "the wrapped commit report is keyval.dev.commit/v1; a different version must not pass unnoticed",
   "error_at": "/commit",
   "instance": {
-    "schema": "keyval.dev.close/v1",
+    "schema": "keyval.dev.close/v2",
     "ok": true,
     "mode": "close",
     "bead": "br-w04-2-domain-enums-errors-bfw",
@@ -10,6 +10,7 @@
     "work_commit": "3155be86c9840b6107331acfd761b09eae5dbf4d",
     "work_tree": "db956beb0a0dfb346122af3a5527433ddfd4a7c3",
     "activated": [],
+    "demoted": [],
     "commit": {
       "schema": "keyval.dev.commit/v2",
       "ok": true,

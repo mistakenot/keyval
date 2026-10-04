@@ -60,15 +60,14 @@ pub fn workgraph_at(git: &Git, tree: &str) -> Result<Option<Vec<Item>>, String> 
         .transpose()
 }
 
-/// The work item a bead implements: the item whose recorded `bead` is `bead`, else the
-/// item named by the bead's `plan:W<nn>` label (until W06's import records bead IDs).
-pub fn item_for_bead<'a>(items: &'a [Item], bead: &str, labels: &[String]) -> Option<&'a Item> {
-    items.iter().find(|item| item.bead == bead).or_else(|| {
-        let plan = labels
-            .iter()
-            .find_map(|label| label.strip_prefix("plan:"))?;
-        items.iter().find(|item| item.id == plan)
-    })
+/// The work item a bead implements: the item whose recorded `bead` is `bead`. A
+/// `plan:<id>` label never identifies the item, because any bead can carry one; the
+/// registry gate checks that the recorded bead, and only it, carries its item's label
+/// (condition 8, br-item-closure-identity-unverified-xp14).
+pub fn item_for_bead<'a>(items: &'a [Item], bead: &str) -> Option<&'a Item> {
+    items
+        .iter()
+        .find(|item| !item.bead.is_empty() && item.bead == bead)
 }
 
 /// A requirement row: ID and declared status.
@@ -111,25 +110,49 @@ pub fn parse_requirements(text: &str) -> Result<Vec<Requirement>, String> {
         .collect()
 }
 
-/// The activation recomputation hook that `./dev commit --close` runs for a canonical
-/// closure (W05.3): every requirement still declared `planned` whose derived status is
-/// `active`, given `closed`, the closed work items with the closing one included. It
-/// recomputes every requirement, not just the closing item's, so a closure also catches up
-/// an activation that a closure outside the wrapper (an owner override) missed. It only
-/// promotes: an `active` requirement is never demoted here. Results are in registry order.
-pub fn to_activate(
+/// The status changes a recomputation derives, in registry order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Recomputed {
+    /// Declared `planned`, derived `active`: every listing item has closed.
+    pub activated: Vec<String>,
+    /// Declared `active`, derived `planned`: a listing item is open again.
+    pub demoted: Vec<String>,
+}
+
+impl Recomputed {
+    /// Whether no status changes.
+    pub const fn is_empty(&self) -> bool {
+        self.activated.is_empty() && self.demoted.is_empty()
+    }
+}
+
+/// The status recomputation hook that every `./dev commit --close` runs (W05.3): each
+/// requirement whose declared status differs from its derivation given `closed`, the
+/// closed work items as the closure commits them. It recomputes every requirement, both
+/// ways, not just the closing item's: a closure also catches up an activation that a
+/// closure outside the wrapper (an owner override) missed, and demotes the requirements
+/// of an item whose bead was reopened. Condition 1 demands the exact derivation on every
+/// tree (§10.13, br-item-closure-identity-unverified-xp14).
+pub fn recompute(
     items: &[Item],
     requirements: &[Requirement],
     closed: &BTreeSet<String>,
-) -> Vec<String> {
-    requirements
-        .iter()
-        .filter(|r| r.status == "planned" && derived_status(items, &r.id, closed) == "active")
-        .map(|r| r.id.clone())
-        .collect()
+) -> Recomputed {
+    let mut changes = Recomputed::default();
+    for r in requirements {
+        let derived = derived_status(items, &r.id, closed);
+        if r.status == "planned" && derived == "active" {
+            changes.activated.push(r.id.clone());
+        } else if r.status == "active" && derived == "planned" {
+            changes.demoted.push(r.id.clone());
+        }
+    }
+    changes
 }
 
-/// PLAN.md §6's requirement rows as `(id, level)`, in plan order.
+/// PLAN.md §6's requirement rows as `(id, level)`, in plan order: every table row whose
+/// ID cell is a requirement ID, whatever its level cell holds, so that a malformed level
+/// fails condition 1 instead of dropping the row (br-item-closure-identity-unverified-xp14).
 pub fn plan_requirements(plan: &str) -> Vec<(String, String)> {
     let section = plan
         .split("\n## 6. Requirements")
@@ -141,30 +164,41 @@ pub fn plan_requirements(plan: &str) -> Vec<(String, String)> {
         .filter_map(|line| {
             let mut cells = line.strip_prefix("| ")?.split(" | ");
             let (id, level) = (cells.next()?, cells.next()?);
-            matches!(level, "MUST" | "SHOULD" | "MAY").then(|| (id.to_owned(), level.to_owned()))
+            requirement_id(id).then(|| (id.to_owned(), level.to_owned()))
         })
         .collect()
 }
 
-/// The work items with a closed bead in a tracker export (`.beads/issues.jsonl`), judged
-/// as `./dev commit --close` judges them: any bead recorded for the item, or labelled
-/// `plan:<id>`.
+/// The §6 requirement families.
+pub const REQUIREMENT_FAMILIES: &[&str] = &["DM", "F", "C", "A", "DUR", "O", "T"];
+
+/// `DM-1`, `DUR-9`, `F-10`: a §6 family and a number.
+pub fn requirement_id(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(family, number)| {
+        REQUIREMENT_FAMILIES.contains(&family)
+            && !number.is_empty()
+            && number.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// The work items whose recorded bead is closed in a tracker export
+/// (`.beads/issues.jsonl`), judged as `./dev commit --close` judges them. A `plan:<id>`
+/// label on any other bead closes nothing (br-item-closure-identity-unverified-xp14).
 pub fn closed_items(items: &[Item], export: &str) -> BTreeSet<String> {
-    let beads: Vec<serde_json::Value> = export
+    let closed: BTreeSet<String> = export
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|bead| bead["status"] == "closed")
+        .filter_map(|bead| bead["id"].as_str().map(str::to_owned))
         .collect();
+    closed_by(items, &closed)
+}
+
+/// The work items whose recorded bead is one of `closed_beads`.
+pub fn closed_by(items: &[Item], closed_beads: &BTreeSet<String>) -> BTreeSet<String> {
     items
         .iter()
-        .filter(|item| {
-            let label = format!("plan:{}", item.id);
-            beads.iter().any(|bead| {
-                let labelled = bead["labels"]
-                    .as_array()
-                    .is_some_and(|labels| labels.iter().any(|l| l == label.as_str()));
-                (bead["id"] == item.bead.as_str() || labelled) && bead["status"] == "closed"
-            })
-        })
+        .filter(|item| !item.bead.is_empty() && closed_beads.contains(&item.bead))
         .map(|item| item.id.clone())
         .collect()
 }
@@ -184,12 +218,21 @@ pub fn derived_status(items: &[Item], id: &str, closed: &BTreeSet<String>) -> &'
     }
 }
 
-/// `text` with the status of each requirement in `ids` changed from `planned` to
-/// `active`, editing only those `status` lines so comments and layout survive.
-pub fn activate(text: &str, ids: &[String]) -> Result<String, String> {
+/// `text` with `changes` applied: each activated requirement's status changed from
+/// `planned` to `active`, each demoted one's from `active` to `planned`. Only those
+/// `status` lines are edited, so comments and layout survive.
+pub fn apply(text: &str, changes: &Recomputed) -> Result<String, String> {
+    let flips = changes
+        .activated
+        .iter()
+        .map(|id| (id, ("planned", "active")))
+        .chain(changes.demoted.iter().map(|id| (id, ("active", "planned"))));
+    let mut wanted: BTreeMap<String, (&str, &str, bool)> = BTreeMap::new();
+    for (id, (from, to)) in flips {
+        wanted.insert(id.clone(), (from, to, false));
+    }
     let mut out = String::with_capacity(text.len());
     let mut current: Option<String> = None;
-    let mut changed: BTreeMap<String, bool> = ids.iter().map(|id| (id.clone(), false)).collect();
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
@@ -198,28 +241,29 @@ pub fn activate(text: &str, ids: &[String]) -> Result<String, String> {
         if let Some(value) = key_value(trimmed, "id") {
             current = Some(value);
         }
-        let target = current.as_ref().filter(|id| changed.contains_key(*id));
-        if let (Some(id), Some(status)) = (target, key_value(trimmed, "status")) {
-            if status != "planned" {
-                return Err(format!("{REQUIREMENTS}: {id} is {status}, not planned"));
+        let target = current
+            .as_ref()
+            .and_then(|id| wanted.get_mut(id).map(|w| (id, w)));
+        if let (Some((id, (from, to, done))), Some(status)) = (target, key_value(trimmed, "status"))
+        {
+            if status != *from {
+                return Err(format!("{REQUIREMENTS}: {id} is {status}, not {from}"));
             }
-            out.push_str(&line.replacen("\"planned\"", "\"active\"", 1));
-            changed.insert(id.clone(), true);
+            out.push_str(&line.replacen(&format!("\"{from}\""), &format!("\"{to}\""), 1));
+            *done = true;
             continue;
         }
         out.push_str(line);
     }
-    let missing: Vec<&String> = changed
+    let missing: Vec<&String> = wanted
         .iter()
-        .filter(|(_, done)| !**done)
+        .filter(|(_, (_, _, done))| !*done)
         .map(|(id, _)| id)
         .collect();
     if missing.is_empty() {
         Ok(out)
     } else {
-        Err(format!(
-            "{REQUIREMENTS}: no planned status line for {missing:?}"
-        ))
+        Err(format!("{REQUIREMENTS}: no status line for {missing:?}"))
     }
 }
 
@@ -300,16 +344,24 @@ title = "Robot mode"
     }
 
     #[test]
-    fn a_bead_maps_to_its_item_by_recorded_id_or_plan_label() {
+    fn a_bead_maps_to_its_item_only_by_the_recorded_id() {
         let items = items();
-        let by_bead = item_for_bead(&items, "br-w49-status", &[]);
+        let by_bead = item_for_bead(&items, "br-w49-status");
         assert_eq!(by_bead.map(|i| i.id.as_str()), Some("W49"));
-        let labels = vec!["m0".to_owned(), "plan:W01".to_owned()];
-        let by_label = item_for_bead(&items, "br-w01-x", &labels);
-        assert_eq!(by_label.map(|i| i.id.as_str()), Some("W01"));
-        let subtask = item_for_bead(&items, "br-w01-1-x", &["sub:W01".to_owned()]);
         assert_eq!(
-            subtask, None,
+            item_for_bead(&items, "br-w01-x"),
+            None,
+            "rule: a bead that is not recorded for an item is no work item, whatever \
+             `plan:` label it carries (br-item-closure-identity-unverified-xp14)"
+        );
+        assert_eq!(
+            item_for_bead(&items, ""),
+            None,
+            "rule: W01 records no bead yet, and an empty ID names no bead"
+        );
+        assert_eq!(
+            item_for_bead(&items, "br-w01-1-x"),
+            None,
             "rule: a subtask is never its parent's work item"
         );
     }
@@ -322,12 +374,12 @@ title = "Robot mode"
     fn a_requirement_activates_only_when_its_last_listing_item_closes() {
         let (items, reqs) = (items(), requirements());
         assert_eq!(
-            to_activate(&items, &reqs, &closed(&["W01"])),
+            recompute(&items, &reqs, &closed(&["W01"])).activated,
             Vec::<String>::new(),
             "rule: O-8 stays planned while W49, which also lists it, is open (§10.13)"
         );
         assert_eq!(
-            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
+            recompute(&items, &reqs, &closed(&["W01", "W49"])).activated,
             ["O-8"],
             "rule: the last listing item's closure activates it"
         );
@@ -337,20 +389,20 @@ title = "Robot mode"
     fn only_section_6_requirements_activate_and_unknown_items_activate_nothing() {
         let (items, reqs) = (items(), requirements());
         assert_eq!(
-            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
+            recompute(&items, &reqs, &closed(&["W01", "W49"])).activated,
             ["O-8"],
             "rule: P7 and CD-8 are principles, not §6 rows, so they never activate; O-6, \
              which no item lists, is never vacuously active (P10)"
         );
         assert_eq!(
-            to_activate(&items, &reqs, &closed(&["W01.3"])),
-            Vec::<String>::new(),
+            recompute(&items, &reqs, &closed(&["W01.3"])),
+            Recomputed::default(),
             "rule: a subtask is no work item, so its closure activates nothing"
         );
     }
 
     #[test]
-    fn the_recompute_catches_up_a_missed_activation_and_never_demotes() {
+    fn the_recompute_catches_up_a_missed_activation_and_demotes_a_reopened_item() {
         let items = parse_workgraph(
             "[[item]]\nid = \"W01\"\nreqs = [\"O-8\"]\n\n\
              [[item]]\nid = \"W49\"\nreqs = [\"O-6\"]\n",
@@ -358,24 +410,38 @@ title = "Robot mode"
         .unwrap();
         let reqs = requirements();
         assert_eq!(
-            to_activate(&items, &reqs, &closed(&["W01", "W49"])),
+            recompute(&items, &reqs, &closed(&["W01", "W49"])).activated,
             ["O-8", "O-6"],
             "rule: W49 closed earlier outside the wrapper; the next closure (W01's) also \
              activates O-6, in registry order (W05.3)"
         );
-        let active =
-            parse_requirements(&activate(REQUIREMENTS_FIXTURE, &["O-8".to_owned()]).unwrap())
-                .unwrap();
+        let both = Recomputed {
+            activated: vec!["O-8".to_owned(), "O-6".to_owned()],
+            demoted: Vec::new(),
+        };
+        let active = parse_requirements(&apply(REQUIREMENTS_FIXTURE, &both).unwrap()).unwrap();
         assert_eq!(
-            to_activate(&items, &active, &closed(&[])),
-            Vec::<String>::new(),
-            "rule: the hook only promotes; an active requirement is never demoted"
+            recompute(&items, &active, &closed(&["W49"])),
+            Recomputed {
+                activated: Vec::new(),
+                demoted: vec!["O-8".to_owned()],
+            },
+            "rule: W01's bead was reopened, so O-8 derives planned again and is demoted; \
+             condition 1 demands the exact derivation (br-item-closure-identity-unverified-\
+             xp14). O-6, still covered by closed W49, stays active"
         );
+    }
+
+    fn activated(ids: &[&str]) -> Recomputed {
+        Recomputed {
+            activated: ids.iter().map(|&id| id.to_owned()).collect(),
+            demoted: Vec::new(),
+        }
     }
 
     #[test]
     fn activation_edits_only_the_status_lines() {
-        let edited = activate(REQUIREMENTS_FIXTURE, &["O-8".to_owned()]).unwrap();
+        let edited = apply(REQUIREMENTS_FIXTURE, &activated(&["O-8"])).unwrap();
         let reparsed = parse_requirements(&edited).unwrap();
         assert_eq!(reparsed[0].status, "active");
         assert_eq!(reparsed[1].status, "planned");
@@ -385,12 +451,41 @@ title = "Robot mode"
         );
         assert_eq!(edited.lines().count(), REQUIREMENTS_FIXTURE.lines().count());
         assert!(
-            activate(&edited, &["O-8".to_owned()]).is_err(),
+            apply(&edited, &activated(&["O-8"])).is_err(),
             "already active"
         );
         assert!(
-            activate(REQUIREMENTS_FIXTURE, &["X-1".to_owned()]).is_err(),
+            apply(REQUIREMENTS_FIXTURE, &activated(&["X-1"])).is_err(),
             "unknown ID"
+        );
+        let demoted = Recomputed {
+            activated: Vec::new(),
+            demoted: vec!["O-8".to_owned()],
+        };
+        let restored = apply(&edited, &demoted).unwrap();
+        assert_eq!(
+            restored, REQUIREMENTS_FIXTURE,
+            "rule: a demotion edits the same line back, comments included"
+        );
+        assert!(
+            apply(REQUIREMENTS_FIXTURE, &demoted).is_err(),
+            "a planned requirement cannot be demoted"
+        );
+    }
+
+    #[test]
+    fn a_section_6_row_with_a_malformed_level_is_kept_for_condition_1() {
+        let plan = "# Plan\n\n## 6. Requirements\n\n| ID | Level | Requirement |\n|---|---|---|\n\
+                    | F-1 | MUST | PUT |\n| F-2 | **SHOULD** | GET |\n| P4 | MUST | not §6 |\n\
+                    \n## 7. Architecture\n";
+        assert_eq!(
+            plan_requirements(plan),
+            [
+                ("F-1".to_owned(), "MUST".to_owned()),
+                ("F-2".to_owned(), "**SHOULD**".to_owned())
+            ],
+            "rule: a requirement row is never dropped for its level cell; condition 1 fails \
+             it (br-item-closure-identity-unverified-xp14)"
         );
     }
 
@@ -541,9 +636,24 @@ mod files {
             "planned",
             "rule: a requirement no item lists is never vacuously active (P10)"
         );
+        let recorded = parse_workgraph(
+            "[[item]]\nid = \"W01\"\nreqs = [\"O-8\"]\nbead = \"br-a\"\n\n\
+             [[item]]\nid = \"W49\"\nreqs = [\"O-8\"]\nbead = \"br-b\"\n",
+        )
+        .unwrap();
         let export = "{\"id\":\"br-a\",\"status\":\"closed\",\"labels\":[\"plan:W01\"]}\n\
-                      {\"id\":\"br-b\",\"status\":\"open\",\"labels\":[\"plan:W49\"]}\n";
-        assert_eq!(closed_items(&items, export), w01);
+                      {\"id\":\"br-b\",\"status\":\"open\",\"labels\":[\"plan:W49\"]}\n\
+                      {\"id\":\"br-x\",\"status\":\"closed\",\"labels\":[\"plan:W49\"]}\n";
+        assert_eq!(
+            closed_items(&recorded, export),
+            w01,
+            "rule: only the recorded bead closes an item; br-x, mislabelled plan:W49, closes \
+             nothing (br-item-closure-identity-unverified-xp14)"
+        );
+        assert!(
+            closed_items(&items, export).is_empty(),
+            "rule: an item that records no bead is never closed"
+        );
     }
 
     #[test]

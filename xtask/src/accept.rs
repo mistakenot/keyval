@@ -4,11 +4,12 @@
 //! 1. The tree must be the tree of a commit on `main` ("the current tree" is the tree of
 //!    the commit that carried the work).
 //! 2. The bead's selectors come from the `accept` list in `registry/workgraph.toml` **as
-//!    committed in the judged tree** for a canonical work item (matched by recorded bead
-//!    ID, else by its `plan:W<nn>` label), or from `accept:<CHECK-ID>` labels on a scoped
-//!    subtask or discovered-work bead. Labels are tracker metadata, so the canonical work
-//!    graph gains no rows. An empty selection fails (P10). Nothing comes from the shared
-//!    checkout's working files, so the receipt's tree alone determines what ran.
+//!    committed in the judged tree** for a canonical work item (matched by its recorded
+//!    bead ID only; a `plan:` label never identifies it), or from `accept:<CHECK-ID>`
+//!    labels on a scoped subtask or discovered-work bead. Labels are tracker metadata, so
+//!    the canonical work graph gains no rows. An empty selection fails (P10). Nothing comes
+//!    from the shared checkout's working files, so the receipt's tree alone determines what
+//!    ran.
 //! 3. The tree is materialised into `.local/accept/<tree-id>/`, refreshed in place if a
 //!    previous accept left it, under a per-directory lock and outside the commit lock. It
 //!    is content-verified like the candidate.
@@ -118,7 +119,7 @@ pub fn selectors(
 ) -> Result<(SelectorSource, Option<String>, Vec<String>), String> {
     let info = tracker.bead(bead)?;
     let items = registry::workgraph_at(git, tree)?.unwrap_or_default();
-    if let Some(item) = registry::item_for_bead(&items, bead, &info.labels) {
+    if let Some(item) = registry::item_for_bead(&items, bead) {
         return Ok((
             SelectorSource::Workgraph,
             Some(item.id.clone()),
@@ -546,7 +547,7 @@ pub mod tests {
         }
     }
 
-    const WORKGRAPH: &str = "[[item]]\nid = \"W07\"\nreqs = [\"P11\"]\naccept = [\"./dev check DEV-COMMIT\", \"./dev check DEV-GATE --case isolation\"]\nbead = \"\"\n";
+    const WORKGRAPH: &str = "[[item]]\nid = \"W07\"\nreqs = [\"P11\"]\naccept = [\"./dev check DEV-COMMIT\", \"./dev check DEV-GATE --case isolation\"]\nbead = \"br-w07\"\n";
 
     /// A repo whose committed tree carries the work graph; returns (git, tree).
     pub fn repo(name: &str) -> (Git, String) {

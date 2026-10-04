@@ -331,7 +331,9 @@ output only together with its schema, and bump the version when the change break
   REGISTRY-FILES fails (rule 12). `./dev gate fast` runs the file's implemented T0 rows
   (W05.4, below). `registry/requirements.toml` holds every §6 requirement; its
   statuses are derived (rule 12), so a closure outside `./dev commit --close` applies
-  the activation itself; the next canonical closure also catches up any it missed (W05.3).
+  the activation itself. Every `--close` also recomputes all statuses both ways from the
+  tracker export it commits: it catches up a missed activation and demotes a reopened
+  item's requirements (W05.3, br-item-closure-identity-unverified-xp14).
 - **The registry gate** (check REGISTRY, §10.13, W05.2) judges the registry against the
   plan, the code, the spec, the tests and the work graph. REGISTRY-FIXTURES gives each of
   its eight conditions a fixture that makes it fail. It also runs in every gate's xtask
@@ -343,22 +345,29 @@ output only together with its schema, and bump the version when the change break
     `#[test]` functions in its package. A `planned` row needs neither yet, and has at
     most one marker;
   - malformed rows fail whatever their status: bad IDs or vocabulary, or covered IDs
-    that are neither §6 requirements nor PLAN.md goals and principles (G…, P…, CD-…);
+    that are neither §6 requirements nor PLAN.md goals and principles (G…, P…, CD-…).
+    A §6 row whose level cell is not MUST, SHOULD or MAY fails too;
+  - every work item records its one bead, which alone closes the item and alone carries
+    its `plan:<id>` label;
   - HTTP handlers under `crates/server/` carry `// api: <operationId>`, and
     conformance tests under `conformance/` carry `// api-test: <operationId or error
-    code>`. Until W32, gaps are listed under `reported` in the check's JSON
-    (`keyval.dev.check/v2`) and do not fail it (conditions 5–6).
+    code>`. Until W32 closes, gaps are listed under `reported` in the check's JSON
+    (`keyval.dev.check/v2`) and do not fail it; W32's closure makes them fail
+    (conditions 5–6).
 - `./dev commit --bead <id> [--agent NAME] [--allow-demotion CHECK=BEAD]… -m MSG <PATH>…`
   — the exact-candidate commit wrapper (see Git Discipline). `./dev commit --close <id>
   -m MSG` closes a bead (§11.3 step 7):
   - it needs the newest passing accept receipt to name the tree of the newest `main`
     commit carrying `Bead: <id>`;
   - then, under the commit lock and only once the wrapper's path checks pass, it runs
-    `br close` and `br sync --flush-only`, and recomputes requirement activation from
-    the registry as committed at HEAD (only a canonical item's §6 requirements, once
-    every listing item is closed);
+    `br close` and `br sync --flush-only`, and recomputes every requirement status from
+    the registry as committed at HEAD and the tracker export it commits, both ways. A
+    requirement is active exactly when every listing item's recorded bead is closed; a
+    subtask's closure activates nothing of its own, but still applies a catch-up or a
+    reopened item's demotion;
   - it commits `.beads/` plus any `registry/requirements.toml` flips as one closure
-    commit (`Closes: <id>`). Re-running it finishes an interrupted closure, and succeeds
+    commit (`Closes: <id>`). `--json` prints `keyval.dev.close/v2` (`activated`,
+    `demoted`). Re-running it finishes an interrupted closure, and succeeds
     with nothing to commit if HEAD already records the closure.
 
   `--close <id> --failed --evidence <PATH>` records a failed spike. The bead is

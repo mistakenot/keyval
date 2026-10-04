@@ -723,7 +723,7 @@ mod tests {
         }
         assert_eq!(seen.len(), 3, "the runs reach every outcome; seen={seen:?}");
 
-        // A closure's report embeds the commit wrapper's report (keyval.dev.commit/v1).
+        // A closure's report embeds the commit wrapper's report.
         let closed = CloseReport {
             schema: crate::closure::SCHEMA,
             ok: true,
@@ -733,6 +733,7 @@ mod tests {
             work_commit: committed.commit.clone(),
             work_tree: committed.tree.clone(),
             activated: vec!["O-6".to_owned()],
+            demoted: vec!["F-1".to_owned()],
             commit: Some(committed),
             detail: None,
         };
@@ -746,6 +747,7 @@ mod tests {
             work_commit: None,
             work_tree: None,
             activated: Vec::new(),
+            demoted: Vec::new(),
             commit: None,
             detail: Some("the evidence file is missing".to_owned()),
         };

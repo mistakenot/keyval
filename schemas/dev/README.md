@@ -14,7 +14,7 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.receipt/v4` | `receipt.v4.schema.json` | gate receipts in `artifacts/receipts/` |
 | `keyval.dev.accept/v1` | `accept.v1.schema.json` | `./dev accept`, report and receipt |
 | `keyval.dev.commit/v1` | `commit.v1.schema.json` | `./dev commit`, report and receipt |
-| `keyval.dev.close/v1` | `close.v1.schema.json` | `./dev commit --close` (embeds the commit report) |
+| `keyval.dev.close/v2` | `close.v2.schema.json` | `./dev commit --close` (embeds the commit report) |
 | `keyval.dev.beads-import/v1` | `beads-import.v1.schema.json` | `./dev beads import` |
 | `keyval.dev.prune/v1` | `prune.v1.schema.json` | `./dev prune`, report and receipt |
 | `keyval.dev.step/v1` | `step.v1.schema.json` | step records (stderr, `steps.jsonl`) |

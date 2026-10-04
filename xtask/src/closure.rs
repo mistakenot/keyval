@@ -5,13 +5,20 @@
 //! `keyval.dev.accept/v1` receipt for the bead must name the tree of the newest `main`
 //! commit carrying the bead's work (trailer `Bead: <id>`). The tracker then changes under
 //! the commit lock, and only once the wrapper's path and reservation checks have passed
-//! ([`commit::Prepare`]): `br close`, `br sync --flush-only`, and requirement activation
-//! ([`crate::registry`]), derived from the registry as committed at HEAD.
-//! `.beads/issues.jsonl`, plus `registry/requirements.toml` if a requirement activated,
-//! are committed through the wrapper as one closure commit (trailer `Closes: <id>`).
+//! ([`commit::Prepare`]): `br close`, `br sync --flush-only`, and the requirement status
+//! recomputation ([`registry::recompute`]), derived from the registry as committed at HEAD
+//! and the tracker this commit records. `.beads/issues.jsonl`, plus
+//! `registry/requirements.toml` if a status changed, are committed through the wrapper as
+//! one closure commit (trailer `Closes: <id>`).
 //!
-//! Re-running the command finishes an interrupted closure: activation is derived from
-//! HEAD again, so a flip the interrupted run wrote is committed, never dropped. If HEAD
+//! Every closure and failure record recomputes every status, both ways: the commit
+//! carries the whole tracker export, a bead reopened or closed outside the wrapper
+//! included, and condition 1 demands the exact derivation on every tree
+//! (br-item-closure-identity-unverified-xp14). A bead that is no work item's recorded bead
+//! activates nothing by its own closure; it only brings statuses in line with the export.
+//!
+//! Re-running the command finishes an interrupted closure: the recomputation is derived
+//! from HEAD again, so a flip the interrupted run wrote is committed, never dropped. If HEAD
 //! already records the closure (another closure's commit carried this bead's export),
 //! there is nothing left to commit and the command succeeds.
 //!
@@ -39,7 +46,7 @@ use crate::registry;
 use crate::tracker::Tracker;
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.close/v1";
+pub const SCHEMA: &str = "keyval.dev.close/v2";
 
 /// The tracker export the closure commit carries.
 pub const BEADS_EXPORT: &str = ".beads/issues.jsonl";
@@ -58,7 +65,7 @@ pub struct CloseRequest {
     pub failed_evidence: Option<String>,
 }
 
-/// The `--close` / `--failed` report (`keyval.dev.close/v1`).
+/// The `--close` / `--failed` report (`keyval.dev.close/v2`; v2 adds `demoted`).
 #[derive(Debug, Serialize)]
 pub struct CloseReport {
     /// Schema identifier.
@@ -78,6 +85,9 @@ pub struct CloseReport {
     pub work_tree: Option<String>,
     /// Requirements this closure activated.
     pub activated: Vec<String>,
+    /// Requirements this closure demoted to `planned`: a listing item's bead is open
+    /// again.
+    pub demoted: Vec<String>,
     /// The wrapped commit's report.
     pub commit: Option<CommitReport>,
     /// Why it stopped, if it did.
@@ -105,6 +115,7 @@ pub fn run(
         work_commit: None,
         work_tree: None,
         activated: Vec::new(),
+        demoted: Vec::new(),
         commit: None,
         detail: None,
     };
@@ -132,9 +143,9 @@ pub fn run(
                 )
             }
         };
-        Ok((kind, action, bead.labels))
+        Ok((kind, action))
     });
-    let (kind, action, labels) = match checked {
+    let (kind, action) = match checked {
         Ok(checked) => checked,
         Err(why) => {
             report.detail = Some(why);
@@ -144,9 +155,8 @@ pub fn run(
     let step = TrackerStep {
         tracker,
         bead: &request.bead,
-        labels,
         action,
-        activation: RefCell::new(Activation::default()),
+        statuses: RefCell::new(StatusChange::default()),
         paths: RefCell::new(None),
         applied: Cell::new(false),
     };
@@ -161,7 +171,9 @@ pub fn run(
     let committed = commit::run_prepared(git, &wrapped, ports, artifacts, Some(&step));
     report.ok = committed.ok;
     if committed.ok {
-        report.activated.clone_from(&step.activation.borrow().ids);
+        let statuses = step.statuses.borrow();
+        report.activated.clone_from(&statuses.changes.activated);
+        report.demoted.clone_from(&statuses.changes.demoted);
     } else if step.already_recorded(git) {
         report.ok = true;
         report.detail = Some(format!(
@@ -234,11 +246,11 @@ enum Action {
     Fail { evidence: String },
 }
 
-/// A requirement activation: the IDs that turn active, and the registry text with them
-/// active.
+/// A requirement status recomputation: what changes, and the registry text with the
+/// changes applied (none when nothing changes).
 #[derive(Default)]
-struct Activation {
-    ids: Vec<String>,
+struct StatusChange {
+    changes: registry::Recomputed,
     text: Option<String>,
 }
 
@@ -246,10 +258,9 @@ struct Activation {
 struct TrackerStep<'a> {
     tracker: &'a dyn Tracker,
     bead: &'a str,
-    labels: Vec<String>,
     action: Action,
     /// Planned by [`Prepare::paths`], written by [`Prepare::apply`].
-    activation: RefCell<Activation>,
+    statuses: RefCell<StatusChange>,
     /// What [`Prepare::paths`] returned, once it has run.
     paths: RefCell<Option<Vec<String>>>,
     /// Whether [`Prepare::apply`] began changing the tracker.
@@ -258,16 +269,8 @@ struct TrackerStep<'a> {
 
 impl Prepare for TrackerStep<'_> {
     fn paths(&self, git: &Git) -> Result<Vec<String>, String> {
-        let paths = match &self.action {
-            Action::Close { .. } => {
-                let activation = plan_activation(git, self.tracker, self.bead, &self.labels)?;
-                let mut paths = vec![BEADS_EXPORT.to_owned()];
-                if !activation.ids.is_empty() {
-                    paths.push(registry::REQUIREMENTS.to_owned());
-                }
-                *self.activation.borrow_mut() = activation;
-                paths
-            }
+        let (closing, mut paths) = match &self.action {
+            Action::Close { .. } => (Some(self.bead), vec![BEADS_EXPORT.to_owned()]),
             Action::Fail { evidence } => {
                 if !git.root().join(evidence).is_file() {
                     return Err(format!(
@@ -275,9 +278,16 @@ impl Prepare for TrackerStep<'_> {
                          failure-evidence report first"
                     ));
                 }
-                vec![BEADS_EXPORT.to_owned(), evidence.clone()]
+                (None, vec![BEADS_EXPORT.to_owned(), evidence.clone()])
             }
         };
+        // The commit carries the whole tracker export, so every status is recomputed
+        // against it (br-item-closure-identity-unverified-xp14).
+        let statuses = plan_statuses(git, self.tracker, closing)?;
+        if statuses.text.is_some() {
+            paths.push(registry::REQUIREMENTS.to_owned());
+        }
+        *self.statuses.borrow_mut() = statuses;
         *self.paths.borrow_mut() = Some(paths.clone());
         Ok(paths)
     }
@@ -316,7 +326,7 @@ impl Prepare for TrackerStep<'_> {
             }
         }
         self.tracker.flush()?;
-        if let Some(text) = &self.activation.borrow().text {
+        if let Some(text) = &self.statuses.borrow().text {
             let path = git.root().join(registry::REQUIREMENTS);
             fs::write(&path, text).map_err(|err| format!("{}: {err}", path.display()))?;
         }
@@ -326,13 +336,13 @@ impl Prepare for TrackerStep<'_> {
 
 impl TrackerStep<'_> {
     /// Whether HEAD already holds everything this step would commit: its paths are
-    /// unchanged from HEAD, no activation is pending, and HEAD's tracker export shows the
+    /// unchanged from HEAD, no status change is pending, and HEAD's tracker export shows the
     /// bead closed (or failed).
     fn already_recorded(&self, git: &Git) -> bool {
         let Some(paths) = self.paths.borrow().clone() else {
             return false;
         };
-        if !self.activation.borrow().ids.is_empty()
+        if !self.statuses.borrow().changes.is_empty()
             || !git.unchanged_from_head(&paths).unwrap_or(false)
         {
             return false;
@@ -353,63 +363,53 @@ impl TrackerStep<'_> {
     }
 }
 
-/// The activation that closing `bead` derives from the registry as committed at HEAD:
-/// every planned requirement whose listing items are now all closed, so a missed earlier
-/// activation is caught up too (W05.3). A scoped subtask or discovered-work bead activates
-/// nothing.
+/// The status recomputation a closure (or failure record) derives from the registry as
+/// committed at HEAD and the tracker as this commit records it, with `closing`, the bead
+/// about to close, counted closed: every requirement whose declared status differs from
+/// its derivation, both ways (W05.3, br-item-closure-identity-unverified-xp14). An item is
+/// closed only by its recorded bead ([`registry::closed_by`]), so a subtask or a
+/// discovered bead activates nothing by its own closure.
 /// The working copy of `registry/requirements.toml` must hold either HEAD's text or
-/// exactly this activation (left by an interrupted run); anything else is somebody's
+/// exactly this recomputation (left by an interrupted run); anything else is somebody's
 /// uncommitted edit, which a closure must not commit.
-fn plan_activation(
+fn plan_statuses(
     git: &Git,
     tracker: &dyn Tracker,
-    bead: &str,
-    labels: &[String],
-) -> Result<Activation, String> {
+    closing: Option<&str>,
+) -> Result<StatusChange, String> {
     let (Some(items), Some(committed)) = (
         registry::workgraph_at(git, "HEAD")?,
         git.file_at("HEAD", registry::REQUIREMENTS)?,
     ) else {
-        return Ok(Activation::default());
-    };
-    let Some(item) = registry::item_for_bead(&items, bead, labels) else {
-        // A scoped subtask or discovered-work bead never activates anything.
-        return Ok(Activation::default());
+        return Ok(StatusChange::default());
     };
     let requirements = registry::parse_requirements(&committed)?;
-    let beads = tracker.all_beads()?;
-    let is_closed = |item_id: &str| {
-        let Some(listed) = items.iter().find(|i| i.id == item_id) else {
-            return false;
-        };
-        let plan_label = format!("plan:{item_id}");
-        beads.iter().any(|b| {
-            (b.id == listed.bead || b.labels.contains(&plan_label)) && b.status == "closed"
-        })
-    };
-    // Recompute every requirement against all closed items, this one included (W05.3).
-    let mut closed: BTreeSet<String> = items
-        .iter()
-        .map(|i| i.id.clone())
-        .filter(|id| is_closed(id))
+    let mut closed_beads: BTreeSet<String> = tracker
+        .all_beads()?
+        .into_iter()
+        .filter(|b| b.status == "closed")
+        .map(|b| b.id)
         .collect();
-    closed.insert(item.id.clone());
-    let ids = registry::to_activate(&items, &requirements, &closed);
-    if ids.is_empty() {
-        return Ok(Activation::default());
+    closed_beads.extend(closing.map(str::to_owned));
+    let closed = registry::closed_by(&items, &closed_beads);
+    let changes = registry::recompute(&items, &requirements, &closed);
+    if changes.is_empty() {
+        return Ok(StatusChange::default());
     }
-    let text = registry::activate(&committed, &ids)?;
+    let text = registry::apply(&committed, &changes)?;
     let path = git.root().join(registry::REQUIREMENTS);
     let working = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
     if working != committed && working != text {
         return Err(format!(
-            "{} has uncommitted edits besides this closure's activation of {ids:?}; commit \
-             or revert them first",
-            registry::REQUIREMENTS
+            "{} has uncommitted edits besides this closure's status recomputation \
+             (activating {:?}, demoting {:?}); commit or revert them first",
+            registry::REQUIREMENTS,
+            changes.activated,
+            changes.demoted
         ));
     }
-    Ok(Activation {
-        ids,
+    Ok(StatusChange {
+        changes,
         text: Some(text),
     })
 }
@@ -509,6 +509,9 @@ impl Report for CloseReport {
         if !self.activated.is_empty() {
             let _ = writeln!(out, "  activated: {}", self.activated.join(", "));
         }
+        if !self.demoted.is_empty() {
+            let _ = writeln!(out, "  demoted: {}", self.demoted.join(", "));
+        }
         if let Some(commit) = &self.commit {
             let _ = writeln!(out, "  {}", commit.render_human().replace('\n', "\n  "));
         }
@@ -589,13 +592,13 @@ mod tests {
 id = \"W01\"
 reqs = [\"P7\", \"O-8\"]
 accept = [\"./dev check XTASK\"]
-bead = \"\"
+bead = \"br-w01\"
 
 [[item]]
 id = \"W49\"
 reqs = [\"O-8\"]
 accept = [\"./dev check STATUS\"]
-bead = \"\"
+bead = \"br-w49\"
 ";
 
     const REQUIREMENTS: &str = "\
@@ -780,13 +783,13 @@ status = \"planned\"
 id = \"W01\"
 reqs = [\"O-8\"]
 accept = [\"./dev check XTASK\"]
-bead = \"\"
+bead = \"br-w01\"
 
 [[item]]
 id = \"W49\"
 reqs = [\"O-6\"]
 accept = [\"./dev check STATUS\"]
-bead = \"\"
+bead = \"br-w49\"
 ";
 
     const CATCH_UP_REQUIREMENTS: &str = "\
@@ -807,11 +810,6 @@ status = \"planned\"
         // W49, the only item listing O-6, closes outside the wrapper (an owner override),
         // so nothing flips O-6.
         w.tracker.close("br-w49", "owner override").unwrap();
-        // A subtask's closure catches nothing up: subtasks never activate (§10.13).
-        let sub = w.work("br-w01-3", "probe.rs");
-        w.accept("br-w01-3", &sub);
-        let child = w.close("br-w01-3");
-        assert!(child.ok && child.activated.is_empty(), "child={child:#?}");
         // The next canonical closure recomputes every requirement.
         let w01 = w.work("br-w01", "w01.rs");
         w.accept("br-w01", &w01);
@@ -829,6 +827,87 @@ status = \"planned\"
             .map(|r| r.status)
             .collect();
         assert_eq!(statuses, ["active", "active"], "requirements.toml=\n{text}");
+    }
+
+    /// Reopens `bead` in the fake tracker, as `br reopen` would.
+    fn reopen(w: &World, bead: &str) {
+        let mut beads = w.tracker.beads.borrow_mut();
+        let found = beads.iter_mut().find(|b| b.id == bead).unwrap();
+        found.status = "open".to_owned();
+    }
+
+    #[test]
+    fn every_closure_recomputes_both_ways_and_a_subtask_activates_nothing_of_its_own() {
+        let w = world_with("close-every", CATCH_UP_WORKGRAPH, CATCH_UP_REQUIREMENTS);
+        w.tracker.close("br-w49", "owner override").unwrap();
+        // A subtask's closure commits the export with W49 closed, so it catches up O-6;
+        // W01, the subtask's parent, is still open, so O-8 stays planned.
+        let sub = w.work("br-w01-3", "probe.rs");
+        w.accept("br-w01-3", &sub);
+        let child = w.close("br-w01-3");
+        assert!(child.ok, "child={child:#?}");
+        assert_eq!(
+            (child.activated.as_slice(), child.demoted.as_slice()),
+            (&["O-6".to_owned()][..], &[][..]),
+            "rule: every closure brings statuses in line with the export it commits, and a \
+             subtask activates nothing of its own (br-item-closure-identity-unverified-xp14); \
+             child={child:#?}"
+        );
+        // W49's bead is reopened: the next closure, here W01's, demotes O-6 and activates
+        // its own O-8, in one closure commit.
+        reopen(&w, "br-w49");
+        let w01 = w.work("br-w01", "w01.rs");
+        w.accept("br-w01", &w01);
+        let report = w.close("br-w01");
+        assert!(report.ok, "report={report:#?}");
+        assert_eq!(
+            (report.activated.as_slice(), report.demoted.as_slice()),
+            (&["O-8".to_owned()][..], &["O-6".to_owned()][..]),
+            "rule: a reopened item's requirement derives planned again, so the closure \
+             carrying the reopen demotes it; condition 1 demands the exact derivation \
+             (§10.13); report={report:#?}"
+        );
+        let text = fs::read_to_string(w.git.root().join(registry::REQUIREMENTS)).unwrap();
+        let statuses: Vec<String> = registry::parse_requirements(&text)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.status)
+            .collect();
+        assert_eq!(
+            statuses,
+            ["active", "planned"],
+            "requirements.toml=\n{text}"
+        );
+        let committed = w.committed_files();
+        assert!(
+            committed.contains(registry::REQUIREMENTS) && committed.contains(BEADS_EXPORT),
+            "rule: the flips commit with .beads/ in one closure commit; files={committed}"
+        );
+    }
+
+    #[test]
+    fn a_mislabelled_bead_never_closes_an_item() {
+        let w = world("close-mislabelled");
+        // A discovered bead carries plan:W01 and plan:W49 by mistake; closing it closes
+        // neither item, so O-8 stays planned.
+        w.tracker.beads.borrow_mut().push(crate::tracker::Bead {
+            id: "br-stray".to_owned(),
+            status: "in_progress".to_owned(),
+            labels: vec![
+                "plan:W01".to_owned(),
+                "plan:W49".to_owned(),
+                "accept:LINT-PROBES".to_owned(),
+            ],
+        });
+        let stray = w.work("br-stray", "stray.rs");
+        w.accept("br-stray", &stray);
+        let report = w.close("br-stray");
+        assert!(
+            report.ok && report.activated.is_empty(),
+            "rule: only an item's recorded bead closes it (br-item-closure-identity-\
+             unverified-xp14); report={report:#?}"
+        );
+        assert_eq!(w.requirement_status(), "planned");
     }
 
     #[test]

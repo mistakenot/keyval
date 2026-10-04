@@ -9,6 +9,7 @@
 //! 1. **Plan and registry.** `requirements.toml` lists PLAN.md §6's IDs and levels, in
 //!    order, and each status equals its derivation from the work graph and the tracker
 //!    export ([`registry::derived_status`]): a hand-edited status fails (§11.5 rule 12).
+//!    A §6 row whose level cell is not MUST, SHOULD or MAY fails too; it is never skipped.
 //! 2. **Coverage.** Every `active` MUST requirement is covered by an `implemented` check.
 //! 3. **Registry and code.** Every `implemented` check has exactly one `// check: <ID>`
 //!    marker in first-party code; every marker has a row, and a `planned` row at most one.
@@ -29,6 +30,8 @@
 //! 8. **Work graph.** `workgraph.toml` mirrors §12.2/§12.3 and is acyclic
 //!    ([`workgraph::judge`]), and each item's `deps` equal its bead's `blocks` edges to
 //!    other work-item beads in the tracker export; other beads' edges are free (§12.2).
+//!    Every item records its bead, which alone closes it ([`registry::closed_items`]), so
+//!    that bead, and no other, carries the item's `plan:<id>` label (§11.4).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -56,7 +59,6 @@ const REQUIREMENTS_SCHEMA: &str = "keyval.registry.requirements/v1";
 const CHECKS_SCHEMA: &str = "keyval.registry.checks/v1";
 const LEVELS: &[&str] = &["MUST", "SHOULD", "MAY"];
 const REQUIREMENT_STATUSES: &[&str] = &["planned", "active"];
-const REQUIREMENT_FAMILIES: &[&str] = &["DM", "F", "C", "A", "DUR", "O", "T"];
 /// The work item whose closure switches conditions 5 and 6 from reported to failing
 /// (§10.13, D-49).
 const ENFORCED_BY: &str = "W32";
@@ -306,7 +308,7 @@ fn well_formed(
     }
     let mut seen = BTreeSet::new();
     for r in &requirements.requirement {
-        if !requirement_id(&r.id) || !seen.insert(r.id.as_str()) {
+        if !registry::requirement_id(&r.id) || !seen.insert(r.id.as_str()) {
             fail(format!(
                 "requirement ID {:?} is malformed or repeated",
                 r.id
@@ -397,15 +399,6 @@ fn well_formed(
     verdict.cases += requirements.requirement.len() + checks.check.len();
 }
 
-/// `DM-1`, `DUR-9`, `F-10`: a §6 family and a number.
-fn requirement_id(id: &str) -> bool {
-    id.split_once('-').is_some_and(|(family, number)| {
-        REQUIREMENT_FAMILIES.contains(&family)
-            && !number.is_empty()
-            && number.bytes().all(|b| b.is_ascii_digit())
-    })
-}
-
 /// `DEV-CHECK`, `K-5`, `T0`: uppercase alphanumeric words joined by single hyphens.
 fn check_id(id: &str) -> bool {
     id.starts_with(|c: char| c.is_ascii_uppercase())
@@ -442,6 +435,15 @@ fn plan_and_statuses(
     verdict: &mut Judgement,
 ) {
     let plan = registry::plan_requirements(plan_text);
+    for (id, level) in plan
+        .iter()
+        .filter(|(_, level)| !LEVELS.contains(&level.as_str()))
+    {
+        verdict.violations.push(format!(
+            "condition 1: PLAN.md §6 row {id} has level {level:?}, not one of {LEVELS:?}; a \
+             requirement row is never skipped, so fix the plan's row"
+        ));
+    }
     let rows: Vec<(String, String)> = requirements
         .requirement
         .iter()
@@ -853,8 +855,37 @@ fn work_graph(
         .filter(|item| !item.bead.is_empty())
         .map(|item| (item.bead.as_str(), item.id.as_str()))
         .collect();
-    for item in items.iter().filter(|item| !item.bead.is_empty()) {
+    // The beads carrying each `plan:<id>` label.
+    let mut labelled: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (id, bead) in &beads {
+        let labels = bead["labels"].as_array().map_or(&[][..], Vec::as_slice);
+        for item in labels
+            .iter()
+            .filter_map(|label| label.as_str()?.strip_prefix("plan:"))
+        {
+            labelled.entry(item).or_default().push(id);
+        }
+    }
+    for item in items {
         verdict.cases += 1;
+        if item.bead.is_empty() {
+            verdict.violations.push(format!(
+                "condition 8: {} records no bead; an item is closed only by its recorded \
+                 bead, so every item names its one bead (§11.4)",
+                item.id
+            ));
+            continue;
+        }
+        let carriers = labelled
+            .get(item.id.as_str())
+            .map_or(&[][..], Vec::as_slice);
+        if carriers != [item.bead.as_str()] {
+            verdict.violations.push(format!(
+                "condition 8: plan:{} is on beads {carriers:?}; it belongs on {}, the item's \
+                 recorded bead, and on no other (§11.4)",
+                item.id, item.bead
+            ));
+        }
         let Some(bead) = beads.get(&item.bead) else {
             verdict.violations.push(format!(
                 "condition 8: {} records bead {}, which the tracker export lacks",
@@ -980,23 +1011,33 @@ impl ErrorCode {
         .concat()
     }
 
-    /// A tracker export line for a work-item bead.
-    fn bead(id: &str, status: &str, blocks: &[&str]) -> String {
+    /// A tracker export line for a bead with `labels`.
+    fn labelled_bead(id: &str, labels: &[&str], status: &str, blocks: &[&str]) -> String {
         let deps: Vec<serde_json::Value> = blocks
             .iter()
             .map(|on| serde_json::json!({"depends_on_id": on, "type": "blocks"}))
             .collect();
         format!(
             "{}\n",
-            serde_json::json!({"id": id, "status": status, "labels": [], "dependencies": deps})
+            serde_json::json!({"id": id, "status": status, "labels": labels, "dependencies": deps})
         )
+    }
+
+    /// A tracker export line for a bead that is no work item's (a subtask).
+    fn bead(id: &str, status: &str, blocks: &[&str]) -> String {
+        labelled_bead(id, &[], status, blocks)
+    }
+
+    /// A tracker export line for `item`'s recorded bead, labelled `plan:<item>`.
+    fn item_bead(id: &str, item: &str, status: &str, blocks: &[&str]) -> String {
+        labelled_bead(id, &[&format!("plan:{item}")], status, blocks)
     }
 
     fn export_text(w03: &str) -> String {
         [
-            bead("b1", "closed", &[]),
-            bead("b2", "closed", &["b1"]),
-            bead("b3", w03, &["b1", "b2"]),
+            item_bead("b1", "W01", "closed", &[]),
+            item_bead("b2", "W02", "closed", &["b1"]),
+            item_bead("b3", "W03", w03, &["b1", "b2"]),
         ]
         .concat()
     }
@@ -1265,7 +1306,11 @@ impl ErrorCode {
              bead = \"b32\"\n",
             workgraph_text(["b1", "b2", "b3"])
         );
-        texts.export = [export_text("open"), bead("b32", status, &["b3"])].concat();
+        texts.export = [
+            export_text("open"),
+            item_bead("b32", "W32", status, &["b3"]),
+        ]
+        .concat();
         texts
     }
 
@@ -1349,13 +1394,60 @@ impl ErrorCode {
     }
 
     #[test]
+    fn condition_8_fails_unless_each_item_records_the_one_bead_labelled_for_it() {
+        let mut texts = Texts::valid();
+        texts.workgraph = workgraph_text(["b1", "", "b3"]);
+        fails_only(
+            &texts,
+            "condition 8",
+            "every item records its bead; an empty `bead` is never skipped",
+        );
+        let mut texts = Texts::valid();
+        texts.export = [
+            item_bead("b1", "W01", "closed", &[]),
+            bead("b2", "closed", &["b1"]),
+            item_bead("b3", "W03", "open", &["b1", "b2"]),
+        ]
+        .concat();
+        fails_only(
+            &texts,
+            "condition 8",
+            "the recorded bead carries its item's plan: label",
+        );
+        // A discovered bead mislabelled plan:W03 closes while W03's own bead stays open.
+        let mut texts = Texts::valid();
+        texts.export = [export_text("open"), item_bead("x3", "W03", "closed", &[])].concat();
+        fails_only(
+            &texts,
+            "condition 8",
+            "a plan: label is on the recorded bead alone; and the mislabelled closure \
+             closes nothing, so F-1 still derives planned and condition 1 holds \
+             (br-item-closure-identity-unverified-xp14)",
+        );
+    }
+
+    #[test]
+    fn condition_1_fails_on_a_section_6_row_with_a_malformed_level() {
+        let mut texts = Texts::valid();
+        assert_eq!(texts.plan.matches("| F-2 | SHOULD | GET |").count(), 1);
+        texts.plan = texts
+            .plan
+            .replace("| F-2 | SHOULD | GET |", "| F-2 | **SHOULD** | GET |");
+        fails_only(
+            &texts,
+            "condition 1",
+            "a §6 row whose level does not parse fails; it is never silently dropped",
+        );
+    }
+
+    #[test]
     fn condition_8_fails_on_work_graph_drift_and_on_tracker_edges() {
         let mut texts = Texts::valid();
         texts.export = [
-            bead("b1", "closed", &[]),
-            bead("b2", "closed", &["b1"]),
+            item_bead("b1", "W01", "closed", &[]),
+            item_bead("b2", "W02", "closed", &["b1"]),
             bead("s1", "open", &["b2", "b3"]),
-            bead("b3", "open", &["b1", "b2", "s1"]),
+            item_bead("b3", "W03", "open", &["b1", "b2", "s1"]),
         ]
         .concat();
         let verdict = texts.judge();
@@ -1366,9 +1458,9 @@ impl ErrorCode {
         );
         let mut texts = Texts::valid();
         texts.export = [
-            bead("b1", "closed", &[]),
-            bead("b2", "closed", &["b1"]),
-            bead("b3", "open", &["b1"]),
+            item_bead("b1", "W01", "closed", &[]),
+            item_bead("b2", "W02", "closed", &["b1"]),
+            item_bead("b3", "W03", "open", &["b1"]),
         ]
         .concat();
         fails_only(
