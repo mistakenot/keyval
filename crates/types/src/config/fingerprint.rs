@@ -11,14 +11,16 @@
 //! - every [`ConfigParamClass::Semantic`] parameter, in [`ConfigParam::ALL`] order: the
 //!   key and value limits (DM-1, DM-2), the live-state limits (DM-6) and the history
 //!   capacity (DM-7);
-//! - the fixed SCAN caps ([`PageSize::MAX`] items, [`MAX_SCAN_PAGE_BYTES`] decoded bytes),
-//!   which §7.11 makes part of the fingerprint;
+//! - the fixed SCAN constants: the page caps ([`PageSize::MAX`] items,
+//!   [`MAX_SCAN_PAGE_BYTES`] decoded bytes), which §7.11 makes part of the fingerprint, and
+//!   the default page size ([`PageSize::DEFAULT`]), which decides how many items a SCAN
+//!   without `limit` returns (F-4);
 //! - `voters=`, the voters' IDs ascending, comma-separated.
 //!
 //! Everything else is left out because it cannot change a result: the display cluster ID,
 //! timing, addresses, data directories, `max_journal_bytes` and the queue and library
 //! limits. Changing the encoding changes every fingerprint, so it is a format change: bump
-//! [`SEMANTIC_ENCODING`]'s version and record it in §16.
+//! [`SEMANTIC_ENCODING`]'s version and record it in §16. v2 added the default page size.
 
 use core::fmt;
 
@@ -27,7 +29,32 @@ use super::{Config, ConfigParam, ConfigParamClass};
 use crate::{PageSize, Sha256};
 
 /// The canonical encoding's first line: its name and version.
-pub const SEMANTIC_ENCODING: &str = "keyval semantic config v1";
+pub const SEMANTIC_ENCODING: &str = "keyval semantic config v2";
+
+/// The fixed values that can change a result: format constants, not configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FixedSemantics {
+    /// The command-format version.
+    command_format_version: u64,
+    /// The most items a SCAN page holds.
+    scan_page_max_items: u64,
+    /// The items a SCAN page holds when the request gives no `limit`.
+    scan_page_default_items: u64,
+    /// The most decoded key and value bytes a SCAN page holds.
+    scan_page_max_bytes: u64,
+}
+
+impl FixedSemantics {
+    /// This build's values.
+    fn current() -> Self {
+        Self {
+            command_format_version: COMMAND_FORMAT_VERSION,
+            scan_page_max_items: PageSize::MAX,
+            scan_page_default_items: PageSize::DEFAULT.get(),
+            scan_page_max_bytes: MAX_SCAN_PAGE_BYTES,
+        }
+    }
+}
 
 /// The semantic-config fingerprint: SHA-256 over [`Config::semantic_encoding`] (DUR-8).
 ///
@@ -61,10 +88,15 @@ impl Config {
     /// The canonical text the semantic-config fingerprint digests (module documentation).
     #[must_use]
     pub fn semantic_encoding(&self) -> String {
+        self.encoding_with(FixedSemantics::current())
+    }
+
+    /// The canonical text with `fixed` in place of this build's fixed values.
+    fn encoding_with(&self, fixed: FixedSemantics) -> String {
         let voters: Vec<String> = self.voters().map(|id| id.get().to_string()).collect();
         let mut lines = vec![
             SEMANTIC_ENCODING.to_owned(),
-            format!("command_format_version={COMMAND_FORMAT_VERSION}"),
+            format!("command_format_version={}", fixed.command_format_version),
         ];
         lines.extend(
             ConfigParam::ALL
@@ -72,8 +104,12 @@ impl Config {
                 .filter(|param| param.class() == ConfigParamClass::Semantic)
                 .map(|param| format!("{}={}", param.key(), self.get(param))),
         );
-        lines.push(format!("scan_page_max_items={}", PageSize::MAX));
-        lines.push(format!("scan_page_max_bytes={MAX_SCAN_PAGE_BYTES}"));
+        lines.push(format!("scan_page_max_items={}", fixed.scan_page_max_items));
+        lines.push(format!(
+            "scan_page_default_items={}",
+            fixed.scan_page_default_items
+        ));
+        lines.push(format!("scan_page_max_bytes={}", fixed.scan_page_max_bytes));
         lines.push(format!("voters={}", voters.join(",")));
         let mut text = lines.join("\n");
         text.push('\n');
@@ -96,7 +132,8 @@ mod tests {
     use std::path::Path;
 
     use super::super::{Config, ConfigParam, ConfigParamClass};
-    use super::{SEMANTIC_ENCODING, SemanticFingerprint};
+    use super::{FixedSemantics, SEMANTIC_ENCODING, SemanticFingerprint};
+    use crate::Sha256;
 
     /// The repository's local cluster config.
     const LOCAL: &str = include_str!("../../../../config/local.toml");
@@ -121,7 +158,7 @@ mod tests {
     fn local_toml_has_the_hand_written_canonical_encoding_and_pinned_fingerprint() {
         let config = parse(LOCAL);
         // Written by hand from PLAN.md §7.10/§7.11 and config/local.toml.
-        let expected = "keyval semantic config v1\n\
+        let expected = "keyval semantic config v2\n\
                         command_format_version=1\n\
                         max_key_bytes=256\n\
                         max_value_bytes=65536\n\
@@ -130,6 +167,7 @@ mod tests {
                         max_log_entries=1000000\n\
                         max_history_bytes=3221225472\n\
                         scan_page_max_items=128\n\
+                        scan_page_default_items=32\n\
                         scan_page_max_bytes=1048576\n\
                         voters=1,2,3,4,5\n";
         assert_eq!(
@@ -139,7 +177,7 @@ mod tests {
         );
         assert_eq!(
             config.semantic_fingerprint().to_string(),
-            "3b2e3ed34b0f5f49312b1d00bcebdc9f5100d408ae2209daf7a4c1695ec3c26c",
+            "48205fd1b435b33601373568bee9688dd2d780f57d77f83b2a4c2e4c2f9f99dd",
             "rule: the encoding is a format: changing it changes every genesis binding \
              (DUR-8); the digest is pinned from an independent SHA-256 of the text above"
         );
@@ -240,6 +278,60 @@ mod tests {
                 ),
                 Err(error) => panic!("test setup: {param} = {lowered} must parse: {error}"),
             }
+        }
+    }
+
+    #[test]
+    fn every_fixed_semantic_constant_changes_the_fingerprint() {
+        let config = parse(LOCAL);
+        let current = FixedSemantics::current();
+        assert_eq!(
+            config.encoding_with(current),
+            config.semantic_encoding(),
+            "test setup: this build's constants give the real encoding"
+        );
+        assert_eq!(
+            current.scan_page_default_items, 32,
+            "rule: F-4's default page size is 32"
+        );
+        let base = Sha256::digest(config.semantic_encoding().as_bytes());
+        let changes = [
+            (
+                "the command-format version",
+                FixedSemantics {
+                    command_format_version: 2,
+                    ..current
+                },
+            ),
+            (
+                "the SCAN page item cap",
+                FixedSemantics {
+                    scan_page_max_items: 64,
+                    ..current
+                },
+            ),
+            (
+                "the SCAN default page size",
+                FixedSemantics {
+                    scan_page_default_items: 64,
+                    ..current
+                },
+            ),
+            (
+                "the SCAN page byte cap",
+                FixedSemantics {
+                    scan_page_max_bytes: 2 * 1024 * 1024,
+                    ..current
+                },
+            ),
+        ];
+        for (constant, fixed) in changes {
+            assert_ne!(
+                Sha256::digest(config.encoding_with(fixed).as_bytes()),
+                base,
+                "rule: {constant} can change a result, so it is fingerprinted and two builds \
+                 that differ in it never interoperate (§7.10, §7.11, F-4, DUR-8); {fixed:?}"
+            );
         }
     }
 
