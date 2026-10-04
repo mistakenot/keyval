@@ -1308,6 +1308,29 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 2,
     },
+    CheckDef {
+        id: "MODEL-SERVER",
+        summary: "the reference model server serves every operation of api/openapi.yaml a \
+                  single node can show over the model: writes as the next log entry, same-ID \
+                  retries and conflicts from the history with no new entry, terminal 409/507 \
+                  results that replay, status lookups, SCAN pages, health and cluster status; \
+                  strict parsing (RFC 3986 query decoding with unescaped '+', bad escapes, \
+                  invalid UTF-8, repeated and unknown parameters refused; closed JSON object \
+                  bodies with unknown, duplicate and null-but-present fields refused; request \
+                  IDs named once well-formed; byte limits after decoding; 413 over 512 KiB, \
+                  delivered before the close; 415 without application/json); HTTP/1.1 \
+                  keep-alive, strict framing and Cache-Control: no-store on every response \
+                  (§8, §10.14)",
+        kind: Kind::TestGroup,
+        covers: &["T-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "model",
+            filters: &["server::"],
+        },
+        min_cases: 27,
+    },
 ];
 
 /// Outcome of one requested check.

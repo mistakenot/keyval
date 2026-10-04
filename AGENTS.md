@@ -327,9 +327,9 @@ output only together with its schema, and bump the version when the change break
   STATE-PROPERTIES, MODEL, STORAGE-CONTRACT, RAFT-ADAPTER, STORAGE-CONTRACT-SIM, SIM-DISK,
   STORAGE-CONTRACT-FS, FS-STORAGE, RAFT-READY-LOOP, JOURNAL-EXAMINE, FS-DOCTOR,
   DOCTOR-CLI, OBSERVATION-SCHEMA, PEER-ENVELOPE, PEER-ADMISSION, DIFFERENTIAL, RAFT-PINS,
-  RAFT-ORDERING, RAFT-BOUNDS, RAFT-CLUSTER, FIXTURE-LISTS. Unknown IDs, zero-case
-  selections, `#[ignore]`d cases and runs below the check's minimum case count fail (P10).
-  A failure prints its exact re-run command.
+  RAFT-ORDERING, RAFT-BOUNDS, RAFT-CLUSTER, FIXTURE-LISTS, MODEL-SERVER. Unknown IDs,
+  zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
+  fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
   REGISTRY-FILES fails (rule 12). `./dev gate fast` runs the file's implemented T0 rows

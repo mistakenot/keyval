@@ -21,6 +21,7 @@
 pub mod apply;
 pub mod data;
 pub mod scan;
+pub mod server;
 
 pub use apply::{
     Applied, ApplyError, Command, Decision, Entry, Expected, LiveLimit, Model, Op, TerminalResult,

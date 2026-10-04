@@ -6,9 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# No dependencies, by design: an oracle depends on no production crate (T-12), and the
-# model needs nothing beyond the standard library.
+# No production crate, by design: an oracle depends on none (T-12). The model itself needs
+# only the standard library; the model server parses and writes the contract's strict JSON
+# with serde (owner decision on br-w30-1-model-server-impl-eop).
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
