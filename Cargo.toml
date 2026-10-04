@@ -9,6 +9,7 @@ resolver = "3"
 members = [
     "crates/journal",
     "crates/model",
+    "crates/raft_adapter",
     "crates/sim",
     "crates/statemachine",
     "crates/types",
@@ -16,6 +17,13 @@ members = [
     "xtask/probes/deterministic",
     "xtask/probes/production",
 ]
+# Never members:
+# - `vendor`: the vendored Raft library (W02) is a path dependency. Without this, Cargo
+#   would make every path dependency inside the workspace directory a member.
+# - `.local`: the commit candidate and accept trees there are whole checkouts of their own.
+#   Cargo's workspace search for their vendored Raft library walks past their own root,
+#   which excludes it, and would otherwise stop here.
+exclude = [".local", "vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -25,14 +33,21 @@ publish = false
 [workspace.dependencies]
 # First-party crates.
 types = { path = "crates/types" }
+journal = { path = "crates/journal" }
 statemachine = { path = "crates/statemachine" }
 # Third-party crates (each one ledgered in DEPENDENCIES.md).
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 jsonschema = { version = "0.58.5", default-features = false }
+# The generated eraftpb code needs exactly its generator's runtime (VENDOR.toml [codegen]).
+protobuf = "=2.28.0"
+# The vendored, entropy-patched raft-rs 0.7.0 (vendor/raft/VENDOR.toml), with the only
+# features keyval builds; engine crates only (DEP-RULE).
+raft = { path = "vendor/raft/raft", default-features = false, features = ["protobuf-codec"] }
 saphyr = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = { version = "0.11.0", default-features = false }
+slog = "2"
 toml = { version = "1.1.6", default-features = false, features = ["std", "serde", "parse"] }
 
 # Lint policy (§5.2; AGENTS.md "Lint Policy"). The probe files of W01.3 prove that each

@@ -954,6 +954,31 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 23,
     },
+    CheckDef {
+        id: "RAFT-ADAPTER",
+        summary: "the raft-rs adapter's construction and Consensus port: every committed config \
+                  constructs a RawNode for each voter (D-78), every setting reaches the library \
+                  config, election timeouts come only from the seeded entropy port, entries, \
+                  hard state and messages convert losslessly and unknown protobuf fields are \
+                  refused (H-3), the journal serves the library's log reads, a Ready writes one \
+                  frame exactly when it must sync, and a restart resumes from the recovered hard \
+                  state (§7.3, §7.4, CD-1, P4)",
+        kind: Kind::TestGroup,
+        covers: &["CD-1", "P4", "O-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "raft_adapter",
+            filters: &[
+                "config::tests::",
+                "convert::tests::",
+                "entropy::tests::",
+                "storage::tests::",
+                "node_tests::",
+            ],
+        },
+        min_cases: 16,
+    },
 ];
 
 /// Outcome of one requested check.

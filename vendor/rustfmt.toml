@@ -1,0 +1,4 @@
+# Vendored third-party source is kept byte for byte as recorded in raft/VENDOR.toml
+# (RAFT-VENDOR), so rustfmt never formats it: `cargo fmt --all` also visits local path
+# dependencies such as the vendored Raft library (W13.1).
+disable_all_formatting = true

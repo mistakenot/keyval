@@ -1,0 +1,17 @@
+[package]
+name = "raft_adapter"
+version = "0.1.0"
+description = "keyval's raft-rs adapter: the Consensus port over the vendored, entropy-patched RawNode, with the journal as the library's storage view (deterministic engine, PLAN.md §7.3, §7.4)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+journal = { workspace = true }
+protobuf = { workspace = true }
+raft = { workspace = true }
+slog = { workspace = true }
+types = { workspace = true }
+
+[lints]
+workspace = true
