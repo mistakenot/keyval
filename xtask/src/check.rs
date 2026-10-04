@@ -1155,15 +1155,17 @@ pub const CATALOGUE: &[CheckDef] = &[
     CheckDef {
         id: "PEER-ENVELOPE",
         summary: "the peer-envelope codec (§8.2, D-63, D-71): a sealed message opens at its \
-                  destination byte for byte in the documented wire format; a mismatched \
-                  protocol version, cluster instance, semantic fingerprint, sender (not \
-                  another voter, or not the node the transport received it from) or \
-                  destination drops the envelope and is counted under its own reason, as \
-                  are malformed and oversized envelopes, inadmissible messages and a message \
-                  whose own sender is not the envelope's; random bytes and every changed \
-                  header byte drop without a panic (§10.19); and a three-voter cluster whose \
-                  every message travels sealed elects a leader and commits with nothing \
-                  dropped",
+                  destination byte for byte in the documented wire format; a mismatched protocol \
+                  version, cluster instance, semantic fingerprint, sender (not another voter, or \
+                  not the node the transport received it from) or destination drops the envelope \
+                  and is counted under its own reason, as are malformed and oversized envelopes, \
+                  inadmissible messages and a message whose own sender is not the envelope's; \
+                  random bytes and every changed header byte drop; under a valid header, random \
+                  and mutated payloads reach the decoder, and malformed protobuf (a wrong wire \
+                  type, an unknown entry type, a cut varint, an unknown field) is dropped and \
+                  counted under message, without a panic in these runs (exhaustive fuzzing is \
+                  W53's, §10.19); and a three-voter cluster whose every message travels sealed \
+                  elects a leader and commits with nothing dropped",
         kind: Kind::TestGroup,
         covers: &["CD-3"],
         class: ClaimClass::Invariant,
@@ -1172,7 +1174,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["envelope_tests::"],
         },
-        min_cases: 9,
+        min_cases: 12,
     },
     CheckDef {
         id: "PEER-ADMISSION",

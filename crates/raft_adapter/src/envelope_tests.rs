@@ -571,3 +571,163 @@ fn a_raft_message_decodes_from_the_payload_it_was_sealed_with() {
         "rule: the payload is the library's own message"
     );
 }
+
+/// `heartbeat()`'s payload as raw protobuf: `msg_type` 8, to 1, from 2, term 3, commit 1.
+const HEARTBEAT: [u8; 10] = [0x08, 0x08, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x40, 0x01];
+
+/// `payload`, sealed by node 2 for node 1 under a valid header, so it reaches the decoder.
+fn sealed_payload(payload: &[u8]) -> Vec<u8> {
+    codec(2)
+        .seal(&OutboundMessage {
+            to: id(1),
+            bytes: payload.to_vec(),
+        })
+        .unwrap()
+}
+
+/// Whether opening `payload` under a valid header was refused by the decoder or admission
+/// (`Message`, `Binding`) rather than admitted; any header-level refusal is a test failure.
+fn refused_past_the_header(receiver: &mut PeerCodec, payload: &[u8]) -> bool {
+    match receiver.open(id(2), &sealed_payload(payload)) {
+        Ok(_) => false,
+        Err(EnvelopeError::Message(_) | EnvelopeError::Binding { .. }) => true,
+        Err(
+            error @ (EnvelopeError::TooLarge { .. }
+            | EnvelopeError::Malformed
+            | EnvelopeError::ProtocolVersion { .. }
+            | EnvelopeError::Instance
+            | EnvelopeError::Fingerprint
+            | EnvelopeError::Sender { .. }
+            | EnvelopeError::Destination { .. }),
+        ) => panic!(
+            "rule: a valid header never fails before the decoder; got {error:?} for payload \
+             {payload:02x?}"
+        ),
+    }
+}
+
+#[test]
+fn random_and_mutated_payloads_under_a_valid_header_reach_the_decoder_and_never_panic() {
+    assert_eq!(
+        heartbeat().bytes,
+        HEARTBEAT,
+        "fixture: HEARTBEAT is the library's own encoding"
+    );
+    let mut stream = Bytes(0x0009_a710_ad5e);
+    let mut receiver = codec(1);
+    let (mut admitted, mut refused) = (0_u64, 0_u64);
+    let mut count = |was_refused: bool| {
+        if was_refused {
+            refused += 1;
+        } else {
+            admitted += 1;
+        }
+    };
+    for _ in 0..3_000 {
+        let len = stream.below(300);
+        let payload = stream.fill(len);
+        count(refused_past_the_header(&mut receiver, &payload));
+    }
+    for round in 0..3_000 {
+        let mut payload = HEARTBEAT.to_vec();
+        match round % 3 {
+            0 => {
+                for _ in 0..=stream.below(3) {
+                    let at = stream.below(payload.len());
+                    payload[at] = stream.fill(1)[0];
+                }
+            }
+            1 => payload.truncate(stream.below(payload.len())),
+            _ => {
+                let at = stream.below(payload.len() + 1);
+                let extra_len = 1 + stream.below(4);
+                let extra = stream.fill(extra_len);
+                payload.splice(at..at, extra);
+            }
+        }
+        count(refused_past_the_header(&mut receiver, &payload));
+    }
+    let drops = receiver.dropped();
+    assert_eq!(
+        (drops.message + drops.binding, drops.total()),
+        (refused, refused),
+        "rule: every payload refusal is counted under message or binding, and no header \
+         counter moves; drops={drops:?}"
+    );
+    assert!(
+        refused > 2_000 && admitted > 0,
+        "fixture: the payloads reach the decoder and admission: {refused} refused there, \
+         {admitted} admitted"
+    );
+}
+
+#[test]
+fn a_wrong_wire_type_an_unknown_entry_type_or_a_cut_varint_is_refused_and_counted() {
+    let entry_of_type_7 = [0x08, 0x07, 0x10, 0x03, 0x18, 0x01];
+    let mut append = vec![0x08, 0x03, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x3a, 0x06];
+    append.extend_from_slice(&entry_of_type_7);
+    let cases: [(&str, Vec<u8>); 3] = [
+        (
+            "`to` with the length-delimited wire type",
+            vec![0x08, 0x08, 0x12, 0x01, 0x01, 0x18, 0x02, 0x20, 0x03],
+        ),
+        ("a MsgAppend whose entry has unknown EntryType 7", append),
+        (
+            "a payload cut in the middle of the term's varint",
+            vec![0x08, 0x08, 0x10, 0x01, 0x18, 0x02, 0x20, 0x83],
+        ),
+    ];
+    for (case, payload) in cases {
+        let mut receiver = codec(1);
+        let opened = receiver.open(id(2), &sealed_payload(&payload));
+        let refused = match &opened {
+            Err(EnvelopeError::Message(_)) => true,
+            Ok(_)
+            | Err(
+                EnvelopeError::TooLarge { .. }
+                | EnvelopeError::Malformed
+                | EnvelopeError::ProtocolVersion { .. }
+                | EnvelopeError::Instance
+                | EnvelopeError::Fingerprint
+                | EnvelopeError::Sender { .. }
+                | EnvelopeError::Destination { .. }
+                | EnvelopeError::Binding { .. },
+            ) => false,
+        };
+        assert!(
+            refused,
+            "rule: {case} never reaches Raft; it is refused as an inadmissible message; \
+             got {opened:?}"
+        );
+        assert_eq!(
+            (receiver.dropped().message, receiver.dropped().total()),
+            (1, 1),
+            "rule: the refusal is counted once, under message; case: {case}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_field_is_dropped_by_the_codec_and_counted_under_message() {
+    // Field 1000, varint 1: a field this build does not know (W02 audit H-3).
+    let unknown = [0xc0, 0x3e, 0x01];
+    let mut top_level = HEARTBEAT.to_vec();
+    top_level.extend_from_slice(&unknown);
+    let mut in_entry = vec![0x08, 0x03, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x3a, 0x09];
+    in_entry.extend_from_slice(&[0x08, 0x00, 0x10, 0x03, 0x18, 0x01]);
+    in_entry.extend_from_slice(&unknown);
+    for (case, payload) in [("the message", top_level), ("an entry", in_entry)] {
+        let mut receiver = codec(1);
+        let opened = receiver.open(id(2), &sealed_payload(&payload));
+        assert!(
+            opened.is_err(),
+            "rule: an unknown field in {case} is dropped before Raft sees it (H-3); got \
+             {opened:?}"
+        );
+        assert_eq!(
+            (receiver.dropped().message, receiver.dropped().total()),
+            (1, 1),
+            "rule: the drop is counted, under message (H-3: dropped and counted); case: {case}"
+        );
+    }
+}
