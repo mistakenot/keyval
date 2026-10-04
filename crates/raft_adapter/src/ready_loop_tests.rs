@@ -20,14 +20,14 @@ use crate::ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
 use crate::test_support::{Journal, Seeded, config, empty_log};
 
 /// The incarnation every test node runs in.
-const INCARNATION: Incarnation = Incarnation::new(4);
+pub const INCARNATION: Incarnation = Incarnation::new(4);
 /// The first sync number the controller leaves the loop (§7.7 took the ones before).
-const FIRST_SYNC: SyncSeq = SyncSeq::new(10);
+pub const FIRST_SYNC: SyncSeq = SyncSeq::new(10);
 
 /// Records every applied entry with the commit index it was applied under.
 #[derive(Debug, Default)]
-struct Recorder {
-    applied: Vec<(Entry, LogIndex)>,
+pub struct Recorder {
+    pub applied: Vec<(Entry, LogIndex)>,
 }
 
 impl Apply for Recorder {
@@ -37,15 +37,15 @@ impl Apply for Recorder {
 }
 
 /// One node of a test cluster.
-struct Member {
-    lp: ReadyLoop<Journal>,
-    journal: Journal,
-    recorder: Recorder,
+pub struct Member {
+    pub lp: ReadyLoop<Journal>,
+    pub journal: Journal,
+    pub recorder: Recorder,
     /// Every effect executed through [`Member::execute`].
-    effects: Vec<Effect>,
+    pub effects: Vec<Effect>,
 }
 
-fn member_over(
+pub fn member_over(
     config: &Config,
     id: NodeId,
     seed: u64,
@@ -69,13 +69,13 @@ fn member_over(
     }
 }
 
-fn member(config: &Config, id: NodeId, seed: u64) -> Member {
+pub fn member(config: &Config, id: NodeId, seed: u64) -> Member {
     member_over(config, id, seed, empty_log(), Journal::default())
 }
 
 /// What happened in a run, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Event {
+pub enum Event {
     /// A node's loop emitted an effect.
     Effect(NodeId, Effect),
     /// A node's sync completed; the effects that follow it were emitted after it.
@@ -84,7 +84,7 @@ enum Event {
 
 /// The DUR-2 rule over a run's events: a node never sends while one of its syncs is
 /// outstanding, and has at most one sync outstanding (§7.4 steps 3 and 4).
-fn sends_wait_for_syncs(events: &[Event]) -> Result<(), String> {
+pub fn sends_wait_for_syncs(events: &[Event]) -> Result<(), String> {
     let mut outstanding: BTreeMap<NodeId, SyncSeq> = BTreeMap::new();
     for (at, event) in events.iter().enumerate() {
         match event {
@@ -126,7 +126,7 @@ fn sends_wait_for_syncs(events: &[Event]) -> Result<(), String> {
 
 /// The commit-only rule over a journal: every frame carries new entries, or a hard state
 /// whose term or vote changed. The commit index alone is never worth a frame (§7.4 step 3).
-fn frames_never_persist_a_commit_alone(journal: &Journal) -> Result<usize, String> {
+pub fn frames_never_persist_a_commit_alone(journal: &Journal) -> Result<usize, String> {
     let bytes = journal.bytes();
     let mut offset = 0;
     let mut persisted = HardState {
@@ -162,14 +162,14 @@ fn frames_never_persist_a_commit_alone(journal: &Journal) -> Result<usize, Strin
 /// What a node has synced: the hard state and log length in its journal up to its last
 /// completed sync.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Durable {
-    term: u64,
-    vote: u64,
-    last: u64,
+pub struct Durable {
+    pub term: u64,
+    pub vote: u64,
+    pub last: u64,
 }
 
 /// The durable state the journal bytes `synced` hold.
-fn durable_state(synced: &[u8]) -> Durable {
+pub fn durable_state(synced: &[u8]) -> Durable {
     let mut state = Durable::default();
     let mut offset = 0;
     while offset < synced.len() {
@@ -189,7 +189,7 @@ fn durable_state(synced: &[u8]) -> Durable {
 
 /// The DUR-2 obligations of one message, judged against what its sender has synced
 /// (§7.4: never release a vote grant or an append acknowledgement on unsynced state).
-fn dur2_violation(from: NodeId, to: NodeId, bytes: &[u8], durable: Durable) -> Option<String> {
+pub fn dur2_violation(from: NodeId, to: NodeId, bytes: &[u8], durable: Durable) -> Option<String> {
     let message = decode_message(bytes).unwrap();
     let kind = message.get_msg_type();
     let pre_vote = [
@@ -233,23 +233,23 @@ fn dur2_violation(from: NodeId, to: NodeId, bytes: &[u8], durable: Durable) -> O
 
 /// A cluster of loops joined by an in-memory network, with storage that syncs only when a
 /// test says so.
-struct Cluster {
-    members: BTreeMap<NodeId, Member>,
+pub struct Cluster {
+    pub members: BTreeMap<NodeId, Member>,
     /// Messages in flight: sender, destination, bytes.
-    network: VecDeque<(NodeId, NodeId, Vec<u8>)>,
+    pub network: VecDeque<(NodeId, NodeId, Vec<u8>)>,
     /// Each node's outstanding sync.
-    syncs: BTreeMap<NodeId, SyncSeq>,
+    pub syncs: BTreeMap<NodeId, SyncSeq>,
     /// Each node's journal length when it asked for its outstanding sync.
-    covered: BTreeMap<NodeId, usize>,
+    pub covered: BTreeMap<NodeId, usize>,
     /// Each node's synced state.
-    durable: BTreeMap<NodeId, Durable>,
+    pub durable: BTreeMap<NodeId, Durable>,
     /// Every message sent on state its sender had not synced (DUR-2).
-    violations: Vec<String>,
-    events: Vec<Event>,
+    pub violations: Vec<String>,
+    pub events: Vec<Event>,
 }
 
 impl Cluster {
-    fn new(config: &Config, seed: u64) -> Self {
+    pub fn new(config: &Config, seed: u64) -> Self {
         let members = config
             .voters()
             .map(|id| {
@@ -270,16 +270,16 @@ impl Cluster {
         }
     }
 
-    fn ids(&self) -> Vec<NodeId> {
+    pub fn ids(&self) -> Vec<NodeId> {
         self.members.keys().copied().collect()
     }
 
-    fn get(&self, id: NodeId) -> &Member {
+    pub fn get(&self, id: NodeId) -> &Member {
         &self.members[&id]
     }
 
     /// Executes `effects` as the composition root would, and records them.
-    fn record(&mut self, node: NodeId, effects: Vec<Effect>) {
+    pub fn record(&mut self, node: NodeId, effects: Vec<Effect>) {
         for effect in effects {
             match &effect {
                 Effect::Append { frame } => self.members[&node].journal.push(frame),
@@ -313,7 +313,7 @@ impl Cluster {
         }
     }
 
-    fn feed(&mut self, node: NodeId, input: RaftInput) -> Fed {
+    pub fn feed(&mut self, node: NodeId, input: RaftInput) -> Fed {
         let member = self.members.get_mut(&node).unwrap();
         let mut effects = Vec::new();
         let fed = member
@@ -325,7 +325,7 @@ impl Cluster {
     }
 
     /// Completes `node`'s outstanding sync; false if it has none.
-    fn complete_sync(&mut self, node: NodeId) -> bool {
+    pub fn complete_sync(&mut self, node: NodeId) -> bool {
         let Some(seq) = self.syncs.remove(&node) else {
             return false;
         };
@@ -350,7 +350,7 @@ impl Cluster {
 
     /// Delivers the message in flight at `at`. A node waiting for a sync defers it, and the
     /// message goes back in flight, as a controller would queue it (§7.11).
-    fn deliver(&mut self, at: usize) {
+    pub fn deliver(&mut self, at: usize) {
         let (from, to, bytes) = self.network.remove(at).unwrap();
         if let Fed::Deferred(RaftInput::Peer(bytes)) = self.feed(to, RaftInput::Peer(bytes)) {
             self.network.push_back((from, to, bytes));
@@ -358,7 +358,7 @@ impl Cluster {
     }
 
     /// Delivers messages and completes syncs, oldest first, until nothing is left.
-    fn settle(&mut self) {
+    pub fn settle(&mut self) {
         for _ in 0..100_000 {
             let ready = (0..self.network.len()).find(|&at| {
                 let to = self.network[at].1;
@@ -376,7 +376,7 @@ impl Cluster {
     }
 
     /// The effects `node` emitted since event `mark`.
-    fn effects_since(&self, mark: usize, node: NodeId) -> Vec<&Effect> {
+    pub fn effects_since(&self, mark: usize, node: NodeId) -> Vec<&Effect> {
         self.events[mark..]
             .iter()
             .filter_map(|event| match event {
@@ -387,7 +387,7 @@ impl Cluster {
     }
 
     /// The types of the messages in flight from `from`.
-    fn in_flight_from(&self, from: NodeId) -> Vec<(NodeId, MessageType)> {
+    pub fn in_flight_from(&self, from: NodeId) -> Vec<(NodeId, MessageType)> {
         self.network
             .iter()
             .filter(|(sender, _, _)| *sender == from)
@@ -397,7 +397,7 @@ impl Cluster {
 }
 
 /// Asserts that every message the cluster sent was covered by its sender's synced state.
-fn assert_synced_obligations(cluster: &Cluster) {
+pub fn assert_synced_obligations(cluster: &Cluster) {
     assert_eq!(
         cluster.violations,
         Vec::<String>::new(),
@@ -406,7 +406,7 @@ fn assert_synced_obligations(cluster: &Cluster) {
 }
 
 /// The kinds of `effects`: `Append`, `Sync`, or the decoded message type of a `Send`.
-fn kinds(effects: &[&Effect]) -> Vec<String> {
+pub fn kinds(effects: &[&Effect]) -> Vec<String> {
     effects
         .iter()
         .map(|effect| match effect {
@@ -427,7 +427,7 @@ fn kinds(effects: &[&Effect]) -> Vec<String> {
 
 /// Ticks the first voter until it asks for pre-votes, then delivers messages until it is a
 /// candidate waiting for the sync of its new term and vote. Returns the candidate.
-fn start_campaign(cluster: &mut Cluster) -> NodeId {
+pub fn start_campaign(cluster: &mut Cluster) -> NodeId {
     let candidate = cluster.ids()[0];
     let mark = cluster.events.len();
     let ticks = (1..=1_000)
@@ -585,7 +585,7 @@ fn an_append_acknowledgement_waits_for_the_entries_to_sync() {
 /// A seeded schedule over a three-voter cluster: ticks, deliveries, sync completions and
 /// proposals at the leader, in an order the seed picks, then settled. `small-limits` hands
 /// over one committed entry per Ready, so every commit drains (§7.4 step 6).
-fn seeded_run(seed: u64) -> Cluster {
+pub fn seeded_run(seed: u64) -> Cluster {
     let config = config("small-limits");
     let mut cluster = Cluster::new(&config, seed);
     let ids = cluster.ids();
@@ -715,7 +715,7 @@ fn the_same_seed_gives_the_same_effects() {
 }
 
 /// Whether `effect` is an `Append`.
-const fn is_append(effect: &Effect) -> bool {
+pub const fn is_append(effect: &Effect) -> bool {
     match effect {
         Effect::Append { .. } => true,
         Effect::Send { .. }
@@ -732,7 +732,7 @@ const fn is_append(effect: &Effect) -> bool {
 impl Member {
     /// Executes `effects` as a composition root would: every frame is appended to the
     /// in-memory journal (the storage view reads it back), and every effect is logged.
-    fn execute(&mut self, effects: Vec<Effect>) {
+    pub fn execute(&mut self, effects: Vec<Effect>) {
         for effect in &effects {
             if let Effect::Append { frame } = effect {
                 self.journal.push(frame);
@@ -741,14 +741,18 @@ impl Member {
         self.effects.extend(effects);
     }
 
-    fn feed(&mut self, input: RaftInput) -> Result<Fed, LoopError> {
+    pub fn feed(&mut self, input: RaftInput) -> Result<Fed, LoopError> {
         let mut effects = Vec::new();
         let fed = self.lp.feed(input, &mut self.recorder, &mut effects);
         self.execute(effects);
         fed
     }
 
-    fn sync_done(&mut self, seq: SyncSeq, incarnation: Incarnation) -> Result<Synced, LoopError> {
+    pub fn sync_done(
+        &mut self,
+        seq: SyncSeq,
+        incarnation: Incarnation,
+    ) -> Result<Synced, LoopError> {
         let mut effects = Vec::new();
         let done = self
             .lp
@@ -757,7 +761,7 @@ impl Member {
         done
     }
 
-    fn poll(&mut self) -> Result<(), LoopError> {
+    pub fn poll(&mut self) -> Result<(), LoopError> {
         let mut effects = Vec::new();
         let polled = self.lp.poll(&mut self.recorder, &mut effects);
         self.execute(effects);
@@ -765,13 +769,13 @@ impl Member {
     }
 
     /// Completes the outstanding sync.
-    fn complete(&mut self) {
+    pub fn complete(&mut self) {
         let seq = self.lp.outstanding_sync().unwrap();
         assert_eq!(self.sync_done(seq, INCARNATION), Ok(Synced::Completed));
     }
 
     /// Ticks until a sync is outstanding.
-    fn tick_until_syncing(&mut self) {
+    pub fn tick_until_syncing(&mut self) {
         for _ in 0..1_000 {
             if self.lp.outstanding_sync().is_some() {
                 return;
@@ -782,7 +786,7 @@ impl Member {
     }
 
     /// Ticks and completes syncs until this lone voter leads with nothing outstanding.
-    fn elect(&mut self) {
+    pub fn elect(&mut self) {
         for _ in 0..1_000 {
             if self.lp.outstanding_sync().is_some() {
                 self.complete();
@@ -796,7 +800,7 @@ impl Member {
     }
 
     /// Proposes `command` as the leader and completes the frame's sync.
-    fn commit(&mut self, command: &[u8]) {
+    pub fn commit(&mut self, command: &[u8]) {
         assert_eq!(
             self.feed(RaftInput::Propose(command.to_vec())),
             Ok(Fed::Proposed(Ok(()))),
@@ -807,7 +811,7 @@ impl Member {
 }
 
 /// A lone voter's member and id.
-fn lone(config: &Config) -> (Member, NodeId) {
+pub fn lone(config: &Config) -> (Member, NodeId) {
     let id = config.voters().next().unwrap();
     (member(config, id, 7), id)
 }
@@ -948,7 +952,7 @@ fn a_sync_done_nobody_asked_for_breaks_its_invariant() {
 }
 
 /// `small-limits` with only its first node: one voter, one committed byte per Ready.
-fn one_voter_small_limits() -> Config {
+pub fn one_voter_small_limits() -> Config {
     let (_, text) = crate::test_support::CONFIGS
         .iter()
         .find(|(name, _)| *name == "small-limits")
