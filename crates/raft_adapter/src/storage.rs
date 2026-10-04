@@ -6,7 +6,7 @@ use journal::LogicalLog;
 use protobuf::Message as _;
 use raft::eraftpb::{self, ConfState};
 use raft::{GetEntriesContext, RaftState, StorageError};
-use types::{EntryIndex, JournalRead, NodeId};
+use types::{EntryIndex, JournalRead, NodeId, invariant};
 
 use crate::convert::{entry_to_library, hard_state_to_library};
 
@@ -17,10 +17,17 @@ use crate::convert::{entry_to_library, hard_state_to_library};
 ///   set. Membership never comes from the log in v1 (§7.7 step 6).
 /// - **Never compacts:** the first index is always 1, so the library never asks for a
 ///   snapshot.
+/// - **Sealed until synced:** a Ready's frame is appended to the logical log when it is
+///   encoded, before its sync. The view is sealed from then until the frame's `SyncDone`:
+///   the new entries become visible to the library only after it (§7.4 step 4). The loop
+///   gives the library no input and no advance meanwhile, and every library read asserts
+///   the seal is off (invariant `RA-VIEW-SEALED`), so nothing can read them early.
 ///
 /// Invariant: the voter set is sorted and holds no duplicates.
 #[derive(Debug)]
 pub struct JournalStorage<R> {
+    /// This node, for invariant messages.
+    node: NodeId,
     /// The logical log. Library reads take `&self`, but a cache miss fills the cache, so the
     /// log sits in a cell. The adapter is single-threaded (§7.14).
     log: RefCell<LogicalLog>,
@@ -28,19 +35,60 @@ pub struct JournalStorage<R> {
     reader: R,
     /// The configured voters, sorted.
     voters: Vec<u64>,
+    /// Whether a frame in the logical log is not yet synced (§7.4 step 4).
+    sealed: bool,
 }
 
 impl<R> JournalStorage<R> {
-    /// The storage view of the recovered `log`, read through `reader`, for `voters`.
-    pub fn new(log: LogicalLog, reader: R, voters: impl IntoIterator<Item = NodeId>) -> Self {
+    /// Node `node`'s storage view of the recovered `log`, read through `reader`, for
+    /// `voters`. A recovered log is durable, so the view starts unsealed.
+    pub fn new(
+        node: NodeId,
+        log: LogicalLog,
+        reader: R,
+        voters: impl IntoIterator<Item = NodeId>,
+    ) -> Self {
         let mut voters: Vec<u64> = voters.into_iter().map(NodeId::get).collect();
         voters.sort_unstable();
         voters.dedup();
         Self {
+            node,
             log: RefCell::new(log),
             reader,
             voters,
+            sealed: false,
         }
+    }
+
+    /// Whether a frame in the logical log is not yet synced, so the library may not read.
+    pub const fn is_sealed(&self) -> bool {
+        self.sealed
+    }
+
+    /// Seals the view: a frame was just appended to the logical log and is not yet synced.
+    pub const fn seal(&mut self) {
+        self.sealed = true;
+    }
+
+    /// Unseals the view: the frame's `SyncDone` arrived, so its entries become visible to the
+    /// library (§7.4 step 4).
+    pub const fn expose(&mut self) {
+        self.sealed = false;
+    }
+
+    /// Asserts that the library may read: no frame is waiting for its sync.
+    ///
+    /// # Panics
+    ///
+    /// `RA-VIEW-SEALED` if the view is sealed.
+    fn check_visible(&self, call: &str) {
+        invariant!(
+            !self.sealed,
+            "RA-VIEW-SEALED",
+            "node {}: the library called {call} on its storage view while a frame is unsynced; \
+             new entries become visible only after SyncDone (§7.4 step 4)",
+            self.node
+        );
     }
 
     /// The logical log.
@@ -61,6 +109,7 @@ const fn unavailable() -> raft::Error {
 
 impl<R: JournalRead> raft::Storage for JournalStorage<R> {
     fn initial_state(&self) -> raft::Result<RaftState> {
+        self.check_visible("initial_state");
         Ok(RaftState {
             hard_state: hard_state_to_library(self.log.borrow().hard_state()),
             conf_state: ConfState::from((self.voters.clone(), Vec::<u64>::new())),
@@ -77,6 +126,7 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
         max_size: impl Into<Option<u64>>,
         _context: GetEntriesContext,
     ) -> raft::Result<Vec<eraftpb::Entry>> {
+        self.check_visible("entries");
         let max_size = max_size.into();
         let mut log = self.log.borrow_mut();
         let mut entries = Vec::new();
@@ -95,6 +145,7 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
     }
 
     fn term(&self, idx: u64) -> raft::Result<u64> {
+        self.check_visible("term");
         if idx == 0 {
             return Ok(0);
         }
@@ -107,16 +158,19 @@ impl<R: JournalRead> raft::Storage for JournalStorage<R> {
     }
 
     fn first_index(&self) -> raft::Result<u64> {
+        self.check_visible("first_index");
         Ok(1)
     }
 
     fn last_index(&self) -> raft::Result<u64> {
+        self.check_visible("last_index");
         Ok(self.log.borrow().last_index().get())
     }
 
     /// v1 never compacts, so no follower ever needs a snapshot; were one asked for, the library
     /// would wait and ask again.
     fn snapshot(&self, _request_index: u64, _to: u64) -> raft::Result<eraftpb::Snapshot> {
+        self.check_visible("snapshot");
         Err(raft::Error::Store(
             StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -142,7 +196,7 @@ mod tests {
         };
         persist_batch(&mut log, &journal, vec![entry(1, 3, b"cmd")], Some(state));
         let voters = [3, 1, 2].map(|n| NodeId::new(n).unwrap());
-        let storage = JournalStorage::new(log, journal, voters);
+        let storage = JournalStorage::new(NodeId::new(1).unwrap(), log, journal, voters);
         let initial = storage.initial_state().unwrap();
         assert_eq!(
             initial.hard_state,
@@ -174,7 +228,8 @@ mod tests {
             commit: LogIndex::ZERO,
         };
         persist_batch(&mut log, &journal, entries.clone(), Some(state));
-        let storage = JournalStorage::new(log, journal, [NodeId::new(1).unwrap()]);
+        let one = NodeId::new(1).unwrap();
+        let storage = JournalStorage::new(one, log, journal, [one]);
         assert_eq!(
             (
                 storage.first_index().unwrap(),
@@ -227,5 +282,22 @@ mod tests {
             EntryPayload::Command(b"0123456789".to_vec()),
             "fixture sanity"
         );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "invariant RA-VIEW-SEALED violated: node 1: the library called \
+                               last_index on its storage view while a frame is unsynced"
+    )]
+    fn a_library_read_while_a_frame_is_unsynced_breaks_its_invariant() {
+        let one = NodeId::new(1).unwrap();
+        let mut storage = JournalStorage::new(one, empty_log(), Journal::default(), [one]);
+        assert_eq!(
+            storage.last_index().unwrap(),
+            0,
+            "fixture: an open view reads"
+        );
+        storage.seal();
+        let _ = storage.last_index();
     }
 }

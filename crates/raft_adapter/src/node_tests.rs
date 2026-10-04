@@ -26,8 +26,9 @@ fn node(config: &Config, id: u64, journal: &Journal, seed: u64) -> RaftNode<Jour
     .unwrap()
 }
 
-/// One turn of a node's loop: take a Ready, persist its frame into `journal`, advance, and
-/// report everything committed as applied. `None` when there is no Ready.
+/// One turn of a node's loop: take a Ready, persist its frame into `journal` and report it
+/// synced, advance, and report everything committed as applied. `None` when there is no
+/// Ready.
 fn turn(node: &mut RaftNode<Journal>, journal: &Journal) -> Option<(Ready, LightReady)> {
     let ready = node.ready()?;
     let frame = node.persist().unwrap();
@@ -38,6 +39,7 @@ fn turn(node: &mut RaftNode<Journal>, journal: &Journal) -> Option<(Ready, Light
     );
     if let Some(frame) = frame {
         journal.push(&frame);
+        node.synced();
     }
     let light = node.advance();
     if let Some(last) = ready.committed().iter().chain(&light.committed).last() {
@@ -192,7 +194,9 @@ fn a_candidate_holds_its_vote_requests_in_the_ready() {
             node.tick();
             let ready = node.ready()?;
             if ready.messages().is_empty() {
-                node.persist().unwrap();
+                if node.persist().unwrap().is_some() {
+                    node.synced();
+                }
                 node.advance();
                 return None;
             }
@@ -218,11 +222,11 @@ fn a_candidate_holds_its_vote_requests_in_the_ready() {
             .collect::<Vec<_>>(),
         "rule: pre-vote is on, and the requests leave only through the Ready (§7.3, §7.4)"
     );
-    assert_eq!(
-        node.persist().unwrap().is_some(),
-        ready.must_sync(),
-        "rule: frame iff sync"
-    );
+    let frame = node.persist().unwrap();
+    assert_eq!(frame.is_some(), ready.must_sync(), "rule: frame iff sync");
+    if frame.is_some() {
+        node.synced();
+    }
     node.advance();
 }
 
@@ -301,4 +305,78 @@ fn advancing_before_the_frame_is_persisted_breaks_its_invariant() {
         "fixture: the first Ready (a new term) must sync"
     );
     node.advance();
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-ADVANCE-UNSYNCED violated: node 1: advance before the Ready's \
+                frame was synced"
+)]
+fn advancing_before_the_frame_is_synced_breaks_its_invariant() {
+    let config = config("one-voter");
+    let mut node = node(&config, 1, &Journal::default(), 7);
+    let ready = (0..1_000)
+        .find_map(|_| {
+            node.tick();
+            node.ready()
+        })
+        .unwrap();
+    assert!(
+        node.persist().unwrap().is_some() && ready.must_sync(),
+        "fixture: the first Ready (a new term) writes a frame"
+    );
+    assert!(
+        node.storage().is_sealed(),
+        "rule: a written frame seals the storage view until its sync (§7.4 step 4)"
+    );
+    node.advance();
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-SYNCED-WITHOUT-FRAME violated: node 1: a sync was reported with \
+                no written frame waiting for it"
+)]
+fn a_sync_with_no_frame_waiting_breaks_its_invariant() {
+    let config = config("one-voter");
+    let mut node = node(&config, 1, &Journal::default(), 7);
+    node.synced();
+}
+
+/// A lone voter holding its first Ready, not yet advanced.
+fn holding_a_ready() -> RaftNode<Journal> {
+    let mut node = node(&config("one-voter"), 1, &Journal::default(), 7);
+    let held = (0..1_000).find_map(|_| {
+        node.tick();
+        node.ready()
+    });
+    assert!(held.is_some(), "fixture: a Ready appears");
+    node
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-INPUT-DURING-READY violated: node 1: a tick fed while a Ready is \
+                outstanding"
+)]
+fn a_tick_while_a_ready_is_outstanding_breaks_its_invariant() {
+    holding_a_ready().tick();
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-INPUT-DURING-READY violated: node 1: a peer message fed while a \
+                Ready is outstanding"
+)]
+fn a_peer_message_while_a_ready_is_outstanding_breaks_its_invariant() {
+    let _ = holding_a_ready().step(vec![0xff]);
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant RA-INPUT-DURING-READY violated: node 1: a proposal fed while a Ready \
+                is outstanding"
+)]
+fn a_proposal_while_a_ready_is_outstanding_breaks_its_invariant() {
+    let _ = holding_a_ready().propose(b"x".to_vec());
 }

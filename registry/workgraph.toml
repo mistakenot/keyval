@@ -180,7 +180,7 @@ deps = ["W02", "W11"]
 reqs = ["C-1", "C-2", "DUR-2"]
 area = ["raft_adapter"]
 milestone = "m1"
-accept = ["./dev check RAFT-ADAPTER"]
+accept = ["./dev check RAFT-ADAPTER", "./dev check RAFT-READY-LOOP"]
 bead = "br-w13-raft-adapter-ready-loop-z9v"
 
 [[item]]

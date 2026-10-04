@@ -45,7 +45,10 @@ struct Outstanding {
 /// library's storage view (§7.3).
 ///
 /// Invariants: at most one Ready is outstanding; it is advanced past only after its frame
-/// was persisted (§7.4 steps 3 and 4); no library type crosses the port (CD-1).
+/// was persisted and synced (§7.4 steps 3 and 4); no library type crosses the port (CD-1).
+///
+/// [`ReadyLoop`](crate::ReadyLoop) drives it through the §7.4 steps; the methods here are
+/// the steps' building blocks.
 pub struct RaftNode<R: JournalRead> {
     /// This node.
     node: NodeId,
@@ -85,7 +88,7 @@ impl<R: JournalRead> RaftNode<R> {
         if applied > commit {
             return Err(ConstructError::AppliedPastCommit { applied, commit });
         }
-        let storage = JournalStorage::new(log, reader, voters);
+        let storage = JournalStorage::new(settings.node_id(), log, reader, voters);
         // An explicit logger with a discarding drain: no background thread, no output (§7.3).
         let logger = slog::Logger::root(slog::Discard, slog::o!());
         let raw = RawNode::new(
@@ -104,15 +107,26 @@ impl<R: JournalRead> RaftNode<R> {
         })
     }
 
+    /// This node.
+    pub const fn id(&self) -> NodeId {
+        self.node
+    }
+
     /// The library's storage view: the logical log.
     pub fn storage(&self) -> &JournalStorage<R> {
         self.raw.store()
     }
 
+    /// The index the library holds as applied: the replayed index at construction, then
+    /// whatever [`applied`](Consensus::applied) last reported.
+    pub fn applied_index(&self) -> LogIndex {
+        log_index(self.raw.raft.raft_log.applied)
+    }
+
     /// Writes the outstanding Ready's entries and hard state as the journal's next frame,
     /// returning the frame's bytes for an `Effect::Append`, or `None` if the Ready needs no
     /// sync (the commit index alone is never worth a frame, §7.4 step 3) or was already
-    /// written.
+    /// written. A written frame seals the storage view until [`synced`](Self::synced).
     ///
     /// # Errors
     ///
@@ -136,7 +150,10 @@ impl<R: JournalRead> RaftNode<R> {
             return Ok(None);
         };
         match self.raw.mut_store().log_mut().append(batch.clone()) {
-            Ok(frame) => Ok(Some(frame)),
+            Ok(frame) => {
+                self.raw.mut_store().seal();
+                Ok(Some(frame))
+            }
             Err(err) => {
                 // Nothing was written, so the frame is still owed.
                 if let Some(outstanding) = self.outstanding.as_mut() {
@@ -145,6 +162,39 @@ impl<R: JournalRead> RaftNode<R> {
                 Err(err)
             }
         }
+    }
+
+    /// Reports that the outstanding Ready's frame is durable (its `SyncDone` arrived): its
+    /// entries become visible to the library's storage view (§7.4 step 4).
+    ///
+    /// # Panics
+    ///
+    /// `RA-SYNCED-WITHOUT-FRAME` if no written frame is waiting for its sync.
+    pub fn synced(&mut self) {
+        invariant!(
+            self.raw.store().is_sealed(),
+            "RA-SYNCED-WITHOUT-FRAME",
+            "node {}: a sync was reported with no written frame waiting for it",
+            self.node
+        );
+        self.raw.mut_store().expose();
+    }
+
+    /// Asserts that the library may take `input`: no Ready is outstanding. raft-rs forbids any
+    /// input between `ready()` and `advance` (`raw_node.rs`), and the loop feeds none until the
+    /// Ready is done (§7.4 step 3).
+    ///
+    /// # Panics
+    ///
+    /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
+    fn check_no_ready(&self, input: &str) {
+        invariant!(
+            self.outstanding.is_none(),
+            "RA-INPUT-DURING-READY",
+            "node {}: {input} fed while a Ready is outstanding; the library takes no input until \
+             the Ready is advanced (§7.4 step 3)",
+            self.node
+        );
     }
 
     /// Library entries as core entries.
@@ -217,7 +267,11 @@ fn log_index(raw: u64) -> LogIndex {
 }
 
 impl<R: JournalRead> Consensus for RaftNode<R> {
+    /// # Panics
+    ///
+    /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
     fn propose(&mut self, command: Vec<u8>) -> Result<(), ProposeError> {
+        self.check_no_ready("a proposal");
         match self.raw.raft.state {
             StateRole::Leader => self
                 .raw
@@ -229,12 +283,20 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
         }
     }
 
+    /// # Panics
+    ///
+    /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
     fn step(&mut self, message: Vec<u8>) -> Result<(), StepError> {
+        self.check_no_ready("a peer message");
         let message = decode_message(&message).ok_or(StepError::Rejected)?;
         self.raw.step(message).map_err(|_| StepError::Rejected)
     }
 
+    /// # Panics
+    ///
+    /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
     fn tick(&mut self) {
+        self.check_no_ready("a tick");
         // Whether the tick changed anything shows up in the next Ready.
         let _changed = self.raw.tick();
     }
@@ -292,7 +354,8 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
     /// # Panics
     ///
     /// `RA-ADVANCE-WITHOUT-READY` if no Ready is outstanding; `RA-ADVANCE-UNPERSISTED` if its
-    /// frame was not persisted first (§7.4 steps 3 and 4).
+    /// frame was not persisted first, and `RA-ADVANCE-UNSYNCED` if it was not synced
+    /// (§7.4 steps 3 and 4).
     fn advance(&mut self) -> LightReady {
         let outstanding = self.outstanding.take();
         invariant!(
@@ -312,6 +375,12 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
             batch.is_none(),
             "RA-ADVANCE-UNPERSISTED",
             "node {}: advance before the Ready's frame was persisted (§7.4 steps 3 and 4)",
+            self.node
+        );
+        invariant!(
+            !self.raw.store().is_sealed(),
+            "RA-ADVANCE-UNSYNCED",
+            "node {}: advance before the Ready's frame was synced (§7.4 step 4)",
             self.node
         );
         // advance_append, not advance: applied progress is reported only for entries actually

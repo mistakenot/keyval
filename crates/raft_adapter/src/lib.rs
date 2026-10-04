@@ -37,10 +37,14 @@
 //! - **Logging**: an explicit logger with a discarding drain. There is no background thread
 //!   and no output (§7.3).
 //!
-//! The adapter takes one Ready at a time. [`RaftNode::persist`] turns it into one journal
-//! frame, or none when it has nothing to sync, and [`advance`](types::Consensus::advance)
-//! returns the follow-up work. W13.2 builds the full Ready loop around these: sync gating,
-//! release order and draining. W13.3 adds the peer-envelope codec.
+//! - **The Ready loop** ([`ReadyLoop`], §7.4, D-28): one input at a time and one outstanding
+//!   Ready. Each Ready that must sync becomes one journal frame and its sync. The storage view
+//!   stays sealed, and every message stays held, until that sync's `SyncDone`. Committed
+//!   entries are applied in index order through [`Apply`], and further ready work is drained
+//!   before the next input. No vote grant or append acknowledgement leaves on unsynced state
+//!   (DUR-2).
+//!
+//! W13.3 adds the peer-envelope codec around the messages the loop sends.
 
 mod config;
 mod convert;
@@ -48,6 +52,9 @@ mod entropy;
 mod node;
 #[cfg(test)]
 mod node_tests;
+mod ready_loop;
+#[cfg(test)]
+mod ready_loop_tests;
 mod storage;
 #[cfg(test)]
 mod test_support;
@@ -55,4 +62,5 @@ mod test_support;
 pub use config::library_config;
 pub use entropy::EntropySource;
 pub use node::{ConstructError, RaftNode};
+pub use ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
 pub use storage::JournalStorage;
