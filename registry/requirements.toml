@@ -40,13 +40,13 @@ title = "Keys are ordered byte-wise by their UTF-8 encoding"
 [[requirement]]
 id = "DM-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "The request history is never expired or evicted"
 
 [[requirement]]
 id = "DM-6"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Bounded live state with a terminal capacity_exceeded result"
 notes = "Owner disposition: live-state capacity accepted as stated 2026-10-01 (§15 Q2)."
 
