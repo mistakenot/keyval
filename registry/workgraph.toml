@@ -140,7 +140,7 @@ deps = ["W03", "W09"]
 reqs = ["T-7", "T-12", "§10.14"]
 area = ["model"]
 milestone = "m1"
-accept = ["./dev check MODEL", "./dev check OBSERVATION-SCHEMA"]
+accept = ["./dev check MODEL", "./dev check OBSERVATION-SCHEMA", "./dev check DIFFERENTIAL"]
 bead = "br-w10-reference-model-che"
 
 [[item]]
@@ -324,7 +324,7 @@ deps = ["W09", "W10", "W14"]
 reqs = ["F-3", "F-5", "C-5", "DM-3"]
 area = ["statemachine/apply", "node/write_path"]
 milestone = "m3"
-accept = []
+accept = ["./dev check DIFFERENTIAL-DELETE-CAS"]
 bead = "br-w27-delete-cas-o1r"
 
 [[item]]
@@ -334,7 +334,7 @@ deps = ["W09", "W10", "W14"]
 reqs = ["F-4", "C-8", "DM-4"]
 area = ["statemachine/scan", "node/reads"]
 milestone = "m3"
-accept = []
+accept = ["./dev check DIFFERENTIAL-SCAN"]
 bead = "br-w28-scan-jxn"
 
 [[item]]

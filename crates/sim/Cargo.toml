@@ -10,5 +10,8 @@ publish.workspace = true
 types = { workspace = true }
 statemachine = { workspace = true }
 
+[dev-dependencies]
+model = { workspace = true }
+
 [lints]
 workspace = true

@@ -776,3 +776,39 @@ tier = "T0"
 run = "./dev check PEER-ADMISSION"
 min_cases = 14
 status = "implemented"
+
+[[check]]
+id = "DIFFERENTIAL"
+summary = "the state machine matches the reference model on 400 seeded random logs of PUTs, empty entries and GETs under tight DM-6 quotas: every apply result with its echoed request ID (first execution, replay, conflict, key, byte and both-limit refusal), every GET through its read path, the applied index and live counters after every step, and the final map in iteration order and the request history agree; the logs reach every outcome and boundary; and six deliberately broken state machines (a key or byte quota one too loose, a version off by one, a replay reported as an execution, history under wrong request IDs, a stale GET) are each caught and shrunk (T-7, §10.14)"
+kind = "test_group"
+covers = ["T-7"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check DIFFERENTIAL"
+min_cases = 9
+status = "implemented"
+
+[[check]]
+id = "DIFFERENTIAL-DELETE-CAS"
+summary = "planned for W27: the differential test extended to DELETE and compare-and-swap (absent and present DELETE; absent, matching and mismatching CAS; mismatch decided before capacity) against the reference model (T-7, §10.14)"
+kind = "test_group"
+covers = ["T-7"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check DIFFERENTIAL-DELETE-CAS"
+min_cases = 1
+status = "planned"
+
+[[check]]
+id = "DIFFERENTIAL-SCAN"
+summary = "planned for W28: the differential test extended to SCAN pages (range edges, `after` continuation, item and byte caps, has_more and next_after) against the reference model (T-7, §10.14)"
+kind = "test_group"
+covers = ["T-7"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check DIFFERENTIAL-SCAN"
+min_cases = 1
+status = "planned"

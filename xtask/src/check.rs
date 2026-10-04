@@ -1189,6 +1189,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 14,
     },
+    CheckDef {
+        id: "DIFFERENTIAL",
+        summary: "the state machine matches the reference model on 400 seeded random logs of \
+                  PUTs, empty entries and GETs under tight DM-6 quotas: every apply result \
+                  with its echoed request ID (first execution, replay, conflict, key, byte and \
+                  both-limit refusal), every GET through its read path, the applied index and \
+                  live counters after every step, and the final map in iteration order and the \
+                  request history agree; the logs reach every outcome and boundary; and six \
+                  deliberately broken state machines (a key or byte quota one too loose, a \
+                  version off by one, a replay reported as an execution, history under wrong \
+                  request IDs, a stale GET) are each caught and shrunk (T-7, §10.14)",
+        kind: Kind::TestGroup,
+        covers: &["T-7"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["differential::"],
+        },
+        min_cases: 9,
+    },
 ];
 
 /// Outcome of one requested check.

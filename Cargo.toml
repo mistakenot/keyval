@@ -38,6 +38,7 @@ types = { path = "crates/types" }
 journal = { path = "crates/journal" }
 fs_storage = { path = "crates/fs_storage" }
 statemachine = { path = "crates/statemachine" }
+model = { path = "crates/model" }
 # Third-party crates (each one ledgered in DEPENDENCIES.md).
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 jsonschema = { version = "0.58.5", default-features = false }

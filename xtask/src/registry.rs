@@ -661,14 +661,40 @@ mod files {
         let file: ChecksFile =
             toml::from_str(&read(CHECKS)).unwrap_or_else(|err| panic!("{CHECKS}: {err}"));
         assert_eq!(file.schema, "keyval.registry.checks/v1");
-        let ids: Vec<&str> = file.check.iter().map(|c| c.id.as_str()).collect();
+        // Implemented rows mirror the catalogue exactly, in order. A planned row has no
+        // executable yet, so it is not in the catalogue; the work item whose accept list
+        // names it will implement it (W05.2's planned rows; owner decision on
+        // br-w10-3-differential-tests-6ez).
+        let (implemented, planned): (Vec<&CheckEntry>, Vec<&CheckEntry>) =
+            file.check.iter().partition(|c| c.status == "implemented");
+        let ids: Vec<&str> = implemented.iter().map(|c| c.id.as_str()).collect();
         let catalogue: Vec<&str> = CATALOGUE.iter().map(|def| def.id).collect();
         assert_eq!(
             ids, catalogue,
-            "rule: checks.toml has one row per catalogue check, in catalogue order, until \
-             W05.2; a new check lands with its row (§11.5 rule 12)"
+            "rule: checks.toml has one implemented row per catalogue check, in catalogue \
+             order; a new check lands with its row (§11.5 rule 12)"
         );
-        for (row, def) in file.check.iter().zip(CATALOGUE) {
+        let graph = crate::workgraph::parse(&read("registry/workgraph.toml"))
+            .unwrap_or_else(|err| panic!("registry/workgraph.toml: {err}"));
+        let accepted: BTreeSet<&str> = graph
+            .iter()
+            .flat_map(|item| item.accept.iter().map(String::as_str))
+            .collect();
+        for row in &planned {
+            assert!(
+                row.status == "planned"
+                    && row.min_cases > 0
+                    && !catalogue.contains(&row.id.as_str())
+                    && accepted.contains(format!("./dev check {}", row.id).as_str()),
+                "rule: every other row is planned, has a floor, has no catalogue entry yet, and \
+                 is named by the accept list of the work item that implements it; {row:?}"
+            );
+            assert!(
+                row.api.is_empty() && row.catches.is_empty(),
+                "rule: no current check names API operations or catches bug variants; {row:?}"
+            );
+        }
+        for (row, def) in implemented.iter().zip(CATALOGUE) {
             let json = |value: serde_json::Value| value.as_str().unwrap_or_default().to_owned();
             let expected = (
                 def.summary.to_owned(),
