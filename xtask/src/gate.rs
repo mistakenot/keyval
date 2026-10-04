@@ -1009,47 +1009,42 @@ fn package_tests_step(
         let command = ctx.cargo.describe(&args);
         let label = package.as_deref().unwrap_or("doctests").to_owned();
         let _ = writeln!(log, "=== {command}");
-        let (outcomes, failure) = match run_captured(&mut ctx.cargo.command(ctx.root, &args)) {
+        let reading = match run_captured(&mut ctx.cargo.command(ctx.root, &args)) {
             Err(failure) => {
                 log.push_str(&failure.log);
-                (Vec::new(), Some(failure.detail))
+                RunReading {
+                    outcomes: Vec::new(),
+                    passed: 0,
+                    failure: Some(failure.detail.clone()),
+                    incomplete: Some(failure.detail),
+                }
             }
             Ok(captured) => {
                 log.push_str(&combined(&captured));
-                let tally = libtest::parse_tally(&captured.stdout);
-                let failure = match tally {
-                    Err(err) => Some(err.to_string()),
-                    Ok(tally) => {
-                        passed = passed.saturating_add(u64::from(tally.passed));
-                        if tally.failed > 0 {
-                            Some(format!(
-                                "{} test(s) failed: {}",
-                                tally.failed,
-                                libtest::failed_names(&captured.stdout).join(", ")
-                            ))
-                        } else if tally.ignored > 0 {
-                            Some(format!(
-                                "{} test(s) are #[ignore]d; an ignored case fails (P10)",
-                                tally.ignored
-                            ))
-                        } else if captured.status.success() {
-                            None
-                        } else {
-                            Some("cargo test exited unsuccessfully".to_owned())
-                        }
-                    }
-                };
-                (libtest::outcomes(&captured.stdout), failure)
+                read_run(&captured, package.is_some())
             }
         };
+        passed = passed.saturating_add(reading.passed);
+        let RunReading {
+            outcomes,
+            failure,
+            incomplete,
+            ..
+        } = reading;
         if let Some(why) = &failure {
             problems.push(format!("{label}: {why}"));
+        }
+        if let Some(why) = &incomplete
+            && failure.as_deref() != Some(why.as_str())
+        {
+            problems.push(format!("{label}: incomplete run: {why}"));
         }
         if let Some(package) = package {
             state.runs.push(PackageRun {
                 package,
                 outcomes,
                 failure,
+                incomplete,
             });
         }
         commands.push(command);
@@ -1064,6 +1059,65 @@ fn package_tests_step(
             let _ = write!(detail, "\n  {line}");
         }
         Err(StepFailure::new(detail, log))
+    }
+}
+
+/// What one `cargo test` run of the tests step showed.
+struct RunReading {
+    /// Every case's outcome.
+    outcomes: Vec<(String, libtest::Outcome)>,
+    /// Passed cases, as libtest's summaries count them.
+    passed: u64,
+    /// Why the run did not finish cleanly, if it did not.
+    failure: Option<String>,
+    /// Why its outcomes cannot be trusted, if they cannot (br-judge-cargo-partial-run-afvw).
+    incomplete: Option<String>,
+}
+
+/// Reads one run's output: libtest's tally and every case's outcome. A package run's
+/// outcomes are reconciled with libtest's and cargo's own counts; the doctest run starts no
+/// `Running` binaries and is judged by its tally alone.
+fn read_run(captured: &Captured, package_run: bool) -> RunReading {
+    let mut passed = 0;
+    let failure = match libtest::parse_tally(&captured.stdout) {
+        Err(err) => Some(err.to_string()),
+        Ok(tally) => {
+            passed = u64::from(tally.passed);
+            if tally.failed > 0 {
+                Some(format!(
+                    "{} test(s) failed: {}",
+                    tally.failed,
+                    libtest::failed_names(&captured.stdout).join(", ")
+                ))
+            } else if tally.ignored > 0 {
+                Some(format!(
+                    "{} test(s) are #[ignore]d; an ignored case fails (P10)",
+                    tally.ignored
+                ))
+            } else if captured.status.success() {
+                None
+            } else {
+                Some("cargo test exited unsuccessfully".to_owned())
+            }
+        }
+    };
+    let reconciled = package_run.then(|| {
+        libtest::reconcile(
+            &captured.stdout,
+            &captured.stderr,
+            captured.status.success(),
+        )
+    });
+    let (outcomes, incomplete) = match reconciled {
+        Some(Ok(outcomes)) => (outcomes, None),
+        Some(Err(why)) => (libtest::outcomes(&captured.stdout), Some(why)),
+        None => (libtest::outcomes(&captured.stdout), None),
+    };
+    RunReading {
+        outcomes,
+        passed,
+        failure: failure.or_else(|| incomplete.clone()),
+        incomplete,
     }
 }
 
@@ -2303,6 +2357,61 @@ pub mod tests {
              observed={tests:#?}"
         );
         assert_eq!(step(&report, "R-STATIC").status, Verdict::Passed);
+    }
+
+    #[test]
+    fn registry_set_fails_a_check_whose_package_run_was_cut_short() {
+        let checks = registry_checks(&[("R-TESTS", "implemented", 1)]);
+        let root = scratch_dir("gate-registry-aborted");
+        for file in ["Cargo.toml", "Cargo.lock"] {
+            fs::copy(fixture("gate-ok").join(file), root.join(file)).unwrap();
+        }
+        fs::create_dir_all(root.join("src")).unwrap();
+        // tests::a_passes reports `ok`; then the binary aborts mid-run, so
+        // tests::z_aborts_the_binary never reports and the summary never prints.
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn one() -> u32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    \
+             #[test]\n    fn a_passes() {\n        assert_eq!(super::one(), 1);\n    }\n\n    \
+             #[test]\n    fn z_aborts_the_binary() {\n        \
+             std::thread::sleep(std::time::Duration::from_millis(800));\n        \
+             std::process::abort();\n    }\n}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("registry")).unwrap();
+        fs::write(root.join(registry_gate::CHECKS), &checks).unwrap();
+        // Its own target dir: this crate is also named gate-ok, and cargo names a path
+        // package's build by its workspace-relative path, so a shared target dir could run
+        // another fixture's gate-ok binary instead.
+        let ctx = Context {
+            root: &root,
+            tree: resolve_tree_with(
+                &root,
+                Some(TREE),
+                vec!["src/lib.rs".to_owned()],
+                &no_repository,
+            )
+            .unwrap(),
+            artifacts: scratch_dir("gate-registry-aborted-artifacts"),
+            cargo: nested_cargo("keyval-gate-aborted"),
+            tool_path: None,
+            progress: false,
+            parent: Parent::Checks(checks),
+            allow_demotions: Vec::new(),
+        };
+        let report = run_registry(&ctx, REGISTRY_CATALOGUE, &[], &[]).unwrap();
+        let check = step(&report, "R-TESTS");
+        assert!(
+            !report.ok
+                && check.status == Verdict::Failed
+                && check.detail.as_deref().is_some_and(|d| {
+                    d.contains("incomplete") && d.contains("stopped before its `test result:`")
+                }),
+            "rule: a check whose package run was cut short is never reported passed, though \
+             the case that did report passed and meets min_cases 1 (§10.13, afvw); \
+             observed={check:#?}"
+        );
+        assert_eq!(step(&report, "tests").status, Verdict::Failed);
     }
 
     #[test]

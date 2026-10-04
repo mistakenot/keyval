@@ -274,11 +274,15 @@ pub struct PackageRun {
     pub outcomes: Vec<(String, Outcome)>,
     /// Why cargo did not finish cleanly (a build error, a failing case, a timeout).
     pub failure: Option<String>,
+    /// Why the outcomes cannot be trusted, if they cannot: the run stopped early or did
+    /// not add up ([`crate::libtest::reconcile`]). A failure outside a check's selection
+    /// leaves the run complete; an incomplete run fails every check of its package.
+    pub incomplete: Option<String>,
 }
 
-/// Judges a cargo-test check from its package's run: the cases `filters` select (all of
-/// them when empty) must all pass, none may be ignored, and at least `min_cases` must have
-/// run (§10.11, P10). Returns the passed cases.
+/// Judges a cargo-test check from its package's run: the run must be complete, the cases
+/// `filters` select (all of them when empty) must all pass, none may be ignored, and at
+/// least `min_cases` must have run (§10.11, §10.13, P10). Returns the passed cases.
 pub fn judge_cargo(
     package: &str,
     filters: &[&str],
@@ -291,6 +295,14 @@ pub fn judge_cargo(
         .ok_or_else(|| {
             format!("package {package} had no test run in this gate; is it a workspace member?")
         })?;
+    if let Some(why) = &run.incomplete {
+        // A family is never reported passed while any of its cases may be missing (§10.13,
+        // br-judge-cargo-partial-run-afvw).
+        return Err(format!(
+            "package {package}'s test run is incomplete, so none of its outcomes can be \
+             trusted: {why}"
+        ));
+    }
     let selected: Vec<&(String, Outcome)> = run
         .outcomes
         .iter()
@@ -565,7 +577,31 @@ mod tests {
                 .map(|&(name, outcome)| (name.to_owned(), outcome))
                 .collect(),
             failure: failure.map(str::to_owned),
+            incomplete: None,
         }]
+    }
+
+    #[test]
+    fn a_cargo_check_on_an_incomplete_package_run_fails_whatever_it_selected() {
+        let mut runs = run(
+            &[("a::one", Outcome::Passed), ("a::two", Outcome::Passed)],
+            Some("cargo test exited unsuccessfully"),
+        );
+        assert_eq!(
+            judge_cargo("alpha", &["a::"], 2, &runs),
+            Ok(2),
+            "a complete run with a failure outside the selection still judges the check"
+        );
+        runs[0].incomplete = Some("a test binary ... stopped before its summary".to_owned());
+        let verdict = judge_cargo("alpha", &["a::"], 1, &runs);
+        assert!(
+            verdict
+                .as_ref()
+                .is_err_and(|e| e.contains("incomplete") && e.contains("stopped before")),
+            "rule: a family is never reported passed while any of its cases may be missing, \
+             even when the cases that did report passed and meet min_cases (§10.13, afvw); \
+             verdict={verdict:?}"
+        );
     }
 
     #[test]
