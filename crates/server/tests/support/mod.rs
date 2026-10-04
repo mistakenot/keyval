@@ -73,12 +73,30 @@ pub fn genesis_frame(config: &Config, id: u64) -> Vec<u8> {
 }
 
 /// A free loopback port, for a node's client address in a config.
+///
+/// Never bind port 0 and hand the number on: a parallel test can be given the same number
+/// before its server binds it, and two tests then talk to one server (br-p9fm). Instead,
+/// ports come from a per-process counter over a block whose base is derived from the
+/// process ID, below the kernel's ephemeral range (32768-60999 on Linux by default). So no
+/// two tests in one process share a port, and no bind to port 0 or outgoing connection can
+/// take one, even while its node is down between a kill and a restart. Each port is probed
+/// free before it is handed out.
 pub fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    const FIRST: u64 = 10_000;
+    const BLOCKS: u64 = 300;
+    const BLOCK: u64 = 64;
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let base = FIRST + u64::from(std::process::id()) % BLOCKS * BLOCK;
+    for _ in 0..BLOCK {
+        let port = u16::try_from(base + NEXT.fetch_add(1, Ordering::Relaxed) % BLOCK).unwrap();
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!(
+        "fixture: a free loopback port in {base}..{} (br-p9fm)",
+        base + BLOCK
+    );
 }
 
 /// What an HTTP call got back.

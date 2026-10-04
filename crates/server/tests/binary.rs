@@ -264,13 +264,19 @@ mod restart_tests {
     use crate::node::{Node, Refusal, Spec, killed, try_send};
     use crate::support::{INSTANCE, Reply, free_port, one_voter, put_body, request, scratch, send};
 
-    /// An initialised one-voter node, started with its receipt in a fresh scratch dir.
+    /// An initialised one-voter node, started with its receipt in a fresh scratch dir. Its
+    /// `cluster_id` is the scratch dir's unique name, which the helpers check at every wait.
     fn started(name: &str) -> Node {
         let dir = scratch(name);
         let port = free_port();
+        let cluster = dir.file_name().unwrap().to_str().unwrap().to_owned();
         let (path, _) = one_voter(&dir, |text| {
             text.replace("tick_ms = 50", "tick_ms = 5")
                 .replace("127.0.0.1:7101", &format!("127.0.0.1:{port}"))
+                .replace(
+                    "cluster_id = \"keyval-fixture-one-voter\"",
+                    &format!("cluster_id = \"{cluster}\""),
+                )
         });
         let initialised = init(&path, "1", INSTANCE, &[]);
         assert_eq!(
@@ -282,6 +288,7 @@ mod restart_tests {
         Node::start(Spec {
             config: path,
             node: 1,
+            cluster,
             address: SocketAddr::from(([127, 0, 0, 1], port)),
             log: dir.join("node.log"),
             dir,
@@ -598,6 +605,21 @@ mod restart_tests {
              {acknowledged} acknowledged, {unanswered} unanswered ({replayed} replayed, \
              {executed} first executions); stderr: {}",
             node.stderr()
+        );
+    }
+
+    #[test]
+    fn test_ports_never_repeat_within_a_process_and_avoid_the_ephemeral_range() {
+        let ports: Vec<u16> = (0..24).map(|_| free_port()).collect();
+        let mut distinct = ports.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(
+            (distinct.len(), ports.iter().all(|&port| port < 32_768)),
+            (ports.len(), true),
+            "rule: no two test servers in one process are given the same port, and none is \
+             in the kernel's ephemeral range, where a bind to port 0 or an outgoing \
+             connection could take it while its node is down (br-p9fm); ports {ports:?}"
         );
     }
 

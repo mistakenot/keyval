@@ -23,12 +23,13 @@ use crate::support::{Reply, request, send, try_read_reply};
 /// SIGKILL's number: `Child::kill` sends it on Unix.
 pub const SIGKILL: i32 = 9;
 
-/// What to start: node `node` of the config at `config`, serving on `address`, logging to
-/// `log`, with its receipt and stderr in `dir`.
+/// What to start: node `node` of the config at `config`, whose `cluster_id` is `cluster`,
+/// serving on `address`, logging to `log`, with its receipt and stderr in `dir`.
 #[derive(Clone, Debug)]
 pub struct Spec {
     pub config: PathBuf,
     pub node: u64,
+    pub cluster: String,
     pub address: SocketAddr,
     pub log: PathBuf,
     pub dir: PathBuf,
@@ -115,11 +116,11 @@ impl Node {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if TcpStream::connect(self.spec.address).is_ok() {
+                let cluster = self.cluster();
                 let ready = send(
                     self.spec.address,
                     &request("GET", "/v1/health/ready", &[], ""),
                 );
-                let cluster = send(self.spec.address, &request("GET", "/v1/cluster", &[], ""));
                 if ready.status == 200 && cluster.body["role"] == "leader" {
                     return cluster;
                 }
@@ -142,7 +143,7 @@ impl Node {
     pub fn wait_applied(&self, index: u64) -> Reply {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let cluster = send(self.spec.address, &request("GET", "/v1/cluster", &[], ""));
+            let cluster = self.cluster();
             if cluster.body["applied_index"]
                 .as_u64()
                 .is_some_and(|applied| applied >= index)
@@ -160,6 +161,23 @@ impl Node {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// `/v1/cluster`, from this node: a fixture failure if whatever answers on its address
+    /// is another cluster, so a test never asserts on a stranger's answers (br-p9fm).
+    fn cluster(&self) -> Reply {
+        let cluster = send(self.spec.address, &request("GET", "/v1/cluster", &[], ""));
+        assert_eq!(
+            cluster.body["cluster_id"].as_str(),
+            Some(self.spec.cluster.as_str()),
+            "fixture: {} answers as another cluster, not node {}'s: another test's server holds \
+             its port (br-p9fm); answer {}; stderr: {}",
+            self.spec.address,
+            self.spec.node,
+            cluster.body,
+            self.stderr()
+        );
+        cluster
     }
 
     fn stderr_path(&self) -> PathBuf {
