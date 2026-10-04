@@ -5,7 +5,7 @@
 
 // check: DOCTOR-CLI
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -197,7 +197,28 @@ fn goldens() -> Vec<Golden> {
         golden!("tail-too-long", false, "refuse", Some("tail_too_long")),
         golden!("truncation-below-commit", false, "refuse", Some("apply")),
         golden!("commit-regression", false, "refuse", Some("apply")),
+        golden!(
+            "impossible-version-final",
+            false,
+            "refuse",
+            Some("impossible_header")
+        ),
     ]
+}
+
+/// Every variant of a report enum, serialised as the report writes it. The variants are
+/// listed once, for both the list and an exhaustive match, so a new variant fails to compile
+/// until it is listed here (br-ozvx).
+macro_rules! every {
+    ($ty:ident: $($variant:ident),+ $(,)?) => {{
+        let _exhaustive = |value: $ty| match value {
+            $($ty::$variant => ()),+
+        };
+        [$($ty::$variant),+]
+            .iter()
+            .map(|value| serde_json::to_value(value).unwrap().to_string())
+            .collect::<BTreeSet<String>>()
+    }};
 }
 
 /// A golden's journal bytes: whole, or its body after node 1's genesis.
@@ -392,6 +413,102 @@ mod doctor_cli {
             output.status.code(),
             Some(2),
             "rule: an unreadable --config is a usage error"
+        );
+    }
+
+    #[test]
+    fn the_golden_table_is_every_recovery_golden_file() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../journal/golden/recovery");
+        let files: BTreeSet<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| Path::new(name).extension().is_some_and(|ext| ext == "bin"))
+            .collect();
+        let table: BTreeSet<String> = goldens()
+            .iter()
+            .map(|golden| format!("{}.bin", golden.name))
+            .collect();
+        let readme = fs::read_to_string(dir.join("README.md")).unwrap();
+        let rows: BTreeSet<String> = readme
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `")?.split_once("` |"))
+            .map(|(name, _)| name.to_owned())
+            .filter(|name| Path::new(name).extension().is_some_and(|ext| ext == "bin"))
+            .collect();
+        assert_eq!(
+            table, files,
+            "rule: the doctor's verdict is checked on every recovery golden in the directory \
+             (O-7, §12.2 W23); a new golden fails here until it is added (br-ozvx)"
+        );
+        assert_eq!(
+            rows, files,
+            "rule: the README indexes exactly the golden files, so the journal crate's own \
+             tables, held to the README, cover them too"
+        );
+    }
+
+    #[test]
+    fn the_schemas_enums_are_exactly_the_reports_enums() {
+        use cli::doctor::{BindingState, Conclusion, LockState, RefusalCode, ShapeReport};
+        let schema: Value = serde_json::from_str(SCHEMA).unwrap();
+        let listed = |pointer: &str| -> BTreeSet<String> {
+            schema
+                .pointer(pointer)
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("the schema has no enum at {pointer}"))
+                .iter()
+                .filter(|value| !value.is_null())
+                .map(Value::to_string)
+                .collect()
+        };
+        let enums = [
+            (
+                "/properties/verdict/enum",
+                every!(Conclusion: Clean, DiscardTail, Refuse, Live, NoJournal, Unreadable),
+            ),
+            (
+                "/properties/lock/enum",
+                every!(LockState: Acquired, NoLockFile, Live),
+            ),
+            (
+                "/properties/binding/enum",
+                every!(BindingState: Verified, Mismatch, Unchecked),
+            ),
+            (
+                "/properties/tail/oneOf/1/properties/shape/enum",
+                every!(ShapeReport: Incomplete, ChecksumFailed, Unreadable, Stale),
+            ),
+            (
+                "/properties/refusal/oneOf/1/properties/code/enum",
+                every!(RefusalCode:
+                    Empty,
+                    IncompleteGenesis,
+                    NotAnInterruptedInit,
+                    ImpossibleHeader,
+                    NotGenesis,
+                    GenesisRecord,
+                    GenesisMismatch,
+                    Record,
+                    Apply,
+                    Corruption,
+                    TailTooLong,
+                    Storage,
+                ),
+            ),
+        ];
+        for (pointer, variants) in enums {
+            assert_eq!(
+                listed(pointer),
+                variants,
+                "rule: the schema's enum lists exactly what the report serialises (O-6); \
+                 pointer={pointer} (br-ozvx)"
+            );
+        }
+        assert!(
+            schema["properties"]["lock"]["enum"]
+                .as_array()
+                .is_some_and(|values| values.contains(&Value::Null)),
+            "rule: lock is null when the directory cannot be opened"
         );
     }
 

@@ -714,7 +714,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check JOURNAL-EXAMINE"
-min_cases = 5
+min_cases = 6
 status = "implemented"
 
 [[check]]
@@ -738,7 +738,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check DOCTOR-CLI"
-min_cases = 7
+min_cases = 9
 status = "implemented"
 
 [[check]]

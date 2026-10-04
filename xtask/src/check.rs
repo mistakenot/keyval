@@ -1094,7 +1094,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "journal",
             filters: &["examine_tests::"],
         },
-        min_cases: 5,
+        min_cases: 6,
     },
     CheckDef {
         id: "FS-DOCTOR",
@@ -1129,7 +1129,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "cli",
             filters: &["doctor_cli::"],
         },
-        min_cases: 7,
+        min_cases: 9,
     },
     CheckDef {
         id: "OBSERVATION-SCHEMA",

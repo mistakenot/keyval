@@ -4,6 +4,7 @@
 
 // check: JOURNAL-EXAMINE
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use types::{
@@ -87,9 +88,13 @@ fn examined(bytes: &[u8], bound: bool) -> crate::Examination {
     examine(&Memory(bytes.to_vec()), len(bytes), binding, BOUNDS)
 }
 
+/// The goldens' README: the index of `golden/recovery/`, one row per `.bin` file, which
+/// `golden_recovery` holds to its own table both ways.
+const README: &str = include_str!("../golden/recovery/README.md");
+
 /// The recovery goldens: name, bytes, whether it is a whole journal (no genesis prepended),
 /// and the torn tail's shape if recovery discards one.
-const GOLDENS: [(&str, &[u8], bool, Option<TailShape>); 17] = [
+const GOLDENS: [(&str, &[u8], bool, Option<TailShape>); 18] = [
     (
         "empty",
         include_bytes!("../golden/recovery/empty.bin"),
@@ -192,7 +197,31 @@ const GOLDENS: [(&str, &[u8], bool, Option<TailShape>); 17] = [
         false,
         None,
     ),
+    (
+        "impossible-version-final",
+        include_bytes!("../golden/recovery/impossible-version-final.bin"),
+        false,
+        None,
+    ),
 ];
+
+#[test]
+fn the_table_holds_every_recovery_golden() {
+    let rows: BTreeSet<&str> = README
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("| `")?
+                .split_once(".bin` |")
+                .map(|(name, _)| name)
+        })
+        .collect();
+    let table: BTreeSet<&str> = GOLDENS.iter().map(|golden| golden.0).collect();
+    assert_eq!(
+        table, rows,
+        "rule: the doctor is checked on every recovery golden the README indexes (O-7, \
+         §12.2 W23); a new golden fails here until it is added (br-ozvx)"
+    );
+}
 
 /// The golden journal named `name`.
 fn golden(name: &str) -> Vec<u8> {
