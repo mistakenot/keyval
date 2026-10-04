@@ -72,7 +72,8 @@ The ACFS landing-the-plane git workflow does **not** apply in this repo:
     It refuses foreign staging. It stages only your paths and refreshes the fixed
     `.local/candidate/` from the staged tree, verified against its manifest. It runs
     the candidate's own `./dev gate fast --tree` there, git-isolated, so the judge is
-    built from the tree under test.
+    built from the tree under test. It also hands the gate the parent commit's
+    `registry/checks.toml`, so no check status can silently move backwards (D-56).
   - If HEAD moved during the gate, it rebuilds the candidate as the new HEAD plus
     exactly your staged changes (never files edited meanwhile) and re-runs. It refuses
     instead if that concurrent commit changed one of your files, or if anyone staged
@@ -316,18 +317,19 @@ output only together with its schema, and bump the version when the change break
   clippy, git, br, bv, ntm, ubs, ast-grep, dcg, am), with versions and a real
   capability probe each; fails on anything missing or broken.
 - `./dev check <ID>... [--case NAME]` — registered checks: XTASK, DEV-DOCTOR, DEV-CHECK,
-  DEV-GATE, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES, REGISTRY,
-  REGISTRY-FIXTURES, TRACEABILITY, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES, LINT-ALLOWS,
-  LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT, SPEC,
-  WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES, PORTS,
-  COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE, K-14,
-  CONFIG-RULES, CONFIG-FINGERPRINT, LIMITS, JOURNAL-FRAMES, JOURNAL-LOG, COMMAND-CODEC,
-  APPLY-PUT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the
-  check's minimum case count fail (P10). A failure prints its exact re-run command.
+  DEV-GATE, GATE-STAGING, DEV-STEPLOG, DEV-COMMIT, DEV-ACCEPT, DEV-CLOSE, REGISTRY-FILES,
+  REGISTRY, REGISTRY-FIXTURES, TRACEABILITY, DEV-PRUNE, DEV-SCHEMAS, LINT-PROBES,
+  LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, AGENTS-RULES, RAFT-VENDOR, RAFT-AUDIT,
+  SPEC, WORKGRAPH, DEV-BEADS, INVARIANT, NEWTYPES, KEY-VALUE, DOMAIN-ENUMS, ERROR-CODES,
+  PORTS, COMPILE-FAIL, DEP-RULE-FIXTURES, SPIKE-DETERMINISM, SIM-SCHEDULER, SIM-TRACE,
+  K-14, CONFIG-RULES, CONFIG-FINGERPRINT, LIMITS, JOURNAL-FRAMES, JOURNAL-LOG,
+  COMMAND-CODEC, APPLY-PUT. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs
+  below the check's minimum case count fail (P10). A failure prints its exact re-run
+  command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or
-  REGISTRY-FILES fails (rule 12). W05.4 makes `./dev gate fast` run the file's
-  implemented T0 rows. `registry/requirements.toml` holds every §6 requirement; its
+  REGISTRY-FILES fails (rule 12). `./dev gate fast` runs the file's implemented T0 rows
+  (W05.4, below). `registry/requirements.toml` holds every §6 requirement; its
   statuses are derived (rule 12), so a closure outside `./dev commit --close` applies
   the activation itself; the next canonical closure also catches up any it missed (W05.3).
 - **The registry gate** (check REGISTRY, §10.13, W05.2) judges the registry against the
@@ -346,9 +348,9 @@ output only together with its schema, and bump the version when the change break
     conformance tests under `conformance/` carry `// api-test: <operationId or error
     code>`. Until W32, gaps are listed under `reported` in the check's JSON
     (`keyval.dev.check/v2`) and do not fail it (conditions 5–6).
-- `./dev commit --bead <id> [--agent NAME] -m MSG <PATH>…` — the exact-candidate commit
-  wrapper (see Git Discipline). `./dev commit --close <id> -m MSG` closes a bead (§11.3
-  step 7):
+- `./dev commit --bead <id> [--agent NAME] [--allow-demotion CHECK=BEAD]… -m MSG <PATH>…`
+  — the exact-candidate commit wrapper (see Git Discipline). `./dev commit --close <id>
+  -m MSG` closes a bead (§11.3 step 7):
   - it needs the newest passing accept receipt to name the tree of the newest `main`
     commit carrying `Bead: <id>`;
   - then, under the commit lock and only once the wrapper's path checks pass, it runs
@@ -362,6 +364,13 @@ output only together with its schema, and bump the version when the change break
   `--close <id> --failed --evidence <PATH>` records a failed spike. The bead is
   labelled `failed` + `needs-owner` (once, even on a re-run) and stays open, so its
   dependants stay blocked; the evidence file is committed (`Failed: <id>`).
+
+  **Check statuses are forward-only (D-56, W05.4).** A commit that removes a
+  `checks.toml` row, or marks an `implemented` one anything else, fails the gate. Only an
+  owner-approved plan change may: `--allow-demotion <CHECK-ID>=<bead>` names a closed bead
+  labelled `plan-change` in the committed tracker export. The gate records the demotion in
+  its receipt and the commit gets an `Allows-Demotion:` trailer; an allowance that covers
+  no demotion fails. Never pass it without the owner's decision.
 - `./dev accept <id> --tree <tree-id>` — runs the bead's acceptance selectors on a
   committed tree, materialised in `.local/accept/<tree-id>/`, git-isolated, with its
   own cargo target dir, and writes a `keyval.dev.accept/v1` receipt naming that tree.
@@ -390,15 +399,30 @@ output only together with its schema, and bump the version when the change break
     valid marker is only reported;
   - logs every removal (or, with `--dry-run`, every removal it would make) in a
     `keyval.dev.prune/v1` receipt. Gate-run retention comes with W46.
-- `./dev gate fast` — the T0 gate in its fixed bootstrap form (§10.10): fmt, clippy with
-  denied warnings, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests,
-  and UBS on the exact changed files (all first-party sources if no source changed).
-  It writes a receipt to `artifacts/receipts/` with the tree ID, build ID, policy
-  hashes and per-step case counts. **It judges exact trees only (P11):** in a checkout
-  it refuses unless the working tree is clean, and judges `HEAD^{tree}`. A commit
-  wrapper passes `--tree <id> --changed <path>…` from the materialised candidate, and
-  then the gate never calls git. It refuses to run if git can see any repository from
-  the candidate. Run it with `GIT_DIR=/nonexistent/keyval-candidate-git` and
+- `./dev gate fast` — the T0 gate (§10.10). A tree with `registry/checks.toml` gets the
+  **registry set** (W05.4):
+  - fmt, and clippy with denied warnings;
+  - `staging`: every T0 row of `checks.toml`. Each `implemented` row runs, in file order.
+    Each `planned` row is listed in the receipt with the work item whose `accept` names
+    it, and never fails;
+  - `forward-only`: no check status moved backwards from the parent commit (above);
+  - `tests`: `cargo test -p <member> --all-targets --no-fail-fast` for each workspace
+    member, then the doctests. Each cargo-test check is judged from this one run, never
+    re-run: every case it selects passes, none is ignored, and at least its `min_cases`
+    ran (§10.11);
+  - each implemented check, as its own step (a static check runs in-process);
+  - UBS on the exact changed files (all first-party sources if no source changed).
+
+  A tree without the registry gets W01's fixed bootstrap set (fmt, clippy, LINT-ALLOWS,
+  LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests, UBS). Either way it writes a
+  `keyval.dev.receipt/v4` receipt to `artifacts/receipts/` with the tree ID, build ID,
+  policy hashes, per-step case counts, the planned rows and any approved demotions.
+  **It judges exact trees only (P11):** in a checkout it refuses unless the working tree
+  is clean, judges `HEAD^{tree}`, and compares statuses with `HEAD^`. A commit wrapper
+  passes `--tree <id> --changed <path>… --parent-checks <file>` from the materialised
+  candidate, and then the gate never calls git. It refuses to run if git can see any
+  repository from the candidate. Run it with
+  `GIT_DIR=/nonexistent/keyval-candidate-git` and
   `GIT_CEILING_DIRECTORIES=<candidate>:<candidate's parent>`, which is what
   `candidate::git_isolation` sets. Other tiers report "not implemented" (W46).
 

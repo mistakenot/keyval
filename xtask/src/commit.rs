@@ -63,6 +63,11 @@ pub const CANDIDATE_DIR: &str = ".local/candidate";
 /// The commit lock file, relative to the root.
 pub const LOCK_FILE: &str = ".local/commit.lock";
 
+/// Where the wrapper writes the parent commit's `registry/checks.toml` for the gate's
+/// forward-only status rule (D-56), relative to the root: beside the candidate, never in
+/// it, whose manifest must stay exact. Empty when the parent has no registry.
+pub const PARENT_CHECKS: &str = ".local/candidate-parent-checks.toml";
+
 /// An Agent Mail file reservation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reservation {
@@ -94,6 +99,21 @@ pub struct GateRun {
     pub summary: String,
 }
 
+/// One gate run the wrapper asks for.
+#[derive(Clone, Copy, Debug)]
+pub struct GateCall<'a> {
+    /// The candidate directory holding `tree`.
+    pub candidate: &'a Path,
+    /// The tree it holds.
+    pub tree: &'a str,
+    /// The staged paths UBS scans.
+    pub changed: &'a [String],
+    /// The parent commit's `registry/checks.toml` ([`PARENT_CHECKS`]).
+    pub parent_checks: &'a Path,
+    /// `--allow-demotion <CHECK-ID>=<bead>` values (D-56).
+    pub allow_demotions: &'a [String],
+}
+
 /// The outside world the wrapper depends on; tests substitute fakes.
 pub trait Ports {
     /// The bead's tracker status, e.g. `in_progress`. Fails unless `bead` is a full ID.
@@ -101,8 +121,8 @@ pub trait Ports {
     /// Every live reservation in the project, as read by `agent`: its own and everyone
     /// else's.
     fn reservations(&self, agent: &str) -> Result<Vec<Reservation>, String>;
-    /// Runs the T0 gate on the candidate directory holding `tree`.
-    fn gate(&self, candidate: &Path, tree: &str, changed: &[String]) -> Result<GateRun, String>;
+    /// Runs the T0 gate on the candidate directory.
+    fn gate(&self, call: &GateCall<'_>) -> Result<GateRun, String>;
     /// Pushes after a commit; one line per refspec.
     fn push(&self, git: &Git) -> Vec<String>;
 }
@@ -132,6 +152,10 @@ pub struct Request {
     /// Paths (files or directories) to commit, relative to the root. A [`Prepare`] step
     /// can add more.
     pub paths: Vec<String>,
+    /// `--allow-demotion <CHECK-ID>=<bead>`: the closed plan-change beads that approve
+    /// demoting checks (D-56). The gate validates them; each becomes an
+    /// `Allows-Demotion:` trailer.
+    pub allow_demotions: Vec<String>,
 }
 
 /// What a commit carries, which decides the bead status it requires and its trailer.
@@ -504,7 +528,18 @@ fn gated_commit(
         if let Err(why) = prepared {
             return report.refuse(format!("candidate preparation failed: {why}"));
         }
-        let gate = match ports.gate(&candidate_dir, &snapshot.tree, &snapshot.changed) {
+        let parent_checks = git.root().join(PARENT_CHECKS);
+        if let Err(why) = write_parent_checks(git, &snapshot.parent, &parent_checks) {
+            return report.refuse(format!("cannot record the parent's registry: {why}"));
+        }
+        let call = GateCall {
+            candidate: &candidate_dir,
+            tree: &snapshot.tree,
+            changed: &snapshot.changed,
+            parent_checks: &parent_checks,
+            allow_demotions: &request.allow_demotions,
+        };
+        let gate = match ports.gate(&call) {
             Ok(gate) => gate,
             Err(why) => return report.refuse(format!("the gate could not run: {why}")),
         };
@@ -532,15 +567,7 @@ fn gated_commit(
             }
             Err(why) => return report.refuse(why),
         }
-        let message = format!(
-            "{}\n\n{}: {}\nAgent: {}\nTree: {}\nGate-Receipt: {}\n",
-            request.message.trim_end(),
-            request.kind.trailer(),
-            request.bead,
-            request.agent,
-            snapshot.tree,
-            gate.receipt.as_deref().unwrap_or("none")
-        );
+        let message = commit_message(request, &snapshot.tree, gate.receipt.as_deref());
         let commit = match git.commit_tree(&snapshot.tree, &snapshot.parent, &message) {
             Ok(commit) => commit,
             Err(why) => return report.refuse(why),
@@ -565,6 +592,34 @@ fn gated_commit(
     report.refuse(format!(
         "the checkout kept moving during the gate ({MAX_ATTEMPTS} attempts); nothing committed"
     ))
+}
+
+/// The commit message: the request's text, then the wrapper's trailers.
+fn commit_message(request: &Request, tree: &str, receipt: Option<&str>) -> String {
+    let mut message = format!(
+        "{}\n\n{}: {}\nAgent: {}\nTree: {tree}\nGate-Receipt: {}\n",
+        request.message.trim_end(),
+        request.kind.trailer(),
+        request.bead,
+        request.agent,
+        receipt.unwrap_or("none")
+    );
+    for allowance in &request.allow_demotions {
+        let _ = writeln!(message, "Allows-Demotion: {allowance}");
+    }
+    message
+}
+
+/// Writes `parent`'s `registry/checks.toml` to `file`, or an empty file if it has none
+/// (D-56: the gate compares the candidate's statuses with these).
+fn write_parent_checks(git: &Git, parent: &str, file: &Path) -> Result<(), String> {
+    let spec = format!("{parent}:{}", crate::registry_gate::CHECKS);
+    let text = if git.run(&["cat-file", "-e", &spec]).is_ok() {
+        git.run(&["show", &spec])?
+    } else {
+        String::new()
+    };
+    fs::write(file, text).map_err(|err| format!("cannot write {}: {err}", file.display()))
 }
 
 /// Prepares a re-run after HEAD moved during the gate (§11.10 step 5).
@@ -778,8 +833,8 @@ impl Ports for LivePorts {
         Ok(parse_reservations(&value))
     }
 
-    fn gate(&self, candidate: &Path, tree: &str, changed: &[String]) -> Result<GateRun, String> {
-        let mut cmd = gate_command(&self.root, &self.artifacts, candidate, tree, changed)?;
+    fn gate(&self, call: &GateCall<'_>) -> Result<GateRun, String> {
+        let mut cmd = gate_command(&self.root, &self.artifacts, call)?;
         let captured = process::run(&mut cmd, GATE_LIMIT).map_err(|err| format!("gate: {err}"))?;
         // The gate's step records arrive on stderr; pass them through as progress.
         let _ = io::stderr().lock().write_all(captured.stderr.as_bytes());
@@ -850,13 +905,8 @@ fn parse_reservations(value: &serde_json::Value) -> Vec<Reservation> {
 /// The command that judges `candidate` in candidate mode: the candidate's own `./dev
 /// gate fast`, so the judge is built from the tree under test (P11), git-isolated
 /// (§11.10 step 4) and building into the candidate's own target directory.
-fn gate_command(
-    root: &Path,
-    artifacts: &Path,
-    candidate: &Path,
-    tree: &str,
-    changed: &[String],
-) -> Result<Command, String> {
+fn gate_command(root: &Path, artifacts: &Path, call: &GateCall<'_>) -> Result<Command, String> {
+    let candidate = call.candidate;
     let executable = candidate.join("dev");
     if !executable.is_file() {
         return Err(format!(
@@ -865,10 +915,15 @@ fn gate_command(
         ));
     }
     let mut cmd = Command::new(&executable);
-    cmd.args(["--json", "gate", "fast", "--tree", tree, "--artifacts"])
-        .arg(artifacts);
-    for path in changed {
+    cmd.args(["--json", "gate", "fast", "--tree", call.tree, "--artifacts"])
+        .arg(artifacts)
+        .arg("--parent-checks")
+        .arg(call.parent_checks);
+    for path in call.changed {
         cmd.args(["--changed", path]);
+    }
+    for allowance in call.allow_demotions {
+        cmd.args(["--allow-demotion", allowance]);
     }
     cmd.current_dir(candidate).env("KEYVAL_ROOT", candidate);
     // Git isolation (§11.10 step 4): nothing in the candidate can see the checkout.
@@ -946,6 +1001,8 @@ mod tests {
         passed: bool,
         during_gate: RefCell<Box<dyn FnMut() + 'a>>,
         gate_trees: RefCell<Vec<String>>,
+        /// Each gate call's parent registry text and demotion allowances.
+        gate_inputs: RefCell<Vec<(String, Vec<String>)>>,
     }
 
     /// A live exclusive reservation of `pattern` by `agent`.
@@ -966,6 +1023,7 @@ mod tests {
                 passed: true,
                 during_gate: RefCell::new(Box::new(|| {})),
                 gate_trees: RefCell::new(Vec::new()),
+                gate_inputs: RefCell::new(Vec::new()),
             }
         }
     }
@@ -977,8 +1035,13 @@ mod tests {
         fn reservations(&self, _agent: &str) -> Result<Vec<Reservation>, String> {
             Ok(self.reservations.clone())
         }
-        fn gate(&self, _dir: &Path, tree: &str, _changed: &[String]) -> Result<GateRun, String> {
+        fn gate(&self, call: &GateCall<'_>) -> Result<GateRun, String> {
+            let tree = call.tree;
             self.gate_trees.borrow_mut().push(tree.to_owned());
+            let parent = fs::read_to_string(call.parent_checks).unwrap();
+            self.gate_inputs
+                .borrow_mut()
+                .push((parent, call.allow_demotions.to_vec()));
             (self.during_gate.borrow_mut())();
             Ok(GateRun {
                 passed: self.passed,
@@ -998,6 +1061,7 @@ mod tests {
             agent: "TestAgent".to_owned(),
             message: "test commit".to_owned(),
             paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+            allow_demotions: Vec::new(),
         }
     }
 
@@ -1017,25 +1081,46 @@ mod tests {
         let root = scratch_dir("commit-gate-cmd");
         let candidate = root.join(CANDIDATE_DIR);
         fs::create_dir_all(&candidate).unwrap();
-        let no_launcher = gate_command(&root, &root.join("artifacts"), &candidate, "0123", &[]);
+        let parent_checks = root.join(PARENT_CHECKS);
+        let (changed, allow) = (["a.rs".to_owned()], ["R-OLD=br-pc".to_owned()]);
+        let call = GateCall {
+            candidate: &candidate,
+            tree: "0123",
+            changed: &changed,
+            parent_checks: &parent_checks,
+            allow_demotions: &allow,
+        };
+        let no_launcher = gate_command(&root, &root.join("artifacts"), &call);
         assert!(
             no_launcher.is_err_and(|e| e.contains("no ./dev launcher")),
             "rule: without the tree's own launcher there is no judge"
         );
         fixture::write(&candidate, "dev", "#!/bin/sh\n");
-        let cmd = gate_command(
-            &root,
-            &root.join("artifacts"),
-            &candidate,
-            "0123",
-            &["a.rs".to_owned()],
-        )
-        .unwrap();
+        let cmd = gate_command(&root, &root.join("artifacts"), &call).unwrap();
         assert_eq!(
             Path::new(cmd.get_program()),
             candidate.join("dev"),
             "rule: the judge is built from the tree under test, never the shared \
              checkout's xtask (P11); cmd={cmd:?}"
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let after = |flag: &str| {
+            args.iter()
+                .position(|arg| arg == flag)
+                .and_then(|at| args.get(at + 1))
+                .cloned()
+        };
+        assert_eq!(
+            (after("--parent-checks"), after("--allow-demotion")),
+            (
+                Some(parent_checks.display().to_string()),
+                Some("R-OLD=br-pc".to_owned())
+            ),
+            "rule: the candidate's gate gets the parent's registry and the demotion \
+             allowances (D-56); args={args:?}"
         );
         let env = |key: &str| {
             cmd.get_envs()
@@ -1104,6 +1189,42 @@ mod tests {
         assert_eq!(receipt["schema"], SCHEMA);
         assert_eq!(receipt["commit"], git.rev_parse("HEAD").unwrap());
         assert_eq!(receipt["tree"], head_tree);
+    }
+
+    #[test]
+    fn the_wrapper_hands_the_gate_the_parent_registry_and_records_allowances() {
+        let git = repo("commit-parent-registry");
+        fixture::write(git.root(), "a.rs", "a2\n");
+        let fake = Fake::new();
+        let mut asked = request(&["a.rs"]);
+        asked.allow_demotions = vec!["R-OLD=br-pc".to_owned()];
+        let report = commit_in(&git, &asked, &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(
+            fake.gate_inputs.borrow().as_slice(),
+            [(String::new(), vec!["R-OLD=br-pc".to_owned()])],
+            "rule: a parent without registry/checks.toml is handed over as an empty file, \
+             with the allowances (D-56)"
+        );
+        let message = git.run(&["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            message.contains("\nAllows-Demotion: R-OLD=br-pc\n"),
+            "rule: an allowance is recorded in the commit; message={message}"
+        );
+
+        fixture::write(git.root(), crate::registry_gate::CHECKS, "schema = \"x\"\n");
+        let fake = Fake::new();
+        let report = commit_in(&git, &request(&[crate::registry_gate::CHECKS]), &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        fixture::write(git.root(), "a.rs", "a3\n");
+        let fake = Fake::new();
+        let report = commit_in(&git, &request(&["a.rs"]), &fake);
+        assert_eq!(report.outcome, Outcome::Committed, "report={report:#?}");
+        assert_eq!(
+            fake.gate_inputs.borrow()[0].0,
+            "schema = \"x\"\n",
+            "rule: the gate compares against the parent commit's registry"
+        );
     }
 
     #[test]

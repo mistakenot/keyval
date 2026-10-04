@@ -1,13 +1,23 @@
 //! `./dev gate <tier>`: run a gate tier on an immutable tree and write a receipt
 //! (PLAN.md §10.10, P7, P10, P11).
 //!
-//! Until the verification registry (W05) drives staging and W46 implements the other
-//! tiers, `./dev gate fast` runs W01's **fixed bootstrap set** ([`BOOTSTRAP_SET`]):
-//! format check, lints with denied warnings (clippy plus the LINT-ALLOWS and LINT-TIERS
-//! policy checks), the dependency rule (DEP-RULE, CD-1), the dependency ledger
-//! (DEP-LEDGER, CD-12), the workspace tests (xtask's included), and UBS on the exact
-//! changed files. UBS's `panic!` rule is applied to production code only, because CD-8
-//! lets tests panic ([`UBS_PRODUCTION_ONLY`]).
+//! **Registry staging (W05.4).** Once the tree has `registry/checks.toml`, `./dev gate
+//! fast` runs the **registry set** ([`run_fast`]):
+//! - the format check and clippy with denied warnings;
+//! - staging: the T0 rows of `checks.toml` this tier runs and reports ([`crate::staging`]);
+//! - the forward-only status rule against the parent commit's `checks.toml` (D-56);
+//! - one test run per workspace member, plus the workspace's doctests;
+//! - every `implemented` T0 row, in file order: a static check runs in-process, and a
+//!   cargo-test check is judged from its package's run, never re-run;
+//! - UBS on the exact changed files.
+//!
+//! `planned` T0 rows are reported in the receipt with their work item and never fail
+//! (§10.10). A tree without the registry gets W01's **fixed bootstrap set**
+//! ([`BOOTSTRAP_SET`]): format check, lints with denied warnings (clippy plus the
+//! LINT-ALLOWS and LINT-TIERS policy checks), the dependency rule (DEP-RULE, CD-1), the
+//! dependency ledger (DEP-LEDGER, CD-12), the workspace tests, and UBS. UBS's `panic!`
+//! rule is applied to production code only, because CD-8 lets tests panic
+//! ([`UBS_PRODUCTION_ONLY`]).
 //!
 //! **Exact trees only (P11).** In a git checkout the gate refuses to run unless the
 //! working tree is clean, and tests `HEAD^{tree}`. A commit wrapper that has
@@ -31,20 +41,24 @@ use sha2::{Digest, Sha256};
 
 use crate::candidate;
 use crate::cargo::{Cargo, Runner};
-use crate::check::StaticCheck;
+use crate::check::{CATALOGUE, CheckDef, Selector, StaticCheck};
 use crate::clock::Utc;
 use crate::libtest;
 use crate::lint;
 use crate::metadata;
 use crate::output::Report;
 use crate::process::{self, Captured};
+use crate::registry;
+use crate::registry_gate;
+use crate::staging::{self, Allowance, Demotion, PackageRun, Planned, Staging};
 use crate::steplog::{self, StepLog};
+use crate::workgraph;
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.gate/v3";
+pub const SCHEMA: &str = "keyval.dev.gate/v4";
 
 /// Schema identifier of a receipt file.
-pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v3";
+pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v4";
 
 /// T0 time budget: target and alert threshold (§10.10). A run is never cut off.
 const TARGET: Duration = Duration::from_mins(2);
@@ -55,6 +69,9 @@ const STEP_LIMIT: Duration = Duration::from_mins(30);
 
 /// Most violation lines quoted in a step's `detail` (the full list is in its log).
 const DETAIL_LINES: usize = 10;
+
+/// The committed tracker export, which approves demotions (`--allow-demotion`).
+const TRACKER_EXPORT: &str = ".beads/issues.jsonl";
 
 /// Files whose hashes every receipt records: the policy the run was judged by.
 const POLICY_FILES: &[&str] = &[
@@ -94,6 +111,23 @@ pub enum Step {
     Tests,
     /// UBS on the exact changed files.
     Ubs,
+    /// Registry staging: the `checks.toml` rows this tier runs and reports (§10.10).
+    Staging,
+    /// Declared check statuses never move backwards against the parent commit's
+    /// `checks.toml` (D-56).
+    ForwardOnly,
+    /// `cargo test -p <member> --all-targets --no-fail-fast` for each workspace member,
+    /// then the workspace's doctests: the one test run every cargo-test check is judged
+    /// from.
+    PackageTests,
+    /// A registered check. A static one runs in-process; a cargo-test one is judged from
+    /// [`Step::PackageTests`].
+    Check {
+        /// The catalogue ID.
+        id: &'static str,
+        /// The `checks.toml` row's `min_cases`.
+        min_cases: u32,
+    },
 }
 
 /// W01's fixed bootstrap set for `./dev gate fast` (§10.10 "Staged contents").
@@ -115,9 +149,52 @@ impl Step {
             Self::Fmt => "fmt",
             Self::Clippy => "clippy",
             Self::Static(check) => check.id(),
-            Self::Tests => "tests",
+            Self::Tests | Self::PackageTests => "tests",
             Self::Ubs => "ubs",
+            Self::Staging => "staging",
+            Self::ForwardOnly => "forward-only",
+            Self::Check { id, .. } => id,
         }
+    }
+}
+
+/// The parent commit's `registry/checks.toml`, which the forward-only rule compares
+/// against (D-56).
+#[derive(Clone, Debug)]
+pub enum Parent {
+    /// Not known: candidate mode without `--parent-checks`. The rule fails rather than
+    /// skip (P10).
+    Unknown,
+    /// The parent commit has no `registry/checks.toml`, or there is no parent: every row
+    /// is new.
+    Absent,
+    /// The parent commit's file.
+    Checks(String),
+}
+
+impl Parent {
+    /// `--parent-checks <file>`, as `./dev commit` writes it: the parent's
+    /// `registry/checks.toml`, or an empty file when the parent has none.
+    pub fn from_file(path: &Path) -> Result<Self, String> {
+        let text = fs::read_to_string(path)
+            .map_err(|err| format!("cannot read --parent-checks {}: {err}", path.display()))?;
+        Ok(if text.trim().is_empty() {
+            Self::Absent
+        } else {
+            Self::Checks(text)
+        })
+    }
+
+    /// The parent of `HEAD` in a clean checkout (the gate's git mode).
+    pub fn of_head(root: &Path) -> Result<Self, String> {
+        if git(root, &["rev-parse", "--verify", "--quiet", "HEAD^"]).is_err() {
+            return Ok(Self::Absent);
+        }
+        let spec = format!("HEAD^:{}", registry_gate::CHECKS);
+        if git(root, &["cat-file", "-e", &spec]).is_err() {
+            return Ok(Self::Absent);
+        }
+        git(root, &["show", &spec]).map(Self::Checks)
     }
 }
 
@@ -241,10 +318,11 @@ pub struct Budget {
     pub over_alert: bool,
 }
 
-/// A gate receipt (`keyval.dev.receipt/v3`): exactly what ran, on exactly which tree.
+/// A gate receipt (`keyval.dev.receipt/v4`): exactly what ran, on exactly which tree.
 ///
 /// v2 adds `tools.cargo_target_dir` (br-gate-shared-target-dir-dtqu) and
-/// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g).
+/// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g); v4 adds `planned` and `demotions`,
+/// and `set` becomes `registry` once the tree has the registry (W05.4).
 #[derive(Debug, Serialize)]
 pub struct Receipt {
     /// Schema identifier.
@@ -253,7 +331,8 @@ pub struct Receipt {
     pub kind: &'static str,
     /// Gate tier.
     pub tier: GateTier,
-    /// Which check set ran: `bootstrap` until registry staging (W05).
+    /// Which check set ran: `registry` (W05.4), or `bootstrap` for a tree without
+    /// `registry/checks.toml`.
     pub set: &'static str,
     /// Unique run ID.
     pub run_id: String,
@@ -279,6 +358,10 @@ pub struct Receipt {
     pub budget: Budget,
     /// Every step, in order.
     pub steps: Vec<StepResult>,
+    /// The tier's `planned` rows, reported and never failed (§10.10).
+    pub planned: Vec<Planned>,
+    /// The demotions an owner-approved plan change covered (D-56).
+    pub demotions: Vec<Demotion>,
     /// The step-record log (W01.6 standard).
     pub step_log: StepLogSummary,
 }
@@ -294,7 +377,7 @@ pub struct StepLogSummary {
     pub dropped: usize,
 }
 
-/// The `./dev gate` report (`keyval.dev.gate/v3`, which embeds a v3 receipt).
+/// The `./dev gate` report (`keyval.dev.gate/v4`, which embeds a v4 receipt).
 #[derive(Debug, Serialize)]
 pub struct GateReport {
     /// Schema identifier.
@@ -322,6 +405,10 @@ pub struct Context<'a> {
     pub tool_path: Option<OsString>,
     /// Whether to echo each step's record to stderr as it finishes.
     pub progress: bool,
+    /// The parent commit's registry, for the forward-only rule.
+    pub parent: Parent,
+    /// `--allow-demotion <CHECK-ID>=<bead>` values (D-56).
+    pub allow_demotions: Vec<String>,
 }
 
 /// Determines the tree to judge. With `asserted`, the caller vouches for the ID, git is
@@ -422,6 +509,81 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Runs `steps` on the context's tree, writes the receipt and returns the report.
 pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateReport, String> {
+    run_with(ctx, tier, steps, "bootstrap", None, CATALOGUE)
+}
+
+/// `./dev gate fast`: the registry set once the tree has `registry/checks.toml`, and W01's
+/// bootstrap set before (§10.10 "Staged contents").
+pub fn run_fast(ctx: &Context<'_>) -> Result<GateReport, String> {
+    if ctx.root.join(registry_gate::CHECKS).is_file() {
+        run_registry(ctx, CATALOGUE, &[Step::Fmt, Step::Clippy], &[Step::Ubs])
+    } else {
+        run(ctx, GateTier::Fast, BOOTSTRAP_SET)
+    }
+}
+
+/// The registry set: `before`, then staging, the forward-only rule and the package test
+/// runs, then each `implemented` T0 row of `checks.toml` in order, then `after`. Rows
+/// resolve against `catalogue`.
+pub fn run_registry(
+    ctx: &Context<'_>,
+    catalogue: &'static [CheckDef],
+    before: &[Step],
+    after: &[Step],
+) -> Result<GateReport, String> {
+    let staging = read(ctx.root, registry_gate::CHECKS).and_then(|checks| {
+        // An unreadable work graph only costs planned rows their work item; WORKGRAPH and
+        // REGISTRY fail on it.
+        let items = read(ctx.root, registry::WORKGRAPH)
+            .and_then(|text| workgraph::parse(&text))
+            .unwrap_or_default();
+        staging::stage(&checks, &items, "T0", catalogue)
+    });
+    let mut steps = before.to_vec();
+    steps.extend([Step::Staging, Step::ForwardOnly, Step::PackageTests]);
+    if let Ok(staged) = &staging {
+        steps.extend(staged.run.iter().map(|s| Step::Check {
+            id: s.def.id,
+            min_cases: s.min_cases,
+        }));
+    }
+    steps.extend_from_slice(after);
+    run_with(
+        ctx,
+        GateTier::Fast,
+        &steps,
+        "registry",
+        Some(&staging),
+        catalogue,
+    )
+}
+
+fn read(root: &Path, name: &str) -> Result<String, String> {
+    fs::read_to_string(root.join(name)).map_err(|err| format!("cannot read {name}: {err}"))
+}
+
+/// What a run carries from step to step.
+struct State<'a> {
+    /// What the UBS step learnt about the scanner.
+    scanner: Scanner,
+    /// The checks `Step::Check` resolves against.
+    catalogue: &'static [CheckDef],
+    /// The registry staging, in a registry run.
+    staging: Option<&'a Result<Staging, String>>,
+    /// The package test runs, once `Step::PackageTests` ran.
+    runs: Vec<PackageRun>,
+    /// Demotions the forward-only step approved.
+    approved: Vec<Demotion>,
+}
+
+fn run_with(
+    ctx: &Context<'_>,
+    tier: GateTier,
+    steps: &[Step],
+    set: &'static str,
+    staging: Option<&Result<Staging, String>>,
+    catalogue: &'static [CheckDef],
+) -> Result<GateReport, String> {
     let started = Instant::now();
     let started_at = Utc::now();
     let run_id = format!(
@@ -438,7 +600,13 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
 
     let build_inputs = build_inputs(ctx.root)?;
     let build_id = build_id(&ctx.tree.id, &build_inputs);
-    let mut scanner = Scanner::default();
+    let mut state = State {
+        scanner: Scanner::default(),
+        catalogue,
+        staging,
+        runs: Vec::new(),
+        approved: Vec::new(),
+    };
     // Step records (W01.6 standard) go to stderr as progress and to steps.jsonl next to
     // the step logs. A gate runs every step, so one run reports every failure.
     let mut steplog = StepLog::new(
@@ -450,7 +618,7 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
     let results: Vec<StepResult> = steps
         .iter()
         .map(|&step| {
-            let result = run_step(ctx, step, &log_dir, &mut scanner);
+            let result = run_step(ctx, step, &log_dir, &mut state);
             log_step(&mut steplog, step, &result);
             result
         })
@@ -465,7 +633,7 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
         schema: RECEIPT_SCHEMA,
         kind: "gate",
         tier,
-        set: "bootstrap",
+        set,
         run_id: run_id.clone(),
         result,
         tree: ctx.tree.clone(),
@@ -478,8 +646,8 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
                 .cargo
                 .target_dir()
                 .map(|dir| PathBuf::from(dir).display().to_string()),
-            ubs: scanner.ubs,
-            ast_grep: scanner.ast_grep,
+            ubs: state.scanner.ubs,
+            ast_grep: state.scanner.ast_grep,
         },
         started_at: started_at.rfc3339(),
         finished_at: Utc::now().rfc3339(),
@@ -490,6 +658,11 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
             over_alert: elapsed > ALERT,
         },
         steps: results,
+        planned: match staging {
+            Some(Ok(staged)) => staged.planned.clone(),
+            Some(Err(_)) | None => Vec::new(),
+        },
+        demotions: state.approved,
         step_log: StepLogSummary {
             path: steplog.path().map(|p| p.display().to_string()),
             records: steplog.written(),
@@ -513,7 +686,9 @@ fn log_step(steplog: &mut StepLog, step: Step, result: &StepResult) {
     let expected = format!("passes, examining at least one {}", result.unit);
     let rerun = match step {
         Step::Static(check) => format!("./dev check {}", check.id()),
-        Step::Fmt | Step::Clippy | Step::Tests | Step::Ubs => {
+        Step::Check { id, .. } => format!("./dev check {id}"),
+        Step::Staging | Step::ForwardOnly => "./dev gate fast".to_owned(),
+        Step::Fmt | Step::Clippy | Step::Tests | Step::PackageTests | Step::Ubs => {
             result.command.clone().unwrap_or_default()
         }
     };
@@ -556,7 +731,7 @@ pub const fn tier_name(tier: GateTier) -> &'static str {
     }
 }
 
-fn run_step(ctx: &Context<'_>, step: Step, log_dir: &Path, scanner: &mut Scanner) -> StepResult {
+fn run_step(ctx: &Context<'_>, step: Step, log_dir: &Path, state: &mut State<'_>) -> StepResult {
     let started = Instant::now();
     let mut result = StepResult {
         id: step.id(),
@@ -574,7 +749,11 @@ fn run_step(ctx: &Context<'_>, step: Step, log_dir: &Path, scanner: &mut Scanner
         Step::Clippy => clippy_step(ctx, &mut result),
         Step::Static(check) => static_step(ctx, check, &mut result),
         Step::Tests => tests_step(ctx, &mut result),
-        Step::Ubs => ubs_step(ctx, log_dir, &mut result, scanner),
+        Step::Ubs => ubs_step(ctx, log_dir, &mut result, &mut state.scanner),
+        Step::Staging => staging_step(state, &mut result),
+        Step::ForwardOnly => forward_step(ctx, state, &mut result),
+        Step::PackageTests => package_tests_step(ctx, state, &mut result),
+        Step::Check { id, min_cases } => check_step(ctx, state, id, min_cases, &mut result),
     };
     let (verdict, log_text) = match outcome {
         Ok(text) => (Verdict::Passed, text),
@@ -698,6 +877,234 @@ fn tests_step(ctx: &Context<'_>, result: &mut StepResult) -> StepOutcome {
         return Err(StepFailure::new("cargo test exited unsuccessfully", log));
     }
     Ok(log)
+}
+
+/// A failure whose detail quotes the first [`DETAIL_LINES`] of `lines` and whose log holds
+/// them all.
+fn violations_failure(headline: &str, lines: &[String]) -> StepFailure {
+    let mut detail = headline.to_owned();
+    for line in lines.iter().take(DETAIL_LINES) {
+        let _ = write!(detail, "\n  {line}");
+    }
+    StepFailure::new(detail, lines.join("\n"))
+}
+
+fn staging_step(state: &State<'_>, result: &mut StepResult) -> StepOutcome {
+    result.unit = "row(s)";
+    let staged = match state.staging {
+        Some(Ok(staged)) => staged,
+        Some(Err(why)) => return Err(StepFailure::new(why.clone(), why.clone())),
+        None => {
+            let why = "a staging step runs only in the registry set";
+            return Err(StepFailure::new(why, why));
+        }
+    };
+    result.cases = u64::try_from(staged.rows).unwrap_or(u64::MAX);
+    if !staged.problems.is_empty() {
+        return Err(violations_failure(
+            &format!("{} T0 row(s) cannot be staged:", staged.problems.len()),
+            &staged.problems,
+        ));
+    }
+    let mut log = format!(
+        "{} T0 row(s): {} run, {} planned\n",
+        staged.rows,
+        staged.run.len(),
+        staged.planned.len()
+    );
+    for planned in &staged.planned {
+        let _ = writeln!(
+            log,
+            "planned {} (work item {})",
+            planned.id,
+            planned.work_item.as_deref().unwrap_or("none yet")
+        );
+    }
+    Ok(log)
+}
+
+fn forward_step(ctx: &Context<'_>, state: &mut State<'_>, result: &mut StepResult) -> StepOutcome {
+    result.unit = "row(s)";
+    let fail = |why: String| StepFailure::new(why.clone(), why);
+    let tree = read(ctx.root, registry_gate::CHECKS).map_err(fail)?;
+    let parent = match &ctx.parent {
+        Parent::Unknown => {
+            return Err(fail(
+                "candidate mode needs --parent-checks <the parent commit's \
+                 registry/checks.toml>, which ./dev commit passes; the forward-only rule never \
+                 silently skips (D-56, P10)"
+                    .to_owned(),
+            ));
+        }
+        Parent::Absent => None,
+        Parent::Checks(text) => Some(text.as_str()),
+    };
+    let (cases, found) = staging::demotions(parent, &tree).map_err(fail)?;
+    result.cases = u64::try_from(cases).unwrap_or(u64::MAX);
+    let allowances = ctx
+        .allow_demotions
+        .iter()
+        .map(|text| text.parse::<Allowance>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(fail)?;
+    let export = match fs::read_to_string(ctx.root.join(TRACKER_EXPORT)) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(fail(format!("cannot read {TRACKER_EXPORT}: {err}"))),
+    };
+    let (approved, violations) = staging::approve(found, &allowances, &export);
+    let mut log = format!("{cases} parent row(s) compared\n");
+    for demotion in &approved {
+        let _ = writeln!(
+            log,
+            "approved: {} {} → {} (plan change {})",
+            demotion.id,
+            demotion.from,
+            demotion.to.as_deref().unwrap_or("removed"),
+            demotion.plan_change.as_deref().unwrap_or("?")
+        );
+    }
+    state.approved = approved;
+    if violations.is_empty() {
+        Ok(log)
+    } else {
+        Err(violations_failure(
+            &format!("{} status violation(s) (D-56):", violations.len()),
+            &violations,
+        ))
+    }
+}
+
+fn package_tests_step(
+    ctx: &Context<'_>,
+    state: &mut State<'_>,
+    result: &mut StepResult,
+) -> StepOutcome {
+    result.unit = "test(s)";
+    let metadata = metadata::load(ctx.root).map_err(|why| StepFailure::new(why.clone(), why))?;
+    let members: Vec<String> = metadata.members().iter().map(|p| p.name.clone()).collect();
+    let mut runs: Vec<(Option<String>, Vec<String>)> = members
+        .iter()
+        .map(|name| {
+            let args = [
+                "test",
+                "--locked",
+                "-p",
+                name,
+                "--all-targets",
+                "--no-fail-fast",
+            ];
+            (
+                Some(name.clone()),
+                args.iter().map(|&a| a.to_owned()).collect(),
+            )
+        })
+        .collect();
+    let doc = ["test", "--locked", "--workspace", "--doc"];
+    runs.push((None, doc.iter().map(|&a| a.to_owned()).collect()));
+    let (mut log, mut commands, mut problems) = (String::new(), Vec::new(), Vec::new());
+    let mut passed: u64 = 0;
+    for (package, args) in runs {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let command = ctx.cargo.describe(&args);
+        let label = package.as_deref().unwrap_or("doctests").to_owned();
+        let _ = writeln!(log, "=== {command}");
+        let (outcomes, failure) = match run_captured(&mut ctx.cargo.command(ctx.root, &args)) {
+            Err(failure) => {
+                log.push_str(&failure.log);
+                (Vec::new(), Some(failure.detail))
+            }
+            Ok(captured) => {
+                log.push_str(&combined(&captured));
+                let tally = libtest::parse_tally(&captured.stdout);
+                let failure = match tally {
+                    Err(err) => Some(err.to_string()),
+                    Ok(tally) => {
+                        passed = passed.saturating_add(u64::from(tally.passed));
+                        if tally.failed > 0 {
+                            Some(format!(
+                                "{} test(s) failed: {}",
+                                tally.failed,
+                                libtest::failed_names(&captured.stdout).join(", ")
+                            ))
+                        } else if tally.ignored > 0 {
+                            Some(format!(
+                                "{} test(s) are #[ignore]d; an ignored case fails (P10)",
+                                tally.ignored
+                            ))
+                        } else if captured.status.success() {
+                            None
+                        } else {
+                            Some("cargo test exited unsuccessfully".to_owned())
+                        }
+                    }
+                };
+                (libtest::outcomes(&captured.stdout), failure)
+            }
+        };
+        if let Some(why) = &failure {
+            problems.push(format!("{label}: {why}"));
+        }
+        if let Some(package) = package {
+            state.runs.push(PackageRun {
+                package,
+                outcomes,
+                failure,
+            });
+        }
+        commands.push(command);
+    }
+    result.command = Some(commands.join("; "));
+    result.cases = passed;
+    if problems.is_empty() {
+        Ok(log)
+    } else {
+        let mut detail = format!("{} test run(s) failed:", problems.len());
+        for line in problems.iter().take(DETAIL_LINES) {
+            let _ = write!(detail, "\n  {line}");
+        }
+        Err(StepFailure::new(detail, log))
+    }
+}
+
+fn check_step(
+    ctx: &Context<'_>,
+    state: &State<'_>,
+    id: &str,
+    min_cases: u32,
+    result: &mut StepResult,
+) -> StepOutcome {
+    let Some(def) = state.catalogue.iter().find(|def| def.id == id) else {
+        let why = format!("check {id} is not in the catalogue");
+        return Err(StepFailure::new(why.clone(), why));
+    };
+    match def.selector {
+        Selector::Static(check) => {
+            let log = static_step(ctx, check, result)?;
+            if result.cases < u64::from(min_cases) {
+                return Err(StepFailure::new(
+                    format!(
+                        "{} {} examined, fewer than the registered min_cases {min_cases} \
+                         (§10.11)",
+                        result.cases, result.unit
+                    ),
+                    log,
+                ));
+            }
+            Ok(log)
+        }
+        Selector::CargoTest { package, filters } => {
+            result.command = Some(format!("./dev check {id}"));
+            result.unit = "test(s)";
+            let passed = staging::judge_cargo(package, filters, min_cases, &state.runs)
+                .map_err(|why| StepFailure::new(why.clone(), why))?;
+            result.cases = passed;
+            Ok(format!(
+                "{passed} case(s) of package {package} (filters {filters:?}) passed in this \
+                 gate's test run\n"
+            ))
+        }
+    }
 }
 
 /// The UBS category that holds `rust.ownership.panic-macro`, the rule that rejects
@@ -1197,7 +1604,7 @@ impl Report for GateReport {
             let seconds = Duration::from_millis(step.duration_ms).as_secs_f64();
             let _ = writeln!(
                 out,
-                "  {status:<7} {:<12} {:>5} {:<17} {seconds:>6.1}s",
+                "  {status:<7} {:<18} {:>5} {:<17} {seconds:>6.1}s",
                 step.id, step.cases, step.unit
             );
             if let Some(detail) = &step.detail {
@@ -1210,6 +1617,24 @@ impl Report for GateReport {
             {
                 let _ = writeln!(out, "          log: {log}");
             }
+        }
+        for planned in &receipt.planned {
+            let _ = writeln!(
+                out,
+                "  planned {:<18} reported, not run (work item {})",
+                planned.id,
+                planned.work_item.as_deref().unwrap_or("none yet")
+            );
+        }
+        for demotion in &receipt.demotions {
+            let _ = writeln!(
+                out,
+                "  demoted {:<18} {} → {} (plan change {})",
+                demotion.id,
+                demotion.from,
+                demotion.to.as_deref().unwrap_or("removed"),
+                demotion.plan_change.as_deref().unwrap_or("?")
+            );
         }
         let total = Duration::from_millis(receipt.duration_ms).as_secs_f64();
         let _ = writeln!(
@@ -1233,9 +1658,10 @@ impl Report for GateReport {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     // check: DEV-GATE
     use super::*;
+    use crate::check::{ClaimClass, Kind, Tier};
     use crate::test_support::{nested_cargo, scratch_dir, workspace_root};
 
     const TREE: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -1269,6 +1695,8 @@ mod tests {
             cargo: nested_cargo("keyval-gate"),
             tool_path,
             progress: false,
+            parent: Parent::Absent,
+            allow_demotions: Vec::new(),
         };
         run(&ctx, GateTier::Fast, steps).unwrap()
     }
@@ -1719,6 +2147,206 @@ mod tests {
         assert!(
             refused.as_ref().is_err_and(|e| e.contains("P11")),
             "rule: a dirty checkout never yields an exact-tree receipt; observed={refused:?}"
+        );
+    }
+
+    /// The catalogue of [`registry_fixture`]: a static check and a cargo-test check of the
+    /// `gate-ok` package.
+    pub const REGISTRY_CATALOGUE: &[CheckDef] = &[
+        CheckDef {
+            id: "R-STATIC",
+            summary: "a static check",
+            kind: Kind::Static,
+            covers: &["P5"],
+            class: ClaimClass::Invariant,
+            tier: Tier::T0,
+            selector: Selector::Static(StaticCheck::LintAllows),
+            min_cases: 1,
+        },
+        CheckDef {
+            id: "R-TESTS",
+            summary: "a test group",
+            kind: Kind::TestGroup,
+            covers: &["P5"],
+            class: ClaimClass::Invariant,
+            tier: Tier::T0,
+            selector: Selector::CargoTest {
+                package: "gate-ok",
+                filters: &["tests::"],
+            },
+            min_cases: 2,
+        },
+    ];
+
+    /// A `checks.toml` with one row per `(id, status, min_cases)`.
+    pub fn registry_checks(rows: &[(&str, &str, u32)]) -> String {
+        let mut text = "schema = \"keyval.registry.checks/v1\"\n".to_owned();
+        for (id, status, min_cases) in rows {
+            let _ = write!(
+                text,
+                "\n[[check]]\nid = \"{id}\"\nsummary = \"x\"\nkind = \"static\"\n\
+                 covers = [\"P5\"]\nclass = \"invariant\"\ntier = \"T0\"\n\
+                 run = \"./dev check {id}\"\nmin_cases = {min_cases}\nstatus = \"{status}\"\n"
+            );
+        }
+        text
+    }
+
+    /// The `gate-ok` crate plus a registry: `checks` as `registry/checks.toml`, a work graph
+    /// whose W05 accepts `R-LATER`, and a tracker export with the closed plan-change bead
+    /// `br-pc`.
+    pub fn registry_fixture(name: &str, checks: &str) -> PathBuf {
+        let root = scratch_dir(&format!("gate-registry-{name}"));
+        for file in ["Cargo.toml", "Cargo.lock", "src/lib.rs"] {
+            let to = root.join(file);
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::copy(fixture("gate-ok").join(file), to).unwrap();
+        }
+        fs::create_dir_all(root.join("registry")).unwrap();
+        fs::create_dir_all(root.join(".beads")).unwrap();
+        fs::write(root.join(registry_gate::CHECKS), checks).unwrap();
+        let workgraph = format!(
+            "schema = \"{}\"\n\n[[item]]\nid = \"W05\"\ntitle = \"Registry\"\ndeps = []\n\
+             reqs = []\narea = [\"registry\"]\nmilestone = \"m0\"\n\
+             accept = [\"./dev check R-LATER\"]\nbead = \"\"\n",
+            workgraph::SCHEMA
+        );
+        fs::write(root.join(registry::WORKGRAPH), workgraph).unwrap();
+        fs::write(
+            root.join(TRACKER_EXPORT),
+            "{\"id\":\"br-pc\",\"status\":\"closed\",\"labels\":[\"plan-change\"]}\n",
+        )
+        .unwrap();
+        root
+    }
+
+    /// The registry set (without fmt, clippy and UBS) on a [`registry_fixture`].
+    pub fn registry_run(root: &Path, parent: Parent, allow: &[&str]) -> GateReport {
+        let ctx = Context {
+            root,
+            tree: resolve_tree_with(
+                root,
+                Some(TREE),
+                vec!["src/lib.rs".to_owned()],
+                &no_repository,
+            )
+            .unwrap(),
+            artifacts: scratch_dir("gate-registry-artifacts"),
+            cargo: nested_cargo("keyval-gate"),
+            tool_path: None,
+            progress: false,
+            parent,
+            allow_demotions: allow.iter().map(|&a| a.to_owned()).collect(),
+        };
+        run_registry(&ctx, REGISTRY_CATALOGUE, &[], &[]).unwrap()
+    }
+
+    #[test]
+    fn registry_set_runs_implemented_rows_once_and_reports_planned_ones() {
+        let checks = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+            ("R-LATER", "planned", 1),
+        ]);
+        let root = registry_fixture("runs", &checks);
+        let report = registry_run(&root, Parent::Checks(checks), &[]);
+        assert!(report.ok, "observed={report:#?}");
+        let ids: Vec<&str> = report.receipt.steps.iter().map(|s| s.id).collect();
+        assert_eq!(
+            ids,
+            ["staging", "forward-only", "tests", "R-STATIC", "R-TESTS"],
+            "rule: staging, the forward-only rule and one test run, then each implemented \
+             row in checks.toml order (§10.10)"
+        );
+        assert_eq!(report.receipt.set, "registry");
+        let tests = step(&report, "R-TESTS");
+        assert_eq!(
+            (tests.cases, tests.command.as_deref()),
+            (2, Some("./dev check R-TESTS")),
+            "rule: a cargo-test check is judged from the package run, never re-run"
+        );
+        assert!(
+            step(&report, "tests")
+                .command
+                .as_deref()
+                .is_some_and(|c| c.contains("-p gate-ok --all-targets --no-fail-fast")),
+            "observed={report:#?}"
+        );
+        assert_eq!(
+            report.receipt.planned,
+            [Planned {
+                id: "R-LATER".to_owned(),
+                work_item: Some("W05".to_owned()),
+            }],
+            "rule: a planned row is reported with its work item and never fails (§10.10)"
+        );
+        assert_eq!(report.receipt.demotions, Vec::<Demotion>::new());
+    }
+
+    #[test]
+    fn registry_set_fails_a_selection_short_of_its_min_cases() {
+        let checks = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 3),
+        ]);
+        let root = registry_fixture("short", &checks);
+        let report = registry_run(&root, Parent::Checks(checks), &[]);
+        assert!(!report.ok, "observed={report:#?}");
+        let tests = step(&report, "R-TESTS");
+        assert!(
+            tests.status == Verdict::Failed
+                && tests
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("fewer than the registered min_cases 3")),
+            "rule: every selected check executes at least its min_cases (§10.11); \
+             observed={tests:#?}"
+        );
+        assert_eq!(step(&report, "R-STATIC").status, Verdict::Passed);
+    }
+
+    #[test]
+    fn registry_forward_only_refuses_a_removed_check_unless_a_closed_plan_change_allows_it() {
+        let parent = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+            ("R-OLD", "implemented", 1),
+        ]);
+        let tree = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+        ]);
+        let root = registry_fixture("forward", &tree);
+        let refused = registry_run(&root, Parent::Checks(parent.clone()), &[]);
+        let forward = step(&refused, "forward-only");
+        assert!(
+            !refused.ok
+                && forward
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("R-OLD") && d.contains("--allow-demotion")),
+            "rule: deleting a registered check fails the gate (D-56, kdo9); observed={forward:#?}"
+        );
+        let allowed = registry_run(&root, Parent::Checks(parent), &["R-OLD=br-pc"]);
+        assert!(allowed.ok, "observed={allowed:#?}");
+        assert_eq!(
+            allowed.receipt.demotions,
+            [Demotion {
+                id: "R-OLD".to_owned(),
+                from: "implemented".to_owned(),
+                to: None,
+                plan_change: Some("br-pc".to_owned()),
+            }],
+            "rule: an approved demotion is recorded with its plan change"
+        );
+        let unknown = registry_run(&root, Parent::Unknown, &[]);
+        assert!(
+            !unknown.ok
+                && step(&unknown, "forward-only")
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("--parent-checks")),
+            "rule: without the parent's registry the rule fails, never skips (P10)"
         );
     }
 

@@ -176,7 +176,7 @@ mod tests {
     use crate::check::{self, CATALOGUE, CheckStatus, ClaimClass, Kind, StaticCheck, Tier};
     use crate::closure::CloseReport;
     use crate::commit::{self, CommitKind, CommitReport, GateRun, Outcome as CommitOutcome};
-    use crate::commit::{Ports, Request, Reservation};
+    use crate::commit::{GateCall, Ports, Request, Reservation};
     use crate::doctor::{self, Expect, Need, Probe, ToolSpec, ToolStatus};
     use crate::gate::{self, Context, GateTier, Step as GateStep, Tree, TreeSource, Verdict};
     use crate::git::{Git, fixture};
@@ -589,6 +589,8 @@ mod tests {
                 cargo: nested_cargo("keyval-schemas"),
                 tool_path: None,
                 progress: false,
+                parent: gate::Parent::Absent,
+                allow_demotions: Vec::new(),
             };
             let report = gate::run(&ctx, GateTier::Fast, &[GateStep::Static(check)]).unwrap();
             verdicts.insert(format!("{:?}", report.receipt.result));
@@ -612,6 +614,27 @@ mod tests {
             2,
             "the runs reach both verdicts; seen={verdicts:?}"
         );
+        // The registry set's receipt (W05.4), with a planned row and an approved demotion.
+        let parent = gate::tests::registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+            ("R-OLD", "implemented", 1),
+        ]);
+        let tree = gate::tests::registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+            ("R-LATER", "planned", 1),
+        ]);
+        let root = gate::tests::registry_fixture("schemas", &tree);
+        let report =
+            gate::tests::registry_run(&root, gate::Parent::Checks(parent), &["R-OLD=br-pc"]);
+        assert!(
+            report.ok && !report.receipt.planned.is_empty() && !report.receipt.demotions.is_empty(),
+            "the run reports a planned row and a demotion; report={report:#?}"
+        );
+        validators.assert_matches(&report, "gate::run_registry");
+        let written = read_json(Path::new(&report.receipt_path));
+        validators.assert_matches(&written, "gate::run_registry: the receipt file");
     }
 
     /// Stand-in commit ports: the bead has `status`, one reservation covers everything,
@@ -633,10 +656,10 @@ mod tests {
                 remaining_seconds: 600,
             }])
         }
-        fn gate(&self, _dir: &Path, tree: &str, _changed: &[String]) -> Result<GateRun, String> {
+        fn gate(&self, call: &GateCall<'_>) -> Result<GateRun, String> {
             Ok(GateRun {
                 passed: self.passed,
-                receipt: Some(format!("artifacts/receipts/gate-fast-{tree}.json")),
+                receipt: Some(format!("artifacts/receipts/gate-fast-{}.json", call.tree)),
                 summary: if self.passed { "passed" } else { "fmt failed" }.to_owned(),
             })
         }
@@ -655,6 +678,7 @@ mod tests {
             agent: "SchemaAgent".to_owned(),
             message: "schemas: a test commit".to_owned(),
             paths: vec!["a.rs".to_owned()],
+            allow_demotions: Vec::new(),
         };
         commit::run(
             &git,

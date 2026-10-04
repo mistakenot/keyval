@@ -2,7 +2,7 @@
   "rule": "a gate step either passed or failed: there is no skipped outcome (P10)",
   "error_at": "/steps/0/status",
   "instance": {
-    "schema": "keyval.dev.receipt/v3",
+    "schema": "keyval.dev.receipt/v4",
     "kind": "gate",
     "tier": "fast",
     "set": "bootstrap",
@@ -145,6 +145,8 @@
         "detail": null
       }
     ],
+    "planned": [],
+    "demotions": [],
     "step_log": {
       "path": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/steps.jsonl",
       "records": 8,

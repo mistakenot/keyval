@@ -30,6 +30,7 @@ mod registry_gate;
 mod schemas;
 mod spec;
 mod spike;
+mod staging;
 mod steplog;
 #[cfg(test)]
 mod test_support;
@@ -119,6 +120,11 @@ enum Command {
             conflicts_with = "close"
         )]
         paths: Vec<String>,
+        /// With --bead: `<CHECK-ID>=<bead>` lets this commit demote or remove that check, if
+        /// the bead is a closed `plan-change` bead (D-56). Only on an owner decision;
+        /// repeatable.
+        #[arg(long, value_name = "CHECK=BEAD", requires = "bead")]
+        allow_demotion: Vec<String>,
     },
     /// Run a bead's acceptance selectors on a committed tree in .local/accept/<tree-id>/
     /// and write a receipt naming that tree (§11.3 step 7).
@@ -152,6 +158,14 @@ enum Command {
         /// Directory for receipts and logs (default: <root>/artifacts).
         #[arg(long, value_name = "DIR")]
         artifacts: Option<PathBuf>,
+        /// Candidate mode: the parent commit's `registry/checks.toml`, or an empty file if
+        /// it has none, for the forward-only status rule (D-56). `./dev commit` writes it.
+        #[arg(long, value_name = "FILE", requires = "tree")]
+        parent_checks: Option<PathBuf>,
+        /// `<CHECK-ID>=<bead>`: a closed `plan-change` bead approves demoting or removing
+        /// that check (D-56); repeatable.
+        #[arg(long, value_name = "CHECK=BEAD")]
+        allow_demotion: Vec<String>,
     },
     /// Work graph → beads (§11.11): adopt or create one bead per work item, mirror the
     /// dependencies between them, and record bead IDs in registry/workgraph.toml.
@@ -238,7 +252,20 @@ fn run(cli: Cli) -> Status {
             tree,
             changed,
             artifacts,
-        } => run_gate(&root, format, tier, tree.as_deref(), changed, artifacts),
+            parent_checks,
+            allow_demotion,
+        } => run_gate(
+            &root,
+            format,
+            tier,
+            GateArgs {
+                tree,
+                changed,
+                artifacts,
+                parent_checks,
+                allow_demotion,
+            },
+        ),
         Command::Commit {
             bead,
             close,
@@ -247,45 +274,20 @@ fn run(cli: Cli) -> Status {
             agent,
             message,
             paths,
-        } => {
-            let Some(agent) = agent.or_else(|| env::var("AGENT_NAME").ok()) else {
-                let message = "name your Agent Mail identity with --agent or $AGENT_NAME";
-                return output::report_error(format, ErrorKind::Usage, message, message);
-            };
-            let artifacts = root.join("artifacts");
-            let git = git::Git::new(&root);
-            let ports = commit::LivePorts {
-                root: root.clone(),
-                artifacts: artifacts.clone(),
-            };
-            match (bead, close) {
-                (Some(bead), None) => {
-                    let request = commit::Request {
-                        kind: commit::CommitKind::Work,
-                        bead,
-                        agent,
-                        message,
-                        paths,
-                    };
-                    output::emit(format, &commit::run(&git, &request, &ports, &artifacts))
-                }
-                (None, Some(bead)) => {
-                    let request = closure::CloseRequest {
-                        bead,
-                        agent,
-                        message,
-                        failed_evidence: evidence,
-                    };
-                    let tracker = tracker::LiveTracker { root };
-                    let report = closure::run(&git, &request, &tracker, &ports, &artifacts);
-                    output::emit(format, &report)
-                }
-                _ => {
-                    let message = "give exactly one of --bead or --close";
-                    output::report_error(format, ErrorKind::Usage, message, message)
-                }
-            }
-        }
+            allow_demotion,
+        } => run_commit(
+            &root,
+            format,
+            CommitArgs {
+                bead,
+                close,
+                evidence,
+                agent,
+                message,
+                paths,
+                allow_demotion,
+            },
+        ),
         Command::Beads { action } => run_beads(&root, format, action),
         Command::Report { report } => run_report(&root, format, report),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
@@ -333,6 +335,69 @@ fn run_report(root: &Path, format: Format, report: ReportKind) -> Status {
 
 /// `./dev prune`: the `.local/` retention rule (§10.10, Q9) under this checkout's target
 /// base.
+/// The `commit` subcommand's arguments.
+struct CommitArgs {
+    bead: Option<String>,
+    close: Option<String>,
+    evidence: Option<String>,
+    agent: Option<String>,
+    message: String,
+    paths: Vec<String>,
+    allow_demotion: Vec<String>,
+}
+
+fn run_commit(root: &Path, format: Format, args: CommitArgs) -> Status {
+    let Some(agent) = args.agent.or_else(|| env::var("AGENT_NAME").ok()) else {
+        let message = "name your Agent Mail identity with --agent or $AGENT_NAME";
+        return output::report_error(format, ErrorKind::Usage, message, message);
+    };
+    let artifacts = root.join("artifacts");
+    let git = git::Git::new(root);
+    let ports = commit::LivePorts {
+        root: root.to_path_buf(),
+        artifacts: artifacts.clone(),
+    };
+    match (args.bead, args.close) {
+        (Some(bead), None) => {
+            let request = commit::Request {
+                kind: commit::CommitKind::Work,
+                bead,
+                agent,
+                message: args.message,
+                paths: args.paths,
+                allow_demotions: args.allow_demotion,
+            };
+            output::emit(format, &commit::run(&git, &request, &ports, &artifacts))
+        }
+        (None, Some(bead)) => {
+            let request = closure::CloseRequest {
+                bead,
+                agent,
+                message: args.message,
+                failed_evidence: args.evidence,
+            };
+            let tracker = tracker::LiveTracker {
+                root: root.to_path_buf(),
+            };
+            let report = closure::run(&git, &request, &tracker, &ports, &artifacts);
+            output::emit(format, &report)
+        }
+        _ => {
+            let message = "give exactly one of --bead or --close";
+            output::report_error(format, ErrorKind::Usage, message, message)
+        }
+    }
+}
+
+/// The `gate` subcommand's options.
+struct GateArgs {
+    tree: Option<String>,
+    changed: Vec<String>,
+    artifacts: Option<PathBuf>,
+    parent_checks: Option<PathBuf>,
+    allow_demotion: Vec<String>,
+}
+
 fn run_prune(root: &Path, format: Format, dry_run: bool) -> Status {
     let layout = prune::Layout {
         root: root.to_path_buf(),
@@ -342,14 +407,7 @@ fn run_prune(root: &Path, format: Format, dry_run: bool) -> Status {
     output::emit(format, &prune::run(&layout, dry_run))
 }
 
-fn run_gate(
-    root: &Path,
-    format: Format,
-    tier: gate::GateTier,
-    tree: Option<&str>,
-    changed: Vec<String>,
-    artifacts: Option<PathBuf>,
-) -> Status {
+fn run_gate(root: &Path, format: Format, tier: gate::GateTier, args: GateArgs) -> Status {
     if tier != gate::GateTier::Fast {
         let message = format!(
             "gate tier `{}` is not implemented yet (W46); a missing tier never counts as a \
@@ -358,19 +416,32 @@ fn run_gate(
         );
         return output::report_error(format, ErrorKind::NotImplemented, &message, &message);
     }
-    let tree = match gate::resolve_tree(root, tree, changed) {
+    // The forward-only rule's baseline (D-56): a candidate's comes from the commit wrapper;
+    // a clean checkout's is HEAD's parent.
+    let parent = match (&args.tree, &args.parent_checks) {
+        (Some(_), Some(file)) => gate::Parent::from_file(file),
+        (Some(_), None) => Ok(gate::Parent::Unknown),
+        (None, _) => gate::Parent::of_head(root),
+    };
+    let parent = match parent {
+        Ok(parent) => parent,
+        Err(why) => return output::report_error(format, ErrorKind::Refused, &why, &why),
+    };
+    let tree = match gate::resolve_tree(root, args.tree.as_deref(), args.changed) {
         Ok(tree) => tree,
         Err(why) => return output::report_error(format, ErrorKind::Refused, &why, &why),
     };
     let ctx = gate::Context {
         root,
         tree,
-        artifacts: artifacts.unwrap_or_else(|| root.join("artifacts")),
+        artifacts: args.artifacts.unwrap_or_else(|| root.join("artifacts")),
         cargo: cargo::Cargo::detect(),
         tool_path: None,
         progress: true,
+        parent,
+        allow_demotions: args.allow_demotion,
     };
-    match gate::run(&ctx, tier, gate::BOOTSTRAP_SET) {
+    match gate::run_fast(&ctx) {
         Ok(report) => output::emit(format, &report),
         Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
     }

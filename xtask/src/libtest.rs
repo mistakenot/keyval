@@ -2,7 +2,7 @@
 //!
 //! libtest has no stable machine-readable format (its JSON output needs nightly), so
 //! this module parses the stable text lines: `<name>: test` from `--list`,
-//! `test result: …` summaries and `test <name> ... FAILED` result lines.
+//! `test result: …` summaries and `test <name> ... ok|FAILED|ignored` result lines.
 
 use std::fmt;
 
@@ -75,6 +75,38 @@ pub fn parse_tally(stdout: &str) -> Result<Tally, ParseError> {
         }
     }
     Ok(tally)
+}
+
+/// What happened to one case, as its result line says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// `test <name> ... ok`.
+    Passed,
+    /// `test <name> ... FAILED`.
+    Failed,
+    /// `test <name> ... ignored`, with or without a reason.
+    Ignored,
+}
+
+/// Every case's result line in `cargo test` output, in order. A `#[should_panic]` case's
+/// ` - should panic` is dropped, so names match `--list` output.
+pub fn outcomes(stdout: &str) -> Vec<(String, Outcome)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (name, result) = line.strip_prefix("test ")?.split_once(" ... ")?;
+            let outcome = match result {
+                "ok" => Outcome::Passed,
+                "FAILED" => Outcome::Failed,
+                ignored if ignored == "ignored" || ignored.starts_with("ignored, ") => {
+                    Outcome::Ignored
+                }
+                _ => return None,
+            };
+            let name = name.strip_suffix(" - should panic").unwrap_or(name);
+            Some((name.to_owned(), outcome))
+        })
+        .collect()
 }
 
 /// Names of the cases that failed: result lines `test <name> ... FAILED`.
@@ -158,6 +190,25 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         );
         let missing = "test result: ok. 1 passed; 0 failed";
         assert!(parse_tally(missing).is_err(), "input={missing:?}");
+    }
+
+    #[test]
+    fn outcomes_name_every_case_in_order() {
+        let text = format!("{RUN}test c::boom - should panic ... ok\ntest c::later ... ignored\n");
+        let observed = outcomes(&text);
+        let expected: Vec<(String, Outcome)> = [
+            ("a::passes", Outcome::Passed),
+            ("a::fails", Outcome::Failed),
+            ("a::skipped", Outcome::Ignored),
+            ("b::one", Outcome::Passed),
+            ("b::two", Outcome::Passed),
+            ("c::boom", Outcome::Passed),
+            ("c::later", Outcome::Ignored),
+        ]
+        .iter()
+        .map(|&(name, outcome)| (name.to_owned(), outcome))
+        .collect();
+        assert_eq!(observed, expected, "input:\n{text}");
     }
 
     #[test]

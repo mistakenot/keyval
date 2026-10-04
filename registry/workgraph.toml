@@ -85,7 +85,7 @@ deps = ["W01", "W03", "W04", "W06"]
 reqs = ["P5", "§10.13"]
 area = ["registry", "xtask"]
 milestone = "m0"
-accept = []
+accept = ["./dev check REGISTRY", "./dev check REGISTRY-FIXTURES", "./dev check REGISTRY-FILES", "./dev check TRACEABILITY", "./dev check GATE-STAGING"]
 bead = "br-w05-verification-registry-52p"
 
 [[item]]

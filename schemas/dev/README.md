@@ -10,8 +10,8 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.error/v1` | `error.v1.schema.json` | any command that cannot produce its report |
 | `keyval.dev.doctor/v2` | `doctor.v2.schema.json` | `./dev doctor` |
 | `keyval.dev.check/v2` | `check.v2.schema.json` | `./dev check` |
-| `keyval.dev.gate/v3` | `gate.v3.schema.json` | `./dev gate` (embeds the receipt) |
-| `keyval.dev.receipt/v3` | `receipt.v3.schema.json` | gate receipts in `artifacts/receipts/` |
+| `keyval.dev.gate/v4` | `gate.v4.schema.json` | `./dev gate` (embeds the receipt) |
+| `keyval.dev.receipt/v4` | `receipt.v4.schema.json` | gate receipts in `artifacts/receipts/` |
 | `keyval.dev.accept/v1` | `accept.v1.schema.json` | `./dev accept`, report and receipt |
 | `keyval.dev.commit/v1` | `commit.v1.schema.json` | `./dev commit`, report and receipt |
 | `keyval.dev.close/v1` | `close.v1.schema.json` | `./dev commit --close` (embeds the commit report) |

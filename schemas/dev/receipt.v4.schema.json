@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://keyval.invalid/schemas/dev/receipt.v3.schema.json",
-  "title": "keyval.dev.receipt/v3",
-  "description": "A gate receipt (xtask/src/gate.rs `Receipt`): exactly what ran, on exactly which tree. Written to artifacts/receipts/gate-<run>.json and embedded in the keyval.dev.gate/v3 report. v2 added tools.cargo_target_dir and tools.ast_grep; v3 added build_inputs.raft_vendor_sha256 (W02.1).",
+  "$id": "https://keyval.invalid/schemas/dev/receipt.v4.schema.json",
+  "title": "keyval.dev.receipt/v4",
+  "description": "A gate receipt (xtask/src/gate.rs `Receipt`): exactly what ran, on exactly which tree. Written to artifacts/receipts/gate-<run>.json and embedded in the keyval.dev.gate/v4 report. v2 added tools.cargo_target_dir and tools.ast_grep; v3 added build_inputs.raft_vendor_sha256 (W02.1); v4 added planned and demotions, and set became bootstrap or registry (W05.4).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,6 +22,8 @@
     "duration_ms",
     "budget",
     "steps",
+    "planned",
+    "demotions",
     "step_log"
   ],
   "if": { "required": ["result"], "properties": { "result": { "const": "passed" } } },
@@ -35,10 +37,13 @@
     }
   },
   "properties": {
-    "schema": { "const": "keyval.dev.receipt/v3" },
+    "schema": { "const": "keyval.dev.receipt/v4" },
     "kind": { "const": "gate" },
     "tier": { "enum": ["fast", "integration", "campaign", "release"] },
-    "set": { "type": "string", "minLength": 1 },
+    "set": {
+      "description": "registry: the T0 rows of registry/checks.toml (W05.4); bootstrap: W01's fixed set, for a tree without the registry.",
+      "enum": ["bootstrap", "registry"]
+    },
     "run_id": { "type": "string", "minLength": 1 },
     "result": { "$ref": "#/$defs/verdict" },
     "tree": {
@@ -120,6 +125,34 @@
       }
     },
     "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+    "planned": {
+      "description": "The tier's planned registry rows: reported with the work item whose accept list names them, never run and never failed (§10.10).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "work_item"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "work_item": { "type": ["string", "null"], "minLength": 1 }
+        }
+      }
+    },
+    "demotions": {
+      "description": "Check-status demotions (a removed row, or an implemented row marked otherwise) that a closed plan-change bead approved (D-56).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "from", "to", "plan_change"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "from": { "type": "string", "minLength": 1 },
+          "to": { "type": ["string", "null"], "minLength": 1 },
+          "plan_change": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "step_log": {
       "type": "object",
       "additionalProperties": false,

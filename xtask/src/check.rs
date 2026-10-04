@@ -388,6 +388,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 8,
     },
     CheckDef {
+        id: "GATE-STAGING",
+        summary: "./dev gate fast runs the implemented T0 rows of registry/checks.toml, judging \
+                  cargo-test checks from one test run per package against min_cases, reports \
+                  planned rows with their work item, and refuses a check-status demotion \
+                  without a closed plan-change bead (§10.10, §10.11, D-56)",
+        kind: Kind::TestGroup,
+        covers: &["P5", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &[
+                "staging::",
+                "gate::tests::registry_",
+                "libtest::tests::outcomes",
+                "commit::tests::the_wrapper_hands_the_gate",
+            ],
+        },
+        min_cases: 12,
+    },
+    CheckDef {
         id: "DEV-STEPLOG",
         summary: "scripted flows log expected/observed/rerun step records; skips fail",
         kind: Kind::TestGroup,

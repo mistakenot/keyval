@@ -2,11 +2,11 @@
   "rule": "a gate report is ok exactly when its receipt passed",
   "error_at": "/receipt/result",
   "instance": {
-    "schema": "keyval.dev.gate/v3",
+    "schema": "keyval.dev.gate/v4",
     "ok": true,
     "receipt_path": "artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282.json",
     "receipt": {
-      "schema": "keyval.dev.receipt/v3",
+      "schema": "keyval.dev.receipt/v4",
       "kind": "gate",
       "tier": "fast",
       "set": "bootstrap",
@@ -149,6 +149,8 @@
           "detail": null
         }
       ],
+      "planned": [],
+      "demotions": [],
       "step_log": {
         "path": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/steps.jsonl",
         "records": 8,

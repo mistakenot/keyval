@@ -156,6 +156,7 @@ pub fn run(
         agent: request.agent.clone(),
         message: request.message.clone(),
         paths: Vec::new(),
+        allow_demotions: Vec::new(),
     };
     let committed = commit::run_prepared(git, &wrapped, ports, artifacts, Some(&step));
     report.ok = committed.ok;
@@ -558,10 +559,10 @@ mod tests {
         fn reservations(&self, _agent: &str) -> Result<Vec<Reservation>, String> {
             Ok(self.reservations.clone())
         }
-        fn gate(&self, _dir: &Path, tree: &str, _changed: &[String]) -> Result<GateRun, String> {
+        fn gate(&self, call: &commit::GateCall<'_>) -> Result<GateRun, String> {
             Ok(GateRun {
                 passed: self.passed,
-                receipt: Some(format!("gate-{tree}")),
+                receipt: Some(format!("gate-{}", call.tree)),
                 summary: if self.passed { "ok" } else { "fmt failed" }.to_owned(),
             })
         }
