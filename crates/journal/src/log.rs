@@ -658,7 +658,8 @@ impl LogicalLog {
         self.position(index).map(|position| position.term)
     }
 
-    /// The latest persisted hard state.
+    /// The latest hard state written to the journal: durable once its frame's sync
+    /// completes, and not before (a Ready loop's sync may still be outstanding).
     #[must_use]
     pub const fn hard_state(&self) -> HardState {
         self.hard_state

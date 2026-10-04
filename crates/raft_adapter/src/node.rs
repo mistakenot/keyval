@@ -129,8 +129,10 @@ impl<R: JournalRead> RaftNode<R> {
         &self.voters
     }
 
-    /// The journal's logical log, read-only: the offset index, the persisted hard state and
-    /// the entry cache. Only the loop writes it, through [`persist`](Self::persist).
+    /// The journal's logical log, read-only: the offset index, the hard state and the entry
+    /// cache. Only the loop writes it, through [`persist`](Self::persist). While a sync is
+    /// outstanding it already holds that sync's frame, whose hard state and entries are written
+    /// but not yet durable.
     pub fn log(&self) -> Ref<'_, LogicalLog> {
         self.raw.store().log()
     }
@@ -290,6 +292,19 @@ impl<R: JournalRead> RaftNode<R> {
             commit: LogIndex::ZERO,
         })
     }
+
+    /// The library's last log index, read without its storage view: the unstable log's last
+    /// index while it holds entries, else the logical log's. This is the value
+    /// `RaftLog::last_index` returns, but that would ask the storage view, which is sealed
+    /// while a frame without entries syncs (`RA-VIEW-SEALED`, br-g4hr).
+    fn last_index(&self) -> LogIndex {
+        self.raw
+            .raft
+            .raft_log
+            .unstable
+            .maybe_last_index()
+            .map_or_else(|| self.log().last_index(), log_index)
+    }
 }
 
 /// A library index as a core one; library indices stay within 2^53 − 1 because entries do.
@@ -428,6 +443,9 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
         self.raw.advance_apply_to(index.get());
     }
 
+    /// Never reads the storage view, so it answers during a sync too (br-g4hr). While a sync
+    /// is outstanding it shows the library's term, vote, role and last index, which are
+    /// written but not yet durable.
     fn status(&self) -> Status {
         let status = self.raw.status();
         let role = match status.ss.raft_state {
@@ -456,7 +474,7 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
             term: Term::new(status.hs.term).unwrap_or(Term::ZERO),
             leader: NodeId::new(status.ss.leader_id).ok(),
             commit: log_index(status.hs.commit),
-            last: log_index(self.raw.raft.raft_log.last_index()),
+            last: self.last_index(),
             progress,
         }
     }

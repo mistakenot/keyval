@@ -124,7 +124,8 @@ enum Phase {
 /// - no message is sent while a frame is waiting for its sync;
 /// - entries are applied once each, in index order, never beyond the library's commit
 ///   index, and applied progress is reported only for entries applied;
-/// - sync sequence numbers strictly increase within the incarnation.
+/// - sync sequence numbers strictly increase within the incarnation, and only this loop's
+///   own syncs complete through [`ReadyLoop::sync_done`].
 #[derive(Debug)]
 pub struct ReadyLoop<R: JournalRead> {
     /// The library, behind the Consensus port.
@@ -167,7 +168,9 @@ impl<R: JournalRead> ReadyLoop<R> {
     }
 
     /// The library's view of this node, as of the end of the last turn, or of the last Ready
-    /// taken before a sync. Reading it never touches the library.
+    /// taken before a sync. Reading it never touches the library. During a sync it already
+    /// shows that Ready's term, vote, role and last index, which are not yet durable: right
+    /// for redirects and lookups, never evidence that anything is synced.
     pub const fn status(&self) -> &Status {
         &self.status
     }
@@ -245,7 +248,10 @@ impl<R: JournalRead> ReadyLoop<R> {
     ///
     /// # Panics
     ///
-    /// `RA-SYNC-UNEXPECTED` if it is this incarnation's, but not for the outstanding sync.
+    /// `RA-SYNC-UNEXPECTED` if it is this incarnation's, but not for the outstanding sync. Only
+    /// the completions of this loop's own [`Effect::Sync`]s come here: the controller's other
+    /// syncs (its start-up `Sync`s and every `SyncDir`) share the [`SyncSeq`] numbering, and
+    /// the controller completes those itself.
     pub fn sync_done(
         &mut self,
         seq: SyncSeq,
@@ -299,7 +305,7 @@ impl<R: JournalRead> ReadyLoop<R> {
             if let Some(state) = ready.hard_state() {
                 self.commit = self.commit.max(state.commit);
             }
-            // The view is still unsealed: read the status now, for lookups during the sync.
+            // The library's view as of this Ready, for lookups during its sync.
             self.status = self.node.status();
             let (_, _, messages, committed) = ready.into_parts();
             match self.node.persist() {

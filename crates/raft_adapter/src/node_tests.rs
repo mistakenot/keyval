@@ -13,6 +13,7 @@ use types::{
 
 use crate::convert::decode_message;
 use crate::node::{ConstructError, RaftNode};
+use crate::ready_loop_tests::{Cluster, Member, assert_synced_obligations, start_campaign};
 use crate::test_support::{
     BOUNDS, CONFIGS, Journal, Seeded, config, empty_log, journal_with_genesis,
 };
@@ -558,6 +559,79 @@ fn a_frame_refused_at_the_hard_stop_stays_owed() {
         !node.storage().is_sealed() && node.log().last_index() == LogIndex::ZERO,
         "rule: a refused frame changes nothing: the log is untouched and the view unsealed"
     );
+}
+
+/// Every public read on `member`'s loop and node, taken while its frame without entries is
+/// syncing: none may touch the sealed storage view (br-g4hr).
+fn assert_reads_answer_during_sync(member: &Member, who: &str) {
+    let lp = &member.lp;
+    assert!(
+        lp.outstanding_sync().is_some(),
+        "fixture: the {who} waits for its sync"
+    );
+    let node = lp.node();
+    let (written, last) = (node.log().hard_state(), node.log().last_index());
+    assert!(
+        node.storage().is_sealed(),
+        "fixture: the {who}'s view is sealed until SyncDone"
+    );
+    let status = node.status();
+    assert_eq!(
+        &status,
+        lp.status(),
+        "rule: the node's status during the sync is the loop's cached one (br-g4hr); {who}"
+    );
+    assert_eq!(
+        (status.term, status.last),
+        (written.term, last),
+        "rule: during a sync the status shows the written, not yet durable, term and the log's \
+         last index; {who}"
+    );
+    assert_eq!(
+        (
+            node.applied_index(),
+            lp.applied(),
+            node.storage_failure(),
+            node.voters().len()
+        ),
+        (LogIndex::ZERO, LogIndex::ZERO, None, 3),
+        "rule: the other reads answer during the sync too; {who}"
+    );
+}
+
+#[test]
+fn every_public_read_answers_while_a_frame_without_entries_syncs() {
+    let mut cluster = Cluster::new(&config("three-voters"), 1);
+    let candidate = start_campaign(&mut cluster);
+    assert_eq!(
+        cluster.get(candidate).lp.node().log().last_index(),
+        LogIndex::ZERO,
+        "fixture: the candidate's frame holds only its new term and self-vote, no entries"
+    );
+    assert_reads_answer_during_sync(cluster.get(candidate), "candidate");
+    assert_eq!(
+        cluster.get(candidate).lp.status().role,
+        Role::Candidate,
+        "rule: the status shows the candidacy whose term and vote are still syncing"
+    );
+    cluster.complete_sync(candidate);
+    let at = cluster
+        .network
+        .iter()
+        .position(|(_, _, bytes)| {
+            decode_message(bytes).unwrap().get_msg_type() == MessageType::MsgRequestVote
+        })
+        .unwrap();
+    let voter = cluster.network[at].1;
+    cluster.deliver(at);
+    assert_eq!(
+        cluster.get(voter).lp.node().log().hard_state().vote,
+        Some(candidate),
+        "fixture: the voter's frame holds only its vote for the candidate, no entries"
+    );
+    assert_reads_answer_during_sync(cluster.get(voter), "voter");
+    cluster.settle();
+    assert_synced_obligations(&cluster);
 }
 
 /// Whether `result` is the journal's hard-stop refusal.

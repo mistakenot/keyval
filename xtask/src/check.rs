@@ -961,8 +961,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   config, election timeouts come only from the seeded entropy port, entries, \
                   hard state and messages convert losslessly and unknown protobuf fields are \
                   refused (H-3), the journal serves the library's log reads, a Ready writes one \
-                  frame exactly when it must sync, and a restart resumes from the recovered hard \
-                  state (§7.3, §7.4, CD-1, P4)",
+                  frame exactly when it must sync, every public read answers while a frame \
+                  syncs, and a restart resumes from the recovered hard state (§7.3, §7.4, CD-1, \
+                  P4)",
         kind: Kind::TestGroup,
         covers: &["CD-1", "P4", "O-5"],
         class: ClaimClass::Invariant,
@@ -978,7 +979,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "node::invariant_fixtures::",
             ],
         },
-        min_cases: 33,
+        min_cases: 34,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-SIM",
