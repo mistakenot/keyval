@@ -115,6 +115,8 @@ mod ready_loop;
 mod ready_loop_tests;
 mod storage;
 #[cfg(test)]
+mod term_change_tests;
+#[cfg(test)]
 mod test_support;
 
 pub use admit::Inadmissible;

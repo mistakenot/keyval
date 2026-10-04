@@ -1069,9 +1069,13 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "raft_adapter",
-            filters: &["ready_loop_tests::", "ready_loop::invariant_fixtures::"],
+            filters: &[
+                "ready_loop_tests::",
+                "ready_loop::invariant_fixtures::",
+                "term_change_tests::",
+            ],
         },
-        min_cases: 20,
+        min_cases: 22,
     },
     CheckDef {
         id: "JOURNAL-EXAMINE",
