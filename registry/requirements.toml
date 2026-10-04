@@ -34,7 +34,7 @@ title = "A key's version is the log index of the write that set it"
 [[requirement]]
 id = "DM-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Keys are ordered byte-wise by their UTF-8 encoding"
 
 [[requirement]]
