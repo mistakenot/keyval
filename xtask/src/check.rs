@@ -1844,6 +1844,30 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 5,
     },
+    CheckDef {
+        id: "SERVER-RESTART",
+        summary: "a real single node killed and restarted (§7.7, DUR-1, DUR-3, W18.4) through \
+                  test-only PID-receipt helpers that signal only the PID their receipt names, \
+                  while it is the unreaped child they started (rule 18): writes acknowledged \
+                  before a SIGKILL all read back after the restart with their versions, rebuilt \
+                  from the recovered journal alone (the new incarnation logs starting, \
+                  recovering and ready, and applies up to the last acknowledged write before any \
+                  new one; O-3), health reports ready (O-1), and a retry replays its original \
+                  result (F-6); a SIGKILL during a burst of concurrent writes loses no \
+                  acknowledged write, and each unanswered write resolves on retry to its \
+                  original result or one first execution; a forged or missing receipt signals \
+                  nothing. Process-crash evidence: SIGKILL keeps the page cache, so a missing \
+                  fsync is invisible here (D-46; W24)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-1", "DUR-3", "F-6", "O-1", "O-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &["restart_tests::"],
+        },
+        min_cases: 3,
+    },
 ];
 
 /// Outcome of one requested check.

@@ -117,31 +117,51 @@ pub fn send(address: SocketAddr, raw: &[u8]) -> Reply {
 
 /// Reads one response from `reader`.
 pub fn read_reply(reader: &mut impl BufRead) -> Reply {
-    let mut status_line = String::new();
-    reader.read_line(&mut status_line).unwrap();
-    let status: u16 = status_line.split(' ').nth(1).unwrap().parse().unwrap();
+    try_read_reply(reader).unwrap_or_else(|why| panic!("fixture: a whole HTTP response ({why})"))
+}
+
+/// Reads one response from `reader`, or says why there is none.
+pub fn try_read_reply(reader: &mut impl BufRead) -> Result<Reply, String> {
+    let line = |reader: &mut dyn BufRead| -> Result<String, String> {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => Err("closed before a whole response".to_owned()),
+            Ok(_) => Ok(line),
+            Err(err) => Err(format!("read: {err}")),
+        }
+    };
+    let status_line = line(reader)?;
+    let status: u16 = status_line
+        .split(' ')
+        .nth(1)
+        .and_then(|status| status.parse().ok())
+        .ok_or_else(|| format!("status line {status_line:?}"))?;
     let mut headers = Vec::new();
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).unwrap();
-        let line = line.trim_end();
-        if line.is_empty() {
+        let header = line(reader)?;
+        let header = header.trim_end();
+        if header.is_empty() {
             break;
         }
-        let (name, value) = line.split_once(':').unwrap();
+        let (name, value) = header
+            .split_once(':')
+            .ok_or_else(|| format!("header {header:?}"))?;
         headers.push((name.to_ascii_lowercase(), value.trim().to_owned()));
     }
     let length: usize = headers
         .iter()
         .find(|(name, _)| name == "content-length")
-        .map_or(0, |(_, value)| value.parse().unwrap());
+        .map_or(Ok(0), |(_, value)| value.parse())
+        .map_err(|err| format!("content-length: {err}"))?;
     let mut body = vec![0; length];
-    reader.read_exact(&mut body).unwrap();
-    Reply {
+    reader
+        .read_exact(&mut body)
+        .map_err(|err| format!("body: {err}"))?;
+    Ok(Reply {
         status,
         headers,
-        body: serde_json::from_slice(&body).unwrap(),
-    }
+        body: serde_json::from_slice(&body).map_err(|err| format!("body JSON: {err}"))?,
+    })
 }
 
 /// A request to `target` with `method`, the extra `headers`, and `body` (with its
