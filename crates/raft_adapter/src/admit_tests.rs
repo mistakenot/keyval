@@ -371,7 +371,9 @@ fn entries_that_do_not_follow_their_predecessor_are_refused() {
     let mut first_index = append(&[3]);
     first_index.entries[0].index = 4;
     let mut zero = append(&[3]);
+    zero.index = 0;
     zero.log_term = 0;
+    zero.entries[0].index = 1;
     zero.entries[0].term = 0;
     let mut decreasing = append(&[3, 2]);
     decreasing.term = 3;
@@ -511,7 +513,9 @@ fn a_heartbeat_commit_past_the_log_is_refused() {
     assert_eq!(
         fits_log(&append, 4),
         Ok(()),
-        "rule: an append's commit is bounded by its own entries (maybe_append), so it is safe"
+        "rule: an append's commit is not judged here: once its previous entry matches, which \
+         the previous-entry rule makes this node's own entry (br-0mio), maybe_append bounds \
+         the commit by entries this node holds"
     );
     // Without this refusal, raft-rs fatal!s: "to_commit 1 is out of range [last_index 0]".
     let journal = Journal::default();
@@ -529,6 +533,104 @@ fn a_heartbeat_commit_past_the_log_is_refused() {
         (None, before),
         "rule: and changes nothing"
     );
+}
+
+#[test]
+fn an_appends_previous_entry_has_index_and_term_both_zero_or_both_nonzero() {
+    let mut past_the_log = append(&[]);
+    past_the_log.log_term = 0;
+    let mut zero_index = append(&[]);
+    zero_index.index = 0;
+    let mut first = append(&[]);
+    first.index = 0;
+    first.log_term = 0;
+    first.entries = append(&[3]).entries;
+    first.entries[0].index = 1;
+    for (case, sent, expected) in [
+        (
+            "a nonzero index with term 0",
+            past_the_log,
+            Err(Inadmissible::PrevEntry {
+                index: 4,
+                log_term: 0,
+            }),
+        ),
+        (
+            "index 0 with a nonzero term",
+            zero_index,
+            Err(Inadmissible::PrevEntry {
+                index: 0,
+                log_term: 2,
+            }),
+        ),
+    ] {
+        assert_eq!(
+            judge(&sent),
+            expected,
+            "rule: a v1 leader sends log_term = term(index), 0 only at index 0 (br-0mio); \
+             case={case}"
+        );
+    }
+    assert_eq!(
+        judge(&first),
+        Ok(first.clone()),
+        "rule: the first append, after index 0 with term 0, is admitted"
+    );
+}
+
+#[test]
+fn a_forged_append_past_the_log_never_reaches_the_library() {
+    // Without the previous-entry rule each of these panics a fresh follower: raft-rs's
+    // term() answers 0 past the log, so log_term 0 "matches" and maybe_append runs past its
+    // bounds (br-0mio).
+    let mut with_entry = message(MessageType::MsgAppend);
+    with_entry.term = 1;
+    with_entry.index = 1;
+    with_entry.log_term = 0;
+    with_entry.entries.push(eraftpb::Entry {
+        index: 2,
+        term: 1,
+        data: b"forged".to_vec().into(),
+        ..eraftpb::Entry::default()
+    });
+    let mut at_the_ceiling = message(MessageType::MsgAppend);
+    at_the_ceiling.term = MAX_SAFE_INTEGER;
+    at_the_ceiling.index = MAX_SAFE_INTEGER;
+    at_the_ceiling.commit = MAX_SAFE_INTEGER;
+    at_the_ceiling.log_term = 0;
+    let payloads: [(&str, Vec<u8>); 3] = [
+        (
+            "\"to_commit 1 is out of range [last_index 0]\"",
+            // MsgAppend: to 1, from 7, term 1, index 1, log_term 0, commit 1.
+            vec![
+                0x08, 0x03, 0x10, 0x01, 0x18, 0x07, 0x20, 0x01, 0x30, 0x01, 0x40, 0x01,
+            ],
+        ),
+        (
+            "\"unstable.slice[1, 2] out of bound[1, 1]\"",
+            encode(&with_entry),
+        ),
+        (
+            "every node's crash at term 2^53 - 1",
+            encode(&at_the_ceiling),
+        ),
+    ];
+    for (case, bytes) in payloads {
+        let journal = Journal::default();
+        let mut node = follower(&journal);
+        let before = node.status();
+        assert_eq!(
+            node.step(bytes),
+            Err(StepError::Rejected),
+            "rule: a forged append past the log is refused before the library sees it; \
+             case={case}"
+        );
+        assert_eq!(
+            (node.ready(), node.status()),
+            (None, before),
+            "rule: and changes nothing; case={case}"
+        );
+    }
 }
 
 #[test]

@@ -35,11 +35,20 @@
 //! `commit_to` would `fatal!` on it. An honest leader never sends one: it sends
 //! `min(matched, committed)`, and `matched` covers only entries this node synced before
 //! acknowledging them (DUR-2); a heartbeat from an older term would be ignored anyway.
-//! raft-rs's other stateful `fatal!` on peer input, an appended entry conflicting with a
-//! committed one, cannot be reached: `handle_append_entries` answers at once when the
-//! message's index is below the commit index, and otherwise the contiguity rule puts every
-//! entry above it. A peer that forges otherwise plausible state is Byzantine, outside v1's
-//! fault model (§2.2).
+//! Two of raft-rs's other stateful `fatal!`s on peer input are kept out of reach by
+//! stateless rules:
+//! - **An append's previous entry** has index and term both 0, or both nonzero (br-0mio).
+//!   raft-rs's `term()` answers 0 for any index past the log, so a `log_term` of 0 would
+//!   "match" an index this node does not hold, and `maybe_append` would then drive
+//!   `commit_to` or the unstable log past their bounds. A v1 leader sends
+//!   `log_term = term(index)`, which is 0 only at index 0. With a matching nonzero previous
+//!   entry, the append's commit is bounded by entries this node holds.
+//! - **An appended entry conflicting with a committed one** cannot be reached:
+//!   `handle_append_entries` answers at once when the message's index is below the commit
+//!   index, and otherwise the contiguity rule puts every entry above it.
+//!
+//! A peer that forges otherwise plausible state is Byzantine, outside v1's fault model
+//! (§2.2).
 
 use raft::eraftpb::{self, EntryType, MessageType};
 use types::{MAX_COMMAND_BYTES, MAX_SAFE_INTEGER, NodeId};
@@ -75,6 +84,14 @@ pub enum Inadmissible {
     OutOfRange,
     /// A message term of 0, which only local messages carry.
     ZeroTerm,
+    /// An append whose previous entry has index 0 with a nonzero term, or a nonzero index
+    /// with term 0, which a v1 leader never sends.
+    PrevEntry {
+        /// The previous entry's index.
+        index: u64,
+        /// The previous entry's term.
+        log_term: u64,
+    },
     /// A heartbeat whose commit index is past this node's last index.
     CommitPastLog {
         /// The heartbeat's commit index.
@@ -141,6 +158,12 @@ pub fn admit(
     }
     if !carries_entries && !message.entries.is_empty() {
         return Err(Inadmissible::Entry { position: 0 });
+    }
+    if carries_entries && (message.index == 0) != (message.log_term == 0) {
+        return Err(Inadmissible::PrevEntry {
+            index: message.index,
+            log_term: message.log_term,
+        });
     }
     check_entries(&message)?;
     Ok(message)

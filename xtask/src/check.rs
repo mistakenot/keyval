@@ -1193,7 +1193,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   request from a non-voter, a \
                   proposal, a snapshot or a configuration change from the wire never reaches \
                   the library, a follower that knows its leader never forwards a \
-                  proposal, a heartbeat committing past this node's log is refused (br-1jtp), \
+                  proposal, an append whose previous entry pairs index and term 0 wrongly \
+                  (br-0mio) and a heartbeat committing past this node's log (br-1jtp) are \
+                  refused, \
                   an append conflicting below the commit index is answered without a \
                   panic, and a heartbeat from another voter still reaches the library",
         kind: Kind::TestGroup,
@@ -1204,7 +1206,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["admit_tests::", "decode_tests::"],
         },
-        min_cases: 27,
+        min_cases: 29,
     },
     CheckDef {
         id: "DIFFERENTIAL",
