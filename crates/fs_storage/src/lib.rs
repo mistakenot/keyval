@@ -39,6 +39,15 @@
 //! ([`ReadOnlyDir::probe_lock`]), holding it while it reads so that no node starts
 //! meanwhile. It has no [`ByteStorage`] implementation, so it cannot write.
 //!
+//! **Every durability call goes through one seam** (§10.17's sync-order check; br-0v7e).
+//! Directory creation, journal creation, appends, truncations and syncs go through a
+//! crate-private OS-call trait, one method per call. The real implementation passes each
+//! straight to the standard library. The tests' recording implementation logs every call
+//! and can fail any of them, so the tests assert that `fsync` of the parent follows
+//! `mkdir`, that [`ByteStorage::sync_dir`] is an `fsync` of the data directory and
+//! [`ByteStorage::sync`] an `fdatasync` of the journal, issued as the port's calls arrive
+//! (DUR-7, §7.4). A port-level wrapper would show only that a sync was requested.
+//!
 //! The adapter-agnostic contract suite (`crates/types/tests/storage_contract`) runs
 //! against it unmodified (`tests/contract.rs`, check FS-STORAGE); crash behaviour is
 //! tested by W24's crash probes.
@@ -47,7 +56,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, ErrorKind, Write as _};
 use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use types::{ByteCount, ByteStorage, DataDir, JournalRead, ReadLen, StorageError};
 
@@ -127,7 +136,12 @@ pub enum DataDirCreated {
 /// and [`StorageError::Failed`] when the path holds something other than a directory, the
 /// directory cannot be created, or the parent cannot be synced (op `sync_parent_dir`).
 pub fn create_data_dir(dir: &Path) -> Result<DataDirCreated, Failure> {
-    let created = match fs::create_dir(dir) {
+    create_data_dir_with(dir, &RealOs)
+}
+
+/// [`create_data_dir`], making its calls through `os`.
+fn create_data_dir_with(dir: &Path, os: &dyn Os) -> Result<DataDirCreated, Failure> {
+    let created = match os.create_dir(dir) {
         Ok(()) => DataDirCreated::New,
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
             let metadata =
@@ -148,13 +162,61 @@ pub fn create_data_dir(dir: &Path) -> Result<DataDirCreated, Failure> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    sync_directory(parent).map_err(|err| Failure::io("sync_parent_dir", parent, &err))?;
+    os.sync_dir(parent)
+        .map_err(|err| Failure::io("sync_parent_dir", parent, &err))?;
     Ok(created)
 }
 
-/// `fsync` of a directory: makes the entries created in it durable.
-fn sync_directory(dir: &Path) -> io::Result<()> {
-    File::open(dir)?.sync_all()
+/// The operating-system calls behind every durability step, one method per call: the seam
+/// §10.17's sync-order check records (br-0v7e). [`RealOs`] makes the calls; the tests'
+/// recorder logs them and can fail any of them.
+trait Os: std::fmt::Debug + Send + Sync {
+    /// `mkdir` of `dir`.
+    fn create_dir(&self, dir: &Path) -> io::Result<()>;
+    /// `open` with `O_CREAT | O_EXCL` of the journal at `path`, for reading and appending.
+    fn create_journal(&self, path: &Path) -> io::Result<File>;
+    /// `open` and `fsync` of the directory `dir`: makes the entries created in it durable.
+    fn sync_dir(&self, dir: &Path) -> io::Result<()>;
+    /// `write` of all of `bytes` at the journal's end (append mode).
+    fn append(&self, journal: &File, bytes: &[u8]) -> io::Result<()>;
+    /// `ftruncate` of the journal to `len` bytes.
+    fn truncate(&self, journal: &File, len: u64) -> io::Result<()>;
+    /// `fdatasync` of the journal: its bytes and its length become durable.
+    fn sync_data(&self, journal: &File) -> io::Result<()>;
+}
+
+/// The real operating system: each call goes straight to the standard library.
+#[derive(Debug)]
+struct RealOs;
+
+impl Os for RealOs {
+    fn create_dir(&self, dir: &Path) -> io::Result<()> {
+        fs::create_dir(dir)
+    }
+
+    fn create_journal(&self, path: &Path) -> io::Result<File> {
+        OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create_new(true)
+            .open(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        File::open(dir)?.sync_all()
+    }
+
+    fn append(&self, mut journal: &File, bytes: &[u8]) -> io::Result<()> {
+        journal.write_all(bytes)
+    }
+
+    fn truncate(&self, journal: &File, len: u64) -> io::Result<()> {
+        journal.set_len(len)
+    }
+
+    fn sync_data(&self, journal: &File) -> io::Result<()> {
+        journal.sync_data()
+    }
 }
 
 /// One process's handle on a data directory: the journal, once it exists, and the lock,
@@ -171,6 +233,8 @@ pub struct FsStorage {
     latched: Option<Failure>,
     /// The cause of the last failure, for the root's log.
     last_failure: Mutex<Option<Failure>>,
+    /// Where the durability calls go: the real operating system, or a test's recorder.
+    os: Arc<dyn Os>,
 }
 
 impl FsStorage {
@@ -183,12 +247,18 @@ impl FsStorage {
     /// is not a directory, or [`StorageError::Failed`] if it cannot be examined (for
     /// example, permission denied) or the journal cannot be opened.
     pub fn open(dir: &Path) -> Result<Self, Failure> {
-        Self::open_journal(dir, true)
+        Self::open_journal(dir, true, Arc::new(RealOs))
+    }
+
+    /// [`FsStorage::open`], with every durability call going through `os`.
+    #[cfg(test)]
+    fn open_through(dir: &Path, os: Arc<dyn Os>) -> Result<Self, Failure> {
+        Self::open_journal(dir, true, os)
     }
 
     /// Opens `dir`'s journal, if it exists, for reading, and for appending when
     /// `writable`. Nothing is created and the lock is not taken.
-    fn open_journal(dir: &Path, writable: bool) -> Result<Self, Failure> {
+    fn open_journal(dir: &Path, writable: bool, os: Arc<dyn Os>) -> Result<Self, Failure> {
         let metadata =
             fs::metadata(dir).map_err(|err| Failure::io_or_missing("open", dir, &err))?;
         if !metadata.is_dir() {
@@ -211,6 +281,7 @@ impl FsStorage {
             lock: None,
             latched: None,
             last_failure: Mutex::new(None),
+            os,
         })
     }
 
@@ -376,7 +447,7 @@ impl ReadOnlyDir {
     /// is not a directory, or [`StorageError::Failed`] if it cannot be examined or the
     /// journal cannot be opened.
     pub fn open(dir: &Path) -> Result<Self, Failure> {
-        FsStorage::open_journal(dir, false).map(Self)
+        FsStorage::open_journal(dir, false, Arc::new(RealOs)).map(Self)
     }
 
     /// The data directory.
@@ -444,12 +515,7 @@ impl ByteStorage for FsStorage {
     fn create_journal(&mut self) -> Result<(), StorageError> {
         self.refuse_if_latched("create_journal")?;
         let path = self.dir.join(JOURNAL);
-        let created = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create_new(true)
-            .open(&path);
-        match created {
+        match self.os.create_journal(&path) {
             Ok(file) => {
                 self.journal = Some(file);
                 Ok(())
@@ -461,7 +527,7 @@ impl ByteStorage for FsStorage {
 
     fn sync_dir(&mut self) -> Result<(), StorageError> {
         self.refuse_if_latched("sync_dir")?;
-        sync_directory(&self.dir).map_err(|err| {
+        self.os.sync_dir(&self.dir).map_err(|err| {
             let failure = Failure::io("sync_dir", &self.dir, &err);
             self.latch(failure)
         })
@@ -469,7 +535,7 @@ impl ByteStorage for FsStorage {
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), StorageError> {
         self.refuse_if_latched("append")?;
-        let result = self.journal("append")?.write_all(bytes);
+        let result = self.os.append(self.journal("append")?, bytes);
         result.map_err(|err| self.latch_journal("append", &err))
     }
 
@@ -484,13 +550,13 @@ impl ByteStorage for FsStorage {
                 error: StorageError::Failed,
             }));
         }
-        let result = self.journal("truncate")?.set_len(len.get());
+        let result = self.os.truncate(self.journal("truncate")?, len.get());
         result.map_err(|err| self.latch_journal("truncate", &err))
     }
 
     fn sync(&mut self) -> Result<(), StorageError> {
         self.refuse_if_latched("sync")?;
-        let result = self.journal("sync")?.sync_data();
+        let result = self.os.sync_data(self.journal("sync")?);
         result.map_err(|err| self.latch_journal("sync", &err))
     }
 }
@@ -893,6 +959,195 @@ mod tests {
         assert!(
             failure.op == "lock" && !failure.cause.is_empty(),
             "failure={failure:?}"
+        );
+    }
+
+    /// One OS call, as the recorder saw it.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum OsCall {
+        CreateDir(PathBuf),
+        CreateJournal(PathBuf),
+        SyncDir(PathBuf),
+        Append(usize),
+        Truncate(u64),
+        SyncData,
+    }
+
+    /// The tests' operating system (§10.17's sync-order check): logs every call, fails
+    /// the calls it was told to fail (once each, with EIO), and makes every other call
+    /// for real.
+    #[derive(Debug, Default)]
+    struct Recorder {
+        calls: Mutex<Vec<OsCall>>,
+        failing: Mutex<Vec<OsCall>>,
+    }
+
+    impl Recorder {
+        fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        /// Makes the next call equal to `call` fail with EIO.
+        fn fail_next(&self, call: OsCall) {
+            self.failing.lock().unwrap().push(call);
+        }
+
+        /// Every call so far, in order.
+        fn calls(&self) -> Vec<OsCall> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        /// Logs `call`, and fails it if it was told to.
+        fn record(&self, call: OsCall) -> io::Result<()> {
+            let mut failing = self.failing.lock().unwrap();
+            let fails = failing
+                .iter()
+                .position(|planned| *planned == call)
+                .map(|at| failing.remove(at))
+                .is_some();
+            drop(failing);
+            self.calls.lock().unwrap().push(call);
+            if fails {
+                return Err(io::Error::from_raw_os_error(5));
+            }
+            Ok(())
+        }
+    }
+
+    impl Os for Recorder {
+        fn create_dir(&self, dir: &Path) -> io::Result<()> {
+            self.record(OsCall::CreateDir(dir.to_path_buf()))?;
+            RealOs.create_dir(dir)
+        }
+
+        fn create_journal(&self, path: &Path) -> io::Result<File> {
+            self.record(OsCall::CreateJournal(path.to_path_buf()))?;
+            RealOs.create_journal(path)
+        }
+
+        fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+            self.record(OsCall::SyncDir(dir.to_path_buf()))?;
+            RealOs.sync_dir(dir)
+        }
+
+        fn append(&self, journal: &File, bytes: &[u8]) -> io::Result<()> {
+            self.record(OsCall::Append(bytes.len()))?;
+            RealOs.append(journal, bytes)
+        }
+
+        fn truncate(&self, journal: &File, len: u64) -> io::Result<()> {
+            self.record(OsCall::Truncate(len))?;
+            RealOs.truncate(journal, len)
+        }
+
+        fn sync_data(&self, journal: &File) -> io::Result<()> {
+            self.record(OsCall::SyncData)?;
+            RealOs.sync_data(journal)
+        }
+    }
+
+    #[test]
+    fn creating_the_data_directory_syncs_its_parent_after_mkdir_and_again_on_a_re_run() {
+        let dir = scratch("order-create");
+        let parent = dir.parent().unwrap().to_path_buf();
+        let os = Recorder::new();
+        assert_eq!(create_data_dir_with(&dir, &*os), Ok(DataDirCreated::New));
+        assert_eq!(
+            create_data_dir_with(&dir, &*os),
+            Ok(DataDirCreated::Existing)
+        );
+        assert_eq!(
+            os.calls(),
+            [
+                OsCall::CreateDir(dir.clone()),
+                OsCall::SyncDir(parent.clone()),
+                OsCall::CreateDir(dir),
+                OsCall::SyncDir(parent.clone()),
+            ],
+            "rule: mkdir, then fsync of the parent, so the entry is durable before anything \
+             is written into it, and the re-run syncs the parent again (§7.7 step 0, DUR-7)"
+        );
+        let other = scratch("order-create-eio");
+        os.fail_next(OsCall::SyncDir(parent));
+        assert_eq!(
+            create_data_dir_with(&other, &*os).map_err(|f| (f.op, f.error)),
+            Err(("sync_parent_dir", StorageError::Failed)),
+            "rule: a failed parent sync is reported as that, never as a created directory"
+        );
+    }
+
+    #[test]
+    fn each_port_call_issues_its_os_call_in_the_order_the_calls_arrive() {
+        let dir = data_dir("order-port");
+        let os = Recorder::new();
+        let mut storage = FsStorage::open_through(&dir, os.clone()).unwrap();
+        assert_eq!(storage.lock(), Ok(()));
+        assert_eq!(storage.create_journal(), Ok(()));
+        assert_eq!(storage.sync_dir(), Ok(()));
+        assert_eq!(storage.append(b"genesis"), Ok(()));
+        assert_eq!(storage.sync(), Ok(()));
+        assert_eq!(storage.truncate(ByteCount::new(3)), Ok(()));
+        assert_eq!(storage.sync(), Ok(()));
+        assert_eq!(
+            os.calls(),
+            [
+                OsCall::CreateJournal(dir.join(JOURNAL)),
+                OsCall::SyncDir(dir.clone()),
+                OsCall::Append(7),
+                OsCall::SyncData,
+                OsCall::Truncate(3),
+                OsCall::SyncData,
+            ],
+            "rule: sync_dir is an fsync of the data directory (DUR-7) and sync an fdatasync \
+             of the journal (§7.4), each issued when its port call arrives, never skipped \
+             or reordered (§10.17)"
+        );
+        assert_eq!(storage.journal_len(), Ok(ByteCount::new(3)));
+    }
+
+    #[test]
+    fn a_failed_fdatasync_latches_even_though_the_next_one_would_succeed() {
+        // After a writeback EIO, a later fdatasync can return 0 with the dirty pages
+        // already dropped (fsyncgate), so the adapter must never ask again.
+        let dir = data_dir("order-eio");
+        let os = Recorder::new();
+        let mut storage = FsStorage::open_through(&dir, os.clone()).unwrap();
+        assert_eq!(storage.create_journal(), Ok(()));
+        assert_eq!(storage.sync_dir(), Ok(()));
+        assert_eq!(storage.append(b"frame"), Ok(()));
+        os.fail_next(OsCall::SyncData);
+        assert_eq!(storage.sync(), Err(StorageError::Failed));
+        assert_latched_on(&mut storage, "sync");
+        assert_eq!(
+            os.calls(),
+            [
+                OsCall::CreateJournal(dir.join(JOURNAL)),
+                OsCall::SyncDir(dir.clone()),
+                OsCall::Append(5),
+                OsCall::SyncData,
+            ],
+            "rule: once latched the adapter makes no further durability call, so no later \
+             fdatasync can report the lost bytes durable (br-zswx)"
+        );
+    }
+
+    #[test]
+    fn a_failed_directory_sync_latches_the_handle() {
+        let dir = data_dir("order-dir-eio");
+        let os = Recorder::new();
+        let mut storage = FsStorage::open_through(&dir, os.clone()).unwrap();
+        assert_eq!(storage.create_journal(), Ok(()));
+        os.fail_next(OsCall::SyncDir(dir.clone()));
+        assert_eq!(storage.sync_dir(), Err(StorageError::Failed));
+        assert_latched_on(&mut storage, "sync_dir");
+        assert_eq!(
+            os.calls(),
+            [
+                OsCall::CreateJournal(dir.join(JOURNAL)),
+                OsCall::SyncDir(dir.clone()),
+            ],
+            "rule: a journal whose directory entry may not be durable is never written or \
+             synced (DUR-7)"
         );
     }
 }

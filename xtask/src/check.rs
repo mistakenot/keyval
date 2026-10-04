@@ -1031,14 +1031,16 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "FS-STORAGE",
-        summary: "the real-file adapter syncs the parent directory when it creates the \
-                  data directory and again when it finds one already there (an interrupted \
-                  init re-runs), its LOCK refuses a second process until the holder exits, \
-                  a missing directory is Missing while one \
-                  that cannot be examined is Failed and every call stays within its \
-                  documented errors on real OS failures, a failed write, truncate or sync \
-                  latches the handle so no later call reports success, and failures keep \
-                  their cause for the root's log (§7.6, §7.7, §7.11, DUR-7, DUR-8)",
+        summary: "the real-file adapter syncs the parent directory when it creates the data \
+                  directory and again when it finds one already there (an interrupted init \
+                  re-runs), a recorded OS-call trace shows mkdir then fsync of the parent, \
+                  sync_dir an fsync of the data directory and sync an fdatasync of the journal, \
+                  in the order the port calls arrive, its LOCK refuses a second process until \
+                  the holder exits, a missing directory is Missing while one that cannot be \
+                  examined is Failed and every call stays within its documented errors on real \
+                  OS failures, a failed write, truncate or sync latches the handle so no later \
+                  call reports success, and failures keep their cause for the root's log (§7.6, \
+                  §7.7, §7.11, §10.17, DUR-7, DUR-8)",
         kind: Kind::TestGroup,
         covers: &["DUR-7", "DUR-8"],
         class: ClaimClass::Invariant,
@@ -1047,7 +1049,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "fs_storage",
             filters: &["tests::"],
         },
-        min_cases: 13,
+        min_cases: 17,
     },
     CheckDef {
         id: "RAFT-READY-LOOP",
