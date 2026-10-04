@@ -27,6 +27,8 @@ pub mod entropy;
 pub mod god_view;
 pub mod net;
 #[cfg(test)]
+mod net_profile_tests;
+#[cfg(test)]
 mod net_tests;
 pub mod replay;
 pub mod scheduler;

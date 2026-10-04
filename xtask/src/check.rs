@@ -1365,9 +1365,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "sim",
-            filters: &["net_tests::"],
+            filters: &["net_tests::", "net_profile_tests::"],
         },
-        min_cases: 14,
+        min_cases: 18,
     },
     CheckDef {
         id: "SIM-NET-SCENARIOS",

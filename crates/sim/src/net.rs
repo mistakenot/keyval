@@ -394,6 +394,23 @@ impl Network {
         &self.links
     }
 
+    /// Replaces the peer and client path profiles for every later send: a run's fault-free
+    /// baseline, its faults and their healing, scheduled mid-run (§10.2, §10.16; W37's
+    /// nemesis). A copy already in flight keeps the arrival time drawn when it was sent and
+    /// is delivered or cut as before. The link-queue and in-flight bounds stay the run's.
+    /// The change draws nothing, so the same changes at the same points replay identically
+    /// (T-3).
+    pub const fn set_profiles(&mut self, peer: LinkProfile, client: LinkProfile) {
+        self.config.peer = peer;
+        self.config.client = client;
+    }
+
+    /// The peer and client path profiles in force.
+    #[must_use]
+    pub const fn profiles(&self) -> (LinkProfile, LinkProfile) {
+        (self.config.peer, self.config.client)
+    }
+
     /// What became of every packet so far.
     #[must_use]
     pub const fn counts(&self) -> NetCounts {
