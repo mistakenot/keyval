@@ -98,7 +98,8 @@ pub struct Counters {
 ///
 /// Every input enters through [`Inbound::step`], which admits it and then runs turns
 /// until nothing more can progress. A turn processes at most [`TICKS_PER_TURN`] pending
-/// ticks, then one input: a waiting proposal, or the oldest queued input the node can take.
+/// ticks, then one input: if a peer envelope is queued, the oldest queued input the node
+/// can take; otherwise a waiting proposal, or else the oldest queued input.
 /// A burst, such as the ticks overdue after a pause, is admitted with
 /// [`admit`](Self::admit) before its last input is stepped, so its ticks are interleaved
 /// with the queued inputs (§7.10).
@@ -403,7 +404,11 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
             progressed = true;
             self.tick(effects);
         }
-        if self.library_idle() && self.propose(effects) {
+        // A queued peer envelope goes before a waiting proposal (br-m7x7). Peers queue only
+        // while a sync is outstanding, so at most one sync's worth goes first; a proposal
+        // first would leave a sync outstanding again, and under one write per sync the
+        // followers' responses would never be taken.
+        if self.library_idle() && !self.queue.has_peers() && self.propose(effects) {
             return true;
         }
         let peers_wait = self.raft.outstanding_sync().is_some();

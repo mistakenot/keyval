@@ -68,6 +68,11 @@ impl InboundQueue {
         self.clients.len() + self.peers.len()
     }
 
+    /// Whether a peer envelope is queued.
+    pub fn has_peers(&self) -> bool {
+        !self.peers.is_empty()
+    }
+
     /// The ticks waiting to be processed.
     pub const fn pending_ticks(&self) -> u64 {
         self.pending_ticks

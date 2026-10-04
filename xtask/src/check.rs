@@ -1428,8 +1428,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                   completion from another incarnation is ignored and counted; a failed storage \
                   effect fails the node, which drops peers and feeds the library nothing; three \
                   voters elect and commit with every message sealed and opened by the \
-                  controllers and nothing dropped; the same inputs give the same effects; and \
-                  each NODE-* invariant fires on corrupt state",
+                  controllers and nothing dropped; under one write per sync cycle a leader still \
+                  takes its followers' responses (a queued peer envelope goes before a waiting \
+                  proposal, br-m7x7), keeps leading and commits; the same inputs give the same \
+                  effects; and each NODE-* invariant fires on corrupt state",
         kind: Kind::TestGroup,
         covers: &["CD-9", "CD-7", "T-3", "P3"],
         class: ClaimClass::Invariant,
@@ -1442,7 +1444,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "invariant_fixtures::",
             ],
         },
-        min_cases: 25,
+        min_cases: 26,
     },
     CheckDef {
         id: "NODE-WRITE-PATH",

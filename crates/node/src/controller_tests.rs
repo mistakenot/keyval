@@ -681,3 +681,110 @@ fn the_same_inputs_give_the_same_effects() {
          same order (T-3)"
     );
 }
+
+/// Delivers every envelope `from` has sent.
+fn deliver_from<Q: crate::Requests>(members: &mut BTreeMap<NodeId, Member<Q>>, from: NodeId) {
+    let outbox: Vec<(NodeId, Vec<u8>)> = members.get_mut(&from).unwrap().outbox.drain(..).collect();
+    for (to, bytes) in outbox {
+        members
+            .get_mut(&to)
+            .unwrap()
+            .step(Input::Peer { from, bytes });
+    }
+}
+
+/// Whether `effect` answers an attempt with a terminal write result.
+fn is_written(effect: &Effect) -> bool {
+    match effect {
+        Effect::Respond { response, .. } => match response {
+            Response::Written { .. } => true,
+            Response::Conflict { .. }
+            | Response::Found { .. }
+            | Response::NotFound { .. }
+            | Response::Page(_)
+            | Response::Status { .. }
+            | Response::Refused(_) => false,
+        },
+        Effect::Append { .. }
+        | Effect::Truncate { .. }
+        | Effect::Sync { .. }
+        | Effect::CreateJournal
+        | Effect::SyncDir { .. }
+        | Effect::Send { .. }
+        | Effect::Log(_)
+        | Effect::Observe(_) => false,
+    }
+}
+
+#[test]
+fn sustained_writes_never_starve_the_leaders_peer_messages() {
+    // br-m7x7 (PeachAnchor's review of W14.1): with one write arriving during each of the
+    // leader's syncs, a turn that proposed before any queued peer envelope never took the
+    // followers' responses: nothing committed, and check-quorum deposed the leader.
+    let config = config("three-voters");
+    let mut members: BTreeMap<NodeId, Member<crate::RequestLifecycle>> = config
+        .voters()
+        .map(|id| (id, Member::fresh_lifecycle(&config, id)))
+        .collect();
+    let mut ticks = 0;
+    let leader = loop {
+        if let Some(id) = members
+            .iter()
+            .find(|(_, member)| member.ctl.status().role == Role::Leader)
+            .map(|(id, _)| *id)
+        {
+            break id;
+        }
+        assert!(ticks < 300, "fixture: a leader within 300 ticks");
+        for member in members.values_mut() {
+            member.step(Input::Tick);
+        }
+        for _ in 0..50 {
+            let ids: Vec<NodeId> = members.keys().copied().collect();
+            for id in &ids {
+                while members.get_mut(id).unwrap().complete_sync() {}
+                deliver_from(&mut members, *id);
+            }
+        }
+        ticks += 1;
+    };
+    let followers: Vec<NodeId> = members.keys().copied().filter(|id| *id != leader).collect();
+    members.get_mut(&leader).unwrap().step(Input::Client {
+        attempt: AttemptId::new(1_000),
+        op: put(0, "k", "v"),
+    });
+    let mut queued = Vec::new();
+    for round in 1..=60_u64 {
+        // One write reaches the leader while its sync is outstanding; then the sync
+        // completes, every envelope is delivered both ways, and every node ticks.
+        members.get_mut(&leader).unwrap().step(Input::Client {
+            attempt: AttemptId::new(1_000 + round),
+            op: put(u8::try_from(round).unwrap(), "k", "v"),
+        });
+        members.get_mut(&leader).unwrap().complete_sync();
+        deliver_from(&mut members, leader);
+        for follower in &followers {
+            while members.get_mut(follower).unwrap().complete_sync() {}
+            deliver_from(&mut members, *follower);
+        }
+        for member in members.values_mut() {
+            member.step(Input::Tick);
+        }
+        queued.push(members[&leader].ctl.queued());
+    }
+    let status = members[&leader].ctl.status();
+    let written = members[&leader]
+        .effects
+        .iter()
+        .filter(|effect| is_written(effect))
+        .count();
+    assert!(
+        status.role == Role::Leader && written >= 50 && queued.iter().all(|queued| *queued <= 8),
+        "rule: under one write per sync cycle the leader still takes its followers' responses \
+         (a queued peer envelope goes before a waiting proposal, br-m7x7): it keeps leading and \
+         its writes commit; role={:?} commit={:?} writes answered={written} queued per \
+         round={queued:?}",
+        status.role,
+        status.commit
+    );
+}
