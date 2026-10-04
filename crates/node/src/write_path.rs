@@ -1,13 +1,14 @@
 //! The write path (PLAN.md §7.8, F-7, A-5; W14.2): the fixed decision order for a write
-//! and the attempt state machine, for the PUT slice.
+//! and the attempt state machine, for PUT, DELETE and compare-and-swap alike (W27.3).
 //!
 //! # The decision order (F-7)
 //!
 //! Every node evaluates a write in the same order, and the first step that answers wins:
 //!
 //! 1. **Validate** (F-8): the boundary parsed the write under the configured limits (CD-3,
-//!    D-80), so its canonical command decodes; a DELETE or compare-and-swap never reaches
-//!    the write path before W27 implements their apply.
+//!    D-80), so its canonical command decodes. No step evaluates what the write would do: a
+//!    compare-and-swap's expectation and a DELETE's key are judged only when its entry
+//!    applies (C-5).
 //! 2. **Lifecycle:** a node that is not `Ready` answers `recovering`; a stopping node
 //!    answers `unavailable`.
 //! 3. **Local admission bounds** (§7.11): `pending_attempts` (256) attempts and
@@ -249,14 +250,14 @@ impl WritePath {
             .fold(0, u64::saturating_add)
     }
 
-    /// A write attempt, taken from the queue (§7.8, F-7).
+    /// A write attempt, taken from the queue (§7.8, F-7). Every kind of write takes the same
+    /// path: a DELETE or compare-and-swap is proposed exactly as sent, and only its entry's
+    /// application decides it (C-5).
     ///
     /// # Panics
     ///
-    /// - `NODE-WRITE-PUT-ONLY` if it is a DELETE or compare-and-swap, which no node admits
-    ///   before W27 implements their apply;
-    /// - `NODE-WRITE-VALID` if its command does not decode under the configured key and
-    ///   value limits: the boundary validates every write (F-8, D-80).
+    /// `NODE-WRITE-VALID` if its command does not decode under the configured key and value
+    /// limits: the boundary validates every write (F-8, D-80).
     pub fn attempt(
         &mut self,
         view: &mut View<'_>,
@@ -265,18 +266,6 @@ impl WritePath {
         mutation: Mutation,
         effects: &mut Vec<Effect>,
     ) {
-        let put = match &mutation {
-            Mutation::Put { .. } => true,
-            Mutation::Delete { .. } | Mutation::Cas { .. } => false,
-        };
-        invariant!(
-            put,
-            "NODE-WRITE-PUT-ONLY",
-            "node {}: attempt {} is a DELETE or compare-and-swap, which no node admits before \
-             W27 implements its apply",
-            self.node,
-            attempt.get()
-        );
         let command = codec::encode(&Command {
             request_id,
             mutation,

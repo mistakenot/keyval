@@ -46,8 +46,8 @@ impl RequestLifecycle {
 impl Requests for RequestLifecycle {
     /// # Panics
     ///
-    /// The write path's and the read path's invariants, such as `NODE-WRITE-PUT-ONLY` for
-    /// a DELETE or compare-and-swap before W27.
+    /// The write path's and the read path's invariants, such as `NODE-WRITE-VALID` for a
+    /// write whose command does not decode under the configured limits.
     fn attempt(
         &mut self,
         view: &mut View<'_>,

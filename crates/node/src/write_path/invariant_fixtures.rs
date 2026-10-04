@@ -40,18 +40,6 @@ fn on_leader(
 
 #[test]
 #[should_panic(
-    expected = "invariant NODE-WRITE-PUT-ONLY violated: node 1: attempt 1 is a \
-                DELETE or compare-and-swap"
-)]
-fn a_delete_reaching_the_write_path_fires_node_write_put_only() {
-    on_leader("one-voter", 4, |path, view, effects| {
-        let mutation = Mutation::Delete { key: key("k") };
-        path.attempt(view, AttemptId::new(1), request(1), mutation, effects);
-    });
-}
-
-#[test]
-#[should_panic(
     expected = "invariant NODE-WRITE-VALID violated: node 1: attempt 1's command \
                 does not decode under the configured limits"
 )]

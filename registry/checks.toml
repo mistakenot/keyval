@@ -791,15 +791,15 @@ status = "implemented"
 
 [[check]]
 id = "DIFFERENTIAL-DELETE-CAS"
-summary = "planned for W27: the differential test extended to DELETE and compare-and-swap (absent and present DELETE; absent, matching and mismatching CAS; mismatch decided before capacity) against the reference model (T-7, §10.14)"
+summary = "the differential test extended to DELETE and compare-and-swap (T-7, F-3, F-5, DM-3, DM-6, W27.3): on 400 seeded logs mixing PUTs, DELETEs and compare-and-swaps (expecting what the key holds, absence, the next version or an index up to the next entry's) with GETs, empty entries, replays and conflicts under DM-6 quotas, generated with the model, DIFFERENTIAL's harness compares every apply result with its echoed request ID, every GET, the applied index, live counters and committed command bytes after every step, and the final map and request history against the reference model; the logs reach DELETEs of live and absent keys, re-created keys, CASes that create and that swap, mismatches naming a version and naming absence, mismatches whose write would also break DM-6, CASes the quota refuses, replayed deletes and mismatches, conflicts and GETs of deleted keys, each at or above a floor; and five broken variants (capacity checked before the expectation, a CAS applied as a PUT, a DELETE keeping its bytes, a DELETE always reporting existed, a mismatch without its current version) are each caught by their own comparison and shrunk"
 kind = "test_group"
-covers = ["T-7"]
+covers = ["T-7", "F-3", "F-5"]
 api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check DIFFERENTIAL-DELETE-CAS"
-min_cases = 1
-status = "planned"
+min_cases = 7
+status = "implemented"
 
 [[check]]
 id = "DIFFERENTIAL-SCAN"
@@ -935,14 +935,14 @@ status = "implemented"
 
 [[check]]
 id = "NODE-WRITE-PATH"
-summary = "the write path (§7.8, F-7, A-5, DM-7, W14.2), PUT slice: the fixed decision order answers at its first applicable step: recovering on a node that is not Ready, unavailable while stopping, busy past 256 waiting attempts or 16 MiB of their commands even for a known request ID, the original result (replayed) or request_id_conflict from the applied history on any Ready node, attach to a pending same-ID proposal (at most 16 waiters), not_leader naming the believed leader or unavailable with none, history_full at max_log_entries or max_history_bytes (entries named first), busy past max_uncommitted_bytes (exact at the bound, submitted proposals counted, reopening as proposals apply), then propose; a proposal is handed to the library once, even after a queued owner's deadline and a retry or the waiter behind it (br-nxsb); an attempt is submitted when handed to the library and answered only by the application of an entry carrying its request ID: its own command's result, or request_id_conflict at once when another command for the ID applies first, the attempts behind answered from the history, a queued proposal withdrawn and a submitted one's bytes in flight until its copy applies or the leadership is lost (br-evs6); a synchronous drop is busy and attached waiters unknown_outcome; a same-ID attempt with another command waits, then gets request_id_conflict on apply or proposes its own if the proposal failed unapplied; at its deadline a submitted or attached attempt is unknown_outcome and one never proposed busy; leadership loss, a new term or failure answers submitted attempts unknown_outcome and re-decides the rest; shutdown answers unknown_outcome or unavailable; end to end through the controller, a lone leader commits and replays, a replay is answered while a sync is outstanding, a deadline gives unknown_outcome, and a follower redirects to the leader; each NODE-WRITE-* invariant fires on corrupt state"
+summary = "the write path (§7.8, F-7, A-5, DM-7, C-5, W14.2, W27.3), for every write kind: the fixed decision order answers at its first applicable step: recovering on a node that is not Ready, unavailable while stopping, busy past 256 waiting attempts or 16 MiB of their commands even for a known request ID, the original result (replayed) or request_id_conflict from the applied history on any Ready node, attach to a pending same-ID proposal (at most 16 waiters), not_leader naming the believed leader or unavailable with none, history_full at max_log_entries or max_history_bytes (entries named first), busy past max_uncommitted_bytes (exact at the bound, submitted proposals counted, reopening as proposals apply), then propose; a proposal is handed to the library once, even after a queued owner's deadline and a retry or the waiter behind it (br-nxsb); an attempt is submitted when handed to the library and answered only by the application of an entry carrying its request ID: its own command's result, or request_id_conflict at once when another command for the ID applies first, the attempts behind answered from the history, a queued proposal withdrawn and a submitted one's bytes in flight until its copy applies or the leadership is lost (br-evs6); a synchronous drop is busy and attached waiters unknown_outcome; a same-ID attempt with another command waits, then gets request_id_conflict on apply or proposes its own if the proposal failed unapplied; at its deadline a submitted or attached attempt is unknown_outcome and one never proposed busy; leadership loss, a new term or failure answers submitted attempts unknown_outcome and re-decides the rest; shutdown answers unknown_outcome or unavailable; DELETE and compare-and-swap take the same path, proposed exactly as sent and decided only when their entry applies (C-5): a CAS expecting the version an earlier pending PUT will give matches although its key was absent at admission, one expecting absence then mismatches, and their retries replay the original result; end to end through the controller, a lone leader commits and replays PUT, DELETE and compare-and-swap, a replay is answered while a sync is outstanding, a deadline gives unknown_outcome, and a follower redirects to the leader; each NODE-WRITE-* invariant fires on corrupt state"
 kind = "test_group"
-covers = ["F-7", "A-5", "DM-7"]
+covers = ["F-7", "A-5", "DM-7", "C-5"]
 api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check NODE-WRITE-PATH"
-min_cases = 36
+min_cases = 39
 status = "implemented"
 
 [[check]]

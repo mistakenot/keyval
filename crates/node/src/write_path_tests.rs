@@ -9,9 +9,9 @@
 use statemachine::codec::{self, Command};
 use statemachine::{StateLimits, StateMachine};
 use types::{
-    AttemptId, ClientOp, Effect, Entry, EntryIndex, EntryPayload, HistoryLimit, Input, Lifecycle,
-    LogIndex, NodeId, NotReadyLifecycle, ProposeError, Refusal, RequestId, Response, Role,
-    ServedBy, Status, Term, Tick,
+    AttemptId, ClientOp, Decision, Effect, Entry, EntryIndex, EntryPayload, ExpectedVersion,
+    HistoryLimit, Input, Lifecycle, LogIndex, Mutation, NodeId, NotReadyLifecycle, ProposeError,
+    Refusal, RequestId, Response, Role, ServedBy, Status, Term, TerminalResult, Tick, Version,
 };
 
 use crate::deadlines::Deadlines;
@@ -998,6 +998,231 @@ fn the_uncommitted_bound_is_exact_counts_submitted_proposals_and_reopens_on_appl
 }
 
 // ---------------------------------------------------------------------------------------
+// DELETE and compare-and-swap (W27.3, C-5)
+// ---------------------------------------------------------------------------------------
+
+/// A write of `mutation` whose request ID encodes `n`, as [`put_id`]'s does.
+fn write_id(n: u64, mutation: Mutation) -> ClientOp {
+    let mut bytes = [9_u8; 16];
+    bytes[..8].copy_from_slice(&n.to_be_bytes());
+    ClientOp::Write {
+        request_id: RequestId::from_bytes(bytes),
+        mutation,
+    }
+}
+
+fn delete_id(n: u64, k: &str) -> ClientOp {
+    write_id(n, Mutation::Delete { key: key(k) })
+}
+
+fn cas_id(n: u64, k: &str, expected: ExpectedVersion, v: &str) -> ClientOp {
+    write_id(
+        n,
+        Mutation::Cas {
+            key: key(k),
+            expected,
+            value: value(v),
+        },
+    )
+}
+
+fn version(index: u64) -> Version {
+    Version::at(LogIndex::new(index).unwrap()).unwrap()
+}
+
+/// The answer to `attempt`: the entry at `index` decided `decision`.
+fn decided(
+    attempt: u64,
+    index: u64,
+    decision: Decision,
+    replayed: bool,
+    served_by: ServedBy,
+) -> Effect {
+    respond(
+        attempt,
+        Response::Written {
+            result: TerminalResult::executed_at(EntryIndex::new(index).unwrap(), decision),
+            replayed,
+            served_by,
+        },
+    )
+}
+
+/// The node `node` serving with `applied` entries applied.
+fn serving(node: NodeId, applied: u64) -> ServedBy {
+    ServedBy {
+        node,
+        applied: LogIndex::new(applied).unwrap(),
+    }
+}
+
+#[test]
+fn a_delete_and_a_compare_and_swap_are_proposed_as_sent_and_answered_by_their_apply() {
+    let mut bench = Bench::leader("one-voter");
+    let node = bench.node();
+    let ops = [
+        put_id(1, "k", "v"),
+        delete_id(2, "k"),
+        cas_id(3, "k", ExpectedVersion::Version(version(1)), "w"),
+        cas_id(4, "k", ExpectedVersion::Absent, "x"),
+        delete_id(5, "gone"),
+    ];
+    let mut proposed = Vec::new();
+    let mut answers = Vec::new();
+    for (n, op) in (1..).zip(&ops) {
+        assert!(
+            bench.attempt(n, op.clone()).is_empty(),
+            "rule: an admitted write waits, whatever its kind; attempt {n}: {op:?}"
+        );
+        let proposal = bench.submit();
+        proposed.push(proposal.command.clone());
+        answers.extend(bench.apply(proposal.command));
+    }
+    assert_eq!(
+        (proposed, answers),
+        (
+            ops.iter().map(command).collect::<Vec<_>>(),
+            vec![
+                decided(1, 1, Decision::Set, false, serving(node, 1)),
+                decided(
+                    2,
+                    2,
+                    Decision::Deleted { existed: true },
+                    false,
+                    serving(node, 2)
+                ),
+                decided(
+                    3,
+                    3,
+                    Decision::VersionMismatch { current: None },
+                    false,
+                    serving(node, 3)
+                ),
+                decided(4, 4, Decision::Set, false, serving(node, 4)),
+                decided(
+                    5,
+                    5,
+                    Decision::Deleted { existed: false },
+                    false,
+                    serving(node, 5)
+                ),
+            ],
+        ),
+        "rule: a DELETE and a compare-and-swap take the PUT's path: each is proposed as its \
+         canonical command, unchanged, and answered with the terminal result its entry's \
+         application decided (§7.8, F-3, F-5)"
+    );
+}
+
+#[test]
+fn a_compare_and_swap_is_evaluated_when_its_entry_applies_never_at_admission() {
+    // C-5: all four writes are admitted and proposed before any applies. At admission both
+    // keys are absent, so the first CAS would mismatch and the second would match; each is
+    // decided instead by the state when its entry applies, after the PUT ahead of it.
+    let mut bench = Bench::leader("one-voter");
+    let node = bench.node();
+    let ops = [
+        put_id(1, "k", "v"),
+        cas_id(2, "k", ExpectedVersion::Version(version(1)), "w"),
+        put_id(3, "j", "v"),
+        cas_id(4, "j", ExpectedVersion::Absent, "w"),
+    ];
+    for (n, op) in (1..).zip(&ops) {
+        assert!(
+            bench.attempt(n, op.clone()).is_empty(),
+            "rule: a write is admitted without evaluating it (C-5); attempt {n}: {op:?}"
+        );
+    }
+    let proposals: Vec<Proposal> = ops.iter().map(|_| bench.submit()).collect();
+    let answers: Vec<Effect> = proposals
+        .iter()
+        .flat_map(|proposal| bench.apply(proposal.command.clone()))
+        .collect();
+    assert_eq!(
+        (
+            proposals
+                .iter()
+                .map(|proposal| (proposal.attempt.get(), proposal.command.clone()))
+                .collect::<Vec<_>>(),
+            answers,
+            bench
+                .core
+                .state
+                .get(&key("k"))
+                .map(|stored| (stored.value().clone(), stored.version())),
+        ),
+        (
+            (1..).zip(ops.iter().map(command)).collect::<Vec<_>>(),
+            vec![
+                decided(1, 1, Decision::Set, false, serving(node, 1)),
+                decided(2, 2, Decision::Set, false, serving(node, 2)),
+                decided(3, 3, Decision::Set, false, serving(node, 3)),
+                decided(
+                    4,
+                    4,
+                    Decision::VersionMismatch {
+                        current: Some(version(3))
+                    },
+                    false,
+                    serving(node, 4)
+                ),
+            ],
+            Some((value("w"), version(2))),
+        ),
+        "rule: COMPARE_SWAP is evaluated against the key's state when its entry applies, \
+         never at admission (C-5): the CAS expecting the PUT's version matches although the \
+         key was absent when it was admitted, and the CAS expecting absence mismatches \
+         although it would have matched then"
+    );
+}
+
+#[test]
+fn retried_deletes_and_mismatches_are_answered_from_the_history() {
+    let mut bench = Bench::leader("one-voter");
+    let node = bench.node();
+    let ops = [
+        put_id(1, "k", "v"),
+        cas_id(2, "k", ExpectedVersion::Absent, "w"),
+        delete_id(3, "k"),
+    ];
+    for (n, op) in (1..).zip(&ops) {
+        bench.attempt(n, op.clone());
+        let proposal = bench.submit();
+        bench.apply(proposal.command);
+    }
+    // The key is absent now: evaluated afresh, the CAS would match and the DELETE would
+    // report existed = false.
+    assert_eq!(
+        (
+            bench.attempt(12, ops[1].clone()),
+            bench.attempt(13, ops[2].clone()),
+            bench.next_proposal(),
+        ),
+        (
+            vec![decided(
+                12,
+                2,
+                Decision::VersionMismatch {
+                    current: Some(version(1))
+                },
+                true,
+                serving(node, 3)
+            )],
+            vec![decided(
+                13,
+                3,
+                Decision::Deleted { existed: true },
+                true,
+                serving(node, 3)
+            )],
+            None,
+        ),
+        "rule: a retried DELETE or compare-and-swap is answered from the history with its \
+         original terminal result, replayed, and nothing is proposed again (F-6, DM-5)"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
 // End to end, through the controller
 // ---------------------------------------------------------------------------------------
 
@@ -1056,6 +1281,83 @@ fn a_lone_leader_commits_a_put_and_answers_retries_from_its_history() {
         ),
         "rule: the leader proposes the PUT and answers it when it applies; a retry with the \
          same command replays the result, another command is request_id_conflict (F-1, F-6)"
+    );
+}
+
+#[test]
+fn a_lone_leader_commits_a_delete_and_a_compare_and_swap() {
+    let config = config("one-voter");
+    let id = config.voters().next().unwrap();
+    let mut member = Member::fresh_writes(&config, id);
+    member.elect(100);
+    let ops = [
+        put_id(1, "k", "v"),
+        cas_id(2, "k", ExpectedVersion::Absent, "w"),
+        delete_id(3, "k"),
+    ];
+    for (n, op) in (1..).zip(&ops) {
+        member.step(Input::Client {
+            attempt: AttemptId::new(n),
+            op: op.clone(),
+        });
+        while member.complete_sync() {}
+    }
+    let index = |op: &ClientOp| {
+        let ClientOp::Write { request_id, .. } = op else {
+            panic!("fixture: a write");
+        };
+        member
+            .ctl
+            .state()
+            .history()
+            .get(request_id)
+            .unwrap()
+            .first_index()
+            .get()
+    };
+    let [put_at, cas_at, delete_at] = [index(&ops[0]), index(&ops[1]), index(&ops[2])];
+    let answers: Vec<Option<Effect>> = (1..=3)
+        .map(|n| {
+            member
+                .effects
+                .iter()
+                .find(|effect| is_response_to(effect, n))
+                .cloned()
+        })
+        .collect();
+    assert_eq!(
+        (answers, member.ctl.state().get(&key("k")).is_none()),
+        (
+            vec![
+                Some(decided(
+                    1,
+                    put_at,
+                    Decision::Set,
+                    false,
+                    serving(id, put_at)
+                )),
+                Some(decided(
+                    2,
+                    cas_at,
+                    Decision::VersionMismatch {
+                        current: Some(version(put_at))
+                    },
+                    false,
+                    serving(id, cas_at)
+                )),
+                Some(decided(
+                    3,
+                    delete_at,
+                    Decision::Deleted { existed: true },
+                    false,
+                    serving(id, delete_at)
+                )),
+            ],
+            true,
+        ),
+        "rule: through the controller, a lone leader proposes a compare-and-swap and a DELETE \
+         like a PUT and answers each with the result its entry's application decided: a \
+         mismatch naming the live version, then existed = true (F-3, F-5, C-5)"
     );
 }
 

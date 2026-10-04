@@ -3,9 +3,10 @@
 //! result (request ID included), every GET through the state machine's own read path, the
 //! applied index, live-state counters and committed command bytes after every step, and the
 //! final map (in the state machine's own iteration order) and request history must match.
-//! PUT and GET are enforced now; DELETE and compare-and-swap (W27) and SCAN (W28) are
-//! registered `planned` (DIFFERENTIAL-DELETE-CAS, DIFFERENTIAL-SCAN) until the state machine
-//! implements them.
+//! This module's logs hold PUTs, GETs and empty entries. The sibling module
+//! `differential_delete_cas` (W27.3, DIFFERENTIAL-DELETE-CAS) runs the same harness on logs
+//! that also hold DELETEs and compare-and-swaps; SCAN has its own test,
+//! `differential_scan.rs` (W28.2, DIFFERENTIAL-SCAN).
 //!
 //! This is an integration test of `sim`, the one crate allowed to depend on both a domain
 //! crate and an oracle (DEP-RULE): Cargo builds it as its own test crate (§10.14 "a separate
@@ -50,8 +51,9 @@ mod differential {
 
     use statemachine::{Applied, Command, StateLimits, StateMachine, codec};
     use types::{
-        ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, KeyValueLimits,
-        LiveStateLimit, Mutation, NodeId, RequestId, Term, TerminalResult, Value,
+        ByteCount, Decision, Entry, EntryIndex, EntryPayload, ExpectedVersion, ItemCount, Key,
+        KeyValueLimits, LiveStateLimit, LogIndex, Mutation, NodeId, RequestId, Term,
+        TerminalResult, Value, Version,
     };
 
     /// Seeds that once failed, replayed first on every run. Add the seed a failure names,
@@ -95,7 +97,7 @@ mod differential {
         ]
     });
 
-    fn keys() -> &'static [String; 8] {
+    pub fn keys() -> &'static [String; 8] {
         &KEYS
     }
 
@@ -117,7 +119,7 @@ mod differential {
         ]
     });
 
-    fn values() -> &'static [String; 6] {
+    pub fn values() -> &'static [String; 6] {
         &VALUES
     }
 
@@ -131,7 +133,7 @@ mod differential {
     /// refusals of both kinds are common, and one wide enough for two maximum-size values.
     /// In every profile, both the byte quota and one byte more are totals the keys and values
     /// can reach, so a byte quota one too loose is observable whichever profile a log draws.
-    const PROFILES: [(u64, u64); 5] = [(3, 520), (3, 4), (2, 300), (1, 11), (4, 131_585)];
+    pub const PROFILES: [(u64, u64); 5] = [(3, 520), (3, 4), (2, 300), (1, 11), (4, 131_585)];
 
     /// Whether DM-6 admits a write that leaves its key holding `grown` bytes (key and value),
     /// where the key holds `held` bytes now (`None` if absent), under `quota` and the live
@@ -139,7 +141,7 @@ mod differential {
     /// bytes beyond `max_live_bytes` (§7.5 step 4). A plain `<= max_live_bytes` matches the
     /// plan's "grow bytes beyond" because the live bytes never exceed the quota. A live total
     /// below what the key holds (a broken counter) admits nothing.
-    fn admits(quota: (u64, u64), live: (u64, u64), held: Option<u64>, grown: u64) -> bool {
+    pub fn admits(quota: (u64, u64), live: (u64, u64), held: Option<u64>, grown: u64) -> bool {
         let ((max_keys, max_bytes), (live_keys, live_bytes)) = (quota, live);
         (held.is_some() || live_keys < max_keys)
             && live_bytes
@@ -148,46 +150,73 @@ mod differential {
     }
 
     /// The bytes a key and value take together (DM-6).
-    fn entry_bytes(key: u8, value: u8) -> u64 {
+    pub fn entry_bytes(key: u8, value: u8) -> u64 {
         u64::try_from(keys()[usize::from(key)].len() + values()[usize::from(value)].len()).unwrap()
     }
 
-    /// One generated step.
+    /// One generated step. This module's generator makes PUTs, GETs and empty entries only;
+    /// `differential_delete_cas`'s makes all five.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Step {
+    pub enum Step {
         /// An empty entry: a new leader's no-op.
         Empty,
         /// A PUT entry: request number `request` sets key `key` to value `value`.
         Put { request: u16, key: u8, value: u8 },
+        /// A DELETE entry: request number `request` deletes key `key` (W27.3).
+        Delete { request: u16, key: u8 },
+        /// A compare-and-swap entry: request number `request` sets key `key` to value `value`
+        /// if the key is as `expected` when the entry applies (W27.3).
+        Cas {
+            request: u16,
+            key: u8,
+            expected: Expect,
+            value: u8,
+        },
         /// A GET of key `key` between entries.
         Get { key: u8 },
     }
 
+    /// A compare-and-swap's expectation (F-5): the key absent, or at version `At(v)`, `v >= 1`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Expect {
+        Absent,
+        At(u64),
+    }
+
+    impl Step {
+        /// The request number of a write step.
+        pub const fn request(self) -> Option<u16> {
+            match self {
+                Self::Put { request, .. }
+                | Self::Delete { request, .. }
+                | Self::Cas { request, .. } => Some(request),
+                Self::Empty | Self::Get { .. } => None,
+            }
+        }
+    }
+
     /// A generated log: its quota profile and its steps.
     #[derive(Clone, Debug, PartialEq, Eq)]
-    struct Log {
-        profile: usize,
-        steps: Vec<Step>,
+    pub struct Log {
+        pub profile: usize,
+        pub steps: Vec<Step>,
     }
 
     impl Log {
-        /// The request numbers the log's PUTs use.
+        /// The request numbers the log's writes use.
         fn requests(&self) -> BTreeSet<u16> {
             self.steps
                 .iter()
-                .filter_map(|step| match step {
-                    Step::Put { request, .. } => Some(*request),
-                    Step::Empty | Step::Get { .. } => None,
-                })
+                .filter_map(|step| step.request())
                 .collect()
         }
     }
 
     /// The `SplitMix64` generator: deterministic, seeded, no RNG crate.
-    struct SplitMix64(u64);
+    pub struct SplitMix64(pub u64);
 
     impl SplitMix64 {
-        const fn next(&mut self) -> u64 {
+        pub const fn next(&mut self) -> u64 {
             self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = self.0;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -195,11 +224,11 @@ mod differential {
             z ^ (z >> 31)
         }
 
-        fn below(&mut self, bound: usize) -> usize {
+        pub fn below(&mut self, bound: usize) -> usize {
             usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
         }
 
-        fn byte_below(&mut self, bound: usize) -> u8 {
+        pub fn byte_below(&mut self, bound: usize) -> u8 {
             u8::try_from(self.below(bound)).unwrap()
         }
     }
@@ -306,13 +335,7 @@ mod differential {
                 .copied()
                 .filter(|step| matches!(step, Step::Put { .. }))
                 .collect();
-            let used: Vec<u16> = steps
-                .iter()
-                .filter_map(|step| match step {
-                    Step::Put { request, .. } => Some(*request),
-                    Step::Empty | Step::Get { .. } => None,
-                })
-                .collect();
+            let used: Vec<u16> = steps.iter().filter_map(|step| step.request()).collect();
             let key = rng.byte_below(keys().len());
             let value = rng.byte_below(values().len());
             let fitting = follower.fitting();
@@ -350,7 +373,7 @@ mod differential {
     }
 
     /// The request ID numbered `request`: its number, then filler.
-    fn request_bytes(request: u16) -> [u8; 16] {
+    pub fn request_bytes(request: u16) -> [u8; 16] {
         let mut bytes = [FILLER; 16];
         bytes[..2].copy_from_slice(&request.to_be_bytes());
         bytes
@@ -374,24 +397,52 @@ mod differential {
         }
     }
 
-    /// The canonical encoded length of a PUT step's command (the production codec's), as the
-    /// committed-command-bytes counter adds it on a first execution (§7.5, DM-7).
-    fn encoded_len(step: Step) -> u64 {
-        match step {
-            Step::Put {
-                request,
+    /// The state machine's command for a write step, under request ID `sent`.
+    fn write_command(step: Step, sent: [u8; 16]) -> Option<Command> {
+        let parsed = |key: u8| Key::parse(keys()[usize::from(key)].clone(), KeyValueLimits::MAXIMA);
+        let mutation = match step {
+            Step::Put { key, value, .. } => return Some(command(key, value, sent)),
+            Step::Delete { key, .. } => Mutation::Delete {
+                key: parsed(key).unwrap(),
+            },
+            Step::Cas {
                 key,
+                expected,
                 value,
-            } => u64::try_from(codec::encode(&command(key, value, request_bytes(request))).len())
-                .unwrap(),
-            Step::Empty | Step::Get { .. } => 0,
-        }
+                ..
+            } => Mutation::Cas {
+                key: parsed(key).unwrap(),
+                expected: match expected {
+                    Expect::Absent => ExpectedVersion::Absent,
+                    Expect::At(version) => ExpectedVersion::Version(
+                        Version::at(LogIndex::new(version).unwrap()).unwrap(),
+                    ),
+                },
+                value: Value::parse(values()[usize::from(value)].clone(), KeyValueLimits::MAXIMA)
+                    .unwrap(),
+            },
+            Step::Empty | Step::Get { .. } => return None,
+        };
+        Some(Command {
+            request_id: RequestId::from_bytes(sent),
+            mutation,
+        })
+    }
+
+    /// The canonical encoded length of a write step's command (the production codec's), as
+    /// the committed-command-bytes counter adds it on a first execution (§7.5, DM-7).
+    fn encoded_len(step: Step) -> u64 {
+        step.request()
+            .and_then(|request| write_command(step, request_bytes(request)))
+            .map_or(0, |command| {
+                u64::try_from(codec::encode(&command).len()).unwrap()
+            })
     }
 
     /// A decision, comparable across the two implementations: a PUT's version, DELETE's
     /// `existed`, a mismatch's current version, or the refusing limit's name.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Dec {
+    pub enum Dec {
         Set(u64),
         Deleted(bool),
         Mismatch(Option<u64>),
@@ -410,7 +461,7 @@ mod differential {
 
     /// The comparison that found a divergence.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Path {
+    pub enum Path {
         /// An entry's apply result.
         Apply,
         /// A GET between entries.
@@ -429,10 +480,10 @@ mod differential {
 
     /// The first point where the two implementations disagree, or where one panicked.
     #[derive(Debug)]
-    struct Divergence {
-        step: usize,
-        path: Path,
-        what: String,
+    pub struct Divergence {
+        pub step: usize,
+        pub path: Path,
+        pub what: String,
     }
 
     impl fmt::Display for Divergence {
@@ -472,7 +523,7 @@ mod differential {
     /// Outcomes a run reached, so a run that never refuses, replays or meets a boundary
     /// cannot pass as evidence (P10).
     #[derive(Clone, Copy, Debug, Default)]
-    struct Coverage {
+    pub struct Coverage {
         empty: u64,
         set: u64,
         overwrite: u64,
@@ -607,7 +658,7 @@ mod differential {
 
     /// The broken variants a differential test must catch, and `None`, the real thing.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Mutant {
+    pub enum Mutant {
         None,
         LooseKeyQuota,
         LooseByteQuota,
@@ -622,6 +673,18 @@ mod differential {
         ReversedMap,
         StoredResultOffByOne,
         PhantomHistoryId,
+        /// DELETE and CAS (W27.3, `differential_delete_cas`): a CAS whose expectation fails
+        /// reports the DM-6 refusal its write would also have met, as if capacity were checked
+        /// first.
+        CapacityBeforeMismatch,
+        /// A CAS applied as a PUT: its expectation is never checked.
+        CasAsPut,
+        /// A DELETE that does not reclaim the bytes it frees.
+        DeleteKeepsBytes,
+        /// A DELETE that always reports `existed = true`.
+        ExistedAlwaysTrue,
+        /// A mismatch that never names the current version.
+        MismatchWithoutCurrent,
     }
 
     fn decision(result: TerminalResult) -> Dec {
@@ -654,6 +717,9 @@ mod differential {
         leaked: u64,
         /// Replayed command bytes a machine that counts replays adds to the committed bytes.
         replayed_bytes: u64,
+        /// The DM-6 limit the last CAS's write would have met, which a machine checking
+        /// capacity before the expectation reports.
+        refusal: Option<&'static str>,
     }
 
     impl Machine {
@@ -672,6 +738,7 @@ mod differential {
                 wrong: 0,
                 leaked: 0,
                 replayed_bytes: 0,
+                refusal: None,
             }
         }
 
@@ -702,6 +769,17 @@ mod differential {
             admits(self.quota, live, self.holding(key), entry_bytes(key, value))
         }
 
+        /// The DM-6 limit setting `key` to `value` would now meet, keys first (§7.5 step 4).
+        fn refusal(&self, key: u8, value: u8) -> Option<&'static str> {
+            if self.holding(key).is_none() && self.state.live_keys().get() >= self.quota.0 {
+                Some("max_live_keys")
+            } else if self.fits(key, value) {
+                None
+            } else {
+                Some("max_live_bytes")
+            }
+        }
+
         /// Applies one entry. The state machine must echo the request ID it was sent.
         fn apply(&mut self, index: u64, step: Step) -> Result<Outcome, String> {
             if self.mutant == Mutant::StaleGet {
@@ -726,6 +804,39 @@ mod differential {
                         before,
                     )
                 }
+                Step::Delete { request, key } => {
+                    let sent = self.request(request);
+                    let held = (self.mutant == Mutant::DeleteKeepsBytes)
+                        .then(|| self.holding(key))
+                        .flatten();
+                    let command = write_command(step, sent).unwrap();
+                    (
+                        EntryPayload::Command(codec::encode(&command)),
+                        Some((sent, request)),
+                        (held, false),
+                    )
+                }
+                Step::Cas {
+                    request,
+                    key,
+                    value,
+                    ..
+                } => {
+                    let sent = self.request(request);
+                    self.refusal = (self.mutant == Mutant::CapacityBeforeMismatch)
+                        .then(|| self.refusal(key, value))
+                        .flatten();
+                    let command = if self.mutant == Mutant::CasAsPut {
+                        command(key, value, sent)
+                    } else {
+                        write_command(step, sent).unwrap()
+                    };
+                    (
+                        EntryPayload::Command(codec::encode(&command)),
+                        Some((sent, request)),
+                        (None, false),
+                    )
+                }
                 Step::Empty | Step::Get { .. } => (EntryPayload::Empty, None, (None, false)),
             };
             let entry = Entry {
@@ -738,6 +849,11 @@ mod differential {
             match &applied {
                 Applied::Executed { result, .. } if self.mutant == Mutant::BytesNotReclaimed => {
                     if result.decision() == Decision::Set {
+                        self.leaked += held.unwrap_or(0);
+                    }
+                }
+                Applied::Executed { result, .. } if self.mutant == Mutant::DeleteKeepsBytes => {
+                    if result.decision() == (Decision::Deleted { existed: true }) {
                         self.leaked += held.unwrap_or(0);
                     }
                 }
@@ -787,12 +903,21 @@ mod differential {
                 Dec::Set(version) => Dec::Set(version + self.result_shift()),
                 Dec::Deleted(_) | Dec::Mismatch(_) | Dec::Capacity(_) => decision,
             };
+            // What the DELETE and CAS mutants' apply decides instead (W27.3).
+            let decide = |decision: Dec| match (self.mutant, decision) {
+                (Mutant::CapacityBeforeMismatch, Dec::Mismatch(_)) => {
+                    self.refusal.map_or(decision, Dec::Capacity)
+                }
+                (Mutant::ExistedAlwaysTrue, Dec::Deleted(_)) => Dec::Deleted(true),
+                (Mutant::MismatchWithoutCurrent, Dec::Mismatch(_)) => Dec::Mismatch(None),
+                _ => decision,
+            };
             Ok(match *applied {
                 Applied::Empty => Outcome::Empty,
                 Applied::Executed { request_id, result } => Outcome::Executed(
                     echoed(request_id)?,
                     result.index().get(),
-                    shift(decision(result)),
+                    decide(shift(decision(result))),
                 ),
                 Applied::Replayed { request_id, result } => {
                     let replayed = (
@@ -890,11 +1015,11 @@ mod differential {
         }
     }
 
-    fn model_key(key: u8) -> model::Key {
+    pub fn model_key(key: u8) -> model::Key {
         model::Key::new(keys()[usize::from(key)].clone()).unwrap()
     }
 
-    fn model_decision(decision: model::Decision) -> Dec {
+    pub fn model_decision(decision: model::Decision) -> Dec {
         match decision {
             model::Decision::Set { version } => Dec::Set(version.get()),
             model::Decision::Deleted { existed } => Dec::Deleted(existed),
@@ -944,18 +1069,40 @@ mod differential {
         }
     }
 
-    fn model_entry(step: Step) -> model::Entry {
-        match step {
+    pub fn model_entry(step: Step) -> model::Entry {
+        let op = match step {
             Step::Put {
                 request,
                 key,
                 value,
-            } => model::Entry::Command(model_command(request, key, value)),
-            Step::Empty | Step::Get { .. } => model::Entry::Empty,
-        }
+            } => return model::Entry::Command(model_command(request, key, value)),
+            Step::Delete { key, .. } => model::Op::Delete {
+                key: model_key(key),
+            },
+            Step::Cas {
+                key,
+                expected,
+                value,
+                ..
+            } => model::Op::Cas {
+                key: model_key(key),
+                expected: match expected {
+                    Expect::Absent => model::Expected::Absent,
+                    Expect::At(version) => {
+                        model::Expected::Version(model::Version::new(version).unwrap())
+                    }
+                },
+                value: model::Value::new(values()[usize::from(value)].clone()).unwrap(),
+            },
+            Step::Empty | Step::Get { .. } => return model::Entry::Empty,
+        };
+        model::Entry::Command(model::Command {
+            request_id: model::RequestId::from_bytes(request_bytes(step.request().unwrap())),
+            op,
+        })
     }
 
-    fn model_limits(profile: usize) -> model::Limits {
+    pub fn model_limits(profile: usize) -> model::Limits {
         let (keys, bytes) = PROFILES[profile];
         model::Limits::new(model::MAX_KEY_BYTES, model::MAX_VALUE_BYTES, keys, bytes).unwrap()
     }
@@ -1235,7 +1382,7 @@ mod differential {
 
     /// [`run`], with a panic on either side (a broken invariant, an overflow) reported as a
     /// divergence, so it keeps its seed and log and can be shrunk.
-    fn guarded(log: &Log, mutant: Mutant) -> Result<Coverage, Divergence> {
+    pub fn guarded(log: &Log, mutant: Mutant) -> Result<Coverage, Divergence> {
         panic::catch_unwind(AssertUnwindSafe(|| run(log, mutant))).unwrap_or_else(|payload| {
             let message = payload
                 .downcast_ref::<String>()
@@ -1251,7 +1398,7 @@ mod differential {
     }
 
     /// The smallest log the delta-debugging pass finds that still diverges.
-    fn shrink(log: &Log, mutant: Mutant) -> Log {
+    pub fn shrink(log: &Log, mutant: Mutant) -> Log {
         let mut current = log.clone();
         let mut chunk = (current.steps.len() / 2).max(1);
         loop {
@@ -1461,5 +1608,370 @@ mod differential {
     #[test]
     fn a_request_id_no_command_carried_is_caught() {
         assert_caught(Mutant::PhantomHistoryId, Path::UnknownIds, 1);
+    }
+}
+
+/// Differential property tests of DELETE and compare-and-swap (PLAN.md §10.14 use 2, T-7, F-3,
+/// F-5, DM-3, DM-6; W27.3). They run [`differential`]'s harness (the same machine wrapper,
+/// comparisons, panic guard and shrinker) on seeded logs that mix PUTs, DELETEs and
+/// compare-and-swaps with GETs, empty entries, replays and conflicts. Every apply result, every
+/// GET, the counters after every step, and the final map and request history must agree with
+/// the reference model.
+///
+/// The generator follows each log with the model, so a CAS can expect what its key holds (a
+/// match) or absence, the next version or an index up to the next entry's (mostly mismatches).
+/// The tight quota profiles make mismatching CASes whose write would also break DM-6 common,
+/// so §7.5 step 4's order, mismatch strictly before capacity, is exercised. Each outcome is
+/// counted against a floor (P10).
+///
+/// Five test-local mutants around the real state machine are each caught by their own
+/// comparison:
+/// - capacity checked before the expectation;
+/// - a CAS applied as a PUT;
+/// - a DELETE that keeps its bytes;
+/// - a DELETE that always existed;
+/// - a mismatch without its current version.
+mod differential_delete_cas {
+    // check: DIFFERENTIAL-DELETE-CAS
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::differential::{
+        Divergence, Expect, Log, Mutant, PROFILES, Path, SplitMix64, Step, admits, entry_bytes,
+        guarded, keys, model_entry, model_key, model_limits, shrink, values,
+    };
+
+    /// Seeds that once failed, replayed first on every run. Add the seed a failure names,
+    /// with the shrunk log it printed as a comment, in the commit that fixes it.
+    const REGRESSION_SEEDS: &[u64] = &[];
+
+    /// Random seeds per run, after the regression seeds.
+    const SEEDS: u64 = 400;
+
+    /// Steps per generated log.
+    const STEPS: usize = 64;
+
+    /// The re-run command a failure of the main property prints.
+    const RERUN: &str = "./dev check DIFFERENTIAL-DELETE-CAS --case \
+                         differential_delete_cas::deletes_and_cas_match_the_model_on_seeded_logs";
+
+    /// The re-run command a failure of the coverage floors prints.
+    const RERUN_COVERAGE: &str = "./dev check DIFFERENTIAL-DELETE-CAS --case \
+                                  differential_delete_cas::the_generated_logs_reach_every_delete_and_cas_outcome";
+
+    /// The floor of each outcome count over [`SEEDS`] seeds, by name: roughly a quarter of
+    /// what the generator reached when the floor was set (the measured count beside it), so a
+    /// generator change that starves an outcome fails.
+    const FLOORS: [(&str, u64); 13] = [
+        ("deleted", 265),             // measured 1060
+        ("deleted_absent", 1000),     // measured 4012
+        ("re_created", 85),           // measured 356
+        ("cas_created", 250),         // measured 1000
+        ("cas_swapped", 90),          // measured 363
+        ("mismatch_live", 320),       // measured 1282
+        ("mismatch_absent", 840),     // measured 3368
+        ("mismatch_over_quota", 645), // measured 2591
+        ("cas_refused", 620),         // measured 2482
+        ("replayed_delete", 180),     // measured 718
+        ("replayed_mismatch", 160),   // measured 640
+        ("conflict", 420),            // measured 1696
+        ("get_deleted", 80),          // measured 330
+    ];
+
+    /// The version key `key` holds in `model`, if it is live.
+    fn current(model: &model::Model, key: u8) -> Option<u64> {
+        model
+            .get(&model_key(key))
+            .unwrap()
+            .map(|(_, version)| version.get())
+    }
+
+    /// Whether DM-6 would admit setting `key` to `value` in `model`'s state (§7.5 step 4).
+    fn fits(profile: usize, model: &model::Model, key: u8, value: u8) -> bool {
+        let held = model.get(&model_key(key)).unwrap().map(|(held, _)| {
+            u64::try_from(keys()[usize::from(key)].len() + held.as_str().len()).unwrap()
+        });
+        let live = (model.live_keys(), model.live_bytes());
+        admits(PROFILES[profile], live, held, entry_bytes(key, value))
+    }
+
+    /// An expectation for a CAS of `key`: what the key holds (so it matches), absence, the
+    /// version after the one it holds, or any index up to the next entry's (mostly stale).
+    fn expectation(rng: &mut SplitMix64, key: u8, model: &model::Model) -> Expect {
+        let current = current(model, key);
+        match rng.below(4) {
+            0 => current.map_or(Expect::Absent, Expect::At),
+            1 => Expect::Absent,
+            2 => Expect::At(current.map_or(1, |version| version + 1)),
+            _ => Expect::At(1 + rng.next() % (model.applied_index() + 1)),
+        }
+    }
+
+    /// A write under request number `request`: three in ten DELETEs, half compare-and-swaps,
+    /// the rest PUTs.
+    fn write(rng: &mut SplitMix64, request: u16, key: u8, value: u8, model: &model::Model) -> Step {
+        match rng.below(10) {
+            0..=2 => Step::Delete { request, key },
+            3..=7 => Step::Cas {
+                request,
+                key,
+                expected: expectation(rng, key, model),
+                value,
+            },
+            _ => Step::Put {
+                request,
+                key,
+                value,
+            },
+        }
+    }
+
+    /// The log for `seed`: empty entries, GETs, exact repeats of an earlier write (replays),
+    /// earlier request IDs with another write (conflicts), and writes under fresh request IDs.
+    /// The model follows the log as it is generated, so a CAS can expect what its key holds.
+    fn generate(seed: u64) -> Log {
+        let mut rng = SplitMix64(seed);
+        let profile = rng.below(PROFILES.len());
+        let mut model = model::Model::new(model_limits(profile));
+        let mut steps: Vec<Step> = Vec::with_capacity(STEPS);
+        let mut fresh: u16 = 0;
+        while steps.len() < STEPS {
+            let roll = rng.below(100);
+            let key = rng.byte_below(keys().len());
+            let value = rng.byte_below(values().len());
+            let writes: Vec<Step> = steps
+                .iter()
+                .copied()
+                .filter(|step| step.request().is_some())
+                .collect();
+            let step = if roll < 6 {
+                Step::Empty
+            } else if roll < 18 {
+                Step::Get { key }
+            } else if roll < 28 && !writes.is_empty() {
+                writes[rng.below(writes.len())]
+            } else if roll < 34 && !writes.is_empty() {
+                let request = writes[rng.below(writes.len())].request().unwrap();
+                write(&mut rng, request, key, value, &model)
+            } else {
+                fresh += 1;
+                write(&mut rng, fresh, key, value, &model)
+            };
+            if !matches!(step, Step::Get { .. }) {
+                let index = model::Index::new(model.applied_index() + 1).unwrap();
+                model
+                    .apply(index, &model_entry(step))
+                    .unwrap_or_else(|error| {
+                        panic!("test setup: the generator's model applies {step:?}: {error}")
+                    });
+            }
+            steps.push(step);
+        }
+        Log { profile, steps }
+    }
+
+    /// The DELETE and CAS outcomes `log` reaches, by name, judged by the model alone (the
+    /// state machine agrees on every log they are counted over).
+    fn tally(log: &Log) -> BTreeMap<&'static str, u64> {
+        let mut model = model::Model::new(model_limits(log.profile));
+        let mut tally: BTreeMap<&'static str, u64> = BTreeMap::new();
+        let mut deleted: BTreeSet<u8> = BTreeSet::new();
+        for step in log.steps.iter().copied() {
+            let mut reached = |name: &'static str| *tally.entry(name).or_insert(0) += 1;
+            let (key, value, cas) = match step {
+                Step::Get { key } => {
+                    if deleted.contains(&key) && current(&model, key).is_none() {
+                        reached("get_deleted");
+                    }
+                    continue;
+                }
+                Step::Empty => (0, 0, None),
+                Step::Put { key, value, .. } => (key, value, None),
+                Step::Delete { key, .. } => (key, 0, None),
+                Step::Cas {
+                    key,
+                    expected,
+                    value,
+                    ..
+                } => (key, value, Some(expected)),
+            };
+            let fit = fits(log.profile, &model, key, value);
+            let index = model::Index::new(model.applied_index() + 1).unwrap();
+            match model.apply(index, &model_entry(step)).unwrap() {
+                model::Applied::Empty => {}
+                model::Applied::Executed(result) => match result.decision {
+                    model::Decision::Deleted { existed: true } => {
+                        reached("deleted");
+                        deleted.insert(key);
+                    }
+                    model::Decision::Deleted { existed: false } => reached("deleted_absent"),
+                    model::Decision::Set { .. } => {
+                        if deleted.remove(&key) {
+                            reached("re_created");
+                        }
+                        match cas {
+                            Some(Expect::Absent) => reached("cas_created"),
+                            Some(Expect::At(_)) => reached("cas_swapped"),
+                            None => {}
+                        }
+                    }
+                    model::Decision::VersionMismatch { current } => {
+                        reached(if current.is_some() {
+                            "mismatch_live"
+                        } else {
+                            "mismatch_absent"
+                        });
+                        if !fit {
+                            reached("mismatch_over_quota");
+                        }
+                    }
+                    model::Decision::CapacityExceeded { .. } => {
+                        if cas.is_some() {
+                            reached("cas_refused");
+                        }
+                    }
+                },
+                model::Applied::Replayed(result) => match result.decision {
+                    model::Decision::Deleted { .. } => reached("replayed_delete"),
+                    model::Decision::VersionMismatch { .. } => reached("replayed_mismatch"),
+                    model::Decision::Set { .. } | model::Decision::CapacityExceeded { .. } => {}
+                },
+                model::Applied::Conflict { .. } => reached("conflict"),
+            }
+        }
+        tally
+    }
+
+    /// The exact command that re-runs the current test: libtest names each test's thread after
+    /// the test.
+    fn rerun() -> String {
+        format!(
+            "./dev check DIFFERENTIAL-DELETE-CAS --case {}",
+            std::thread::current()
+                .name()
+                .unwrap_or("differential_delete_cas")
+        )
+    }
+
+    /// The first seed on which `mutant` diverges, with its shrunk log and that log's
+    /// divergence. The shrunk log passes on the real state machine, so the mutation, not the
+    /// log, is what fails.
+    fn caught(mutant: Mutant) -> (u64, Log, Divergence) {
+        for seed in 0..SEEDS {
+            let log = generate(seed);
+            if guarded(&log, mutant).is_err() {
+                let shrunk = shrink(&log, mutant);
+                let divergence = guarded(&shrunk, mutant).unwrap_err();
+                let control = guarded(&shrunk, Mutant::None);
+                assert!(
+                    control.is_ok(),
+                    "rule: a mutant's shrunk log passes on the real state machine; mutant \
+                     {mutant:?} seed {seed}: shrunk log {:?} (profile {}) also fails unmutated: \
+                     {:?}",
+                    shrunk.steps,
+                    shrunk.profile,
+                    control.err()
+                );
+                return (seed, shrunk, divergence);
+            }
+        }
+        panic!(
+            "rule: a deliberately broken state machine fails the differential test (W27.3); \
+             mutant {mutant:?} survived seeds 0..{SEEDS}; re-run: {}",
+            rerun()
+        )
+    }
+
+    /// `mutant` is caught by the comparison `path`, and its shrunk log is small enough to read.
+    fn assert_caught(mutant: Mutant, path: Path, most_steps: usize) {
+        let (seed, shrunk, divergence) = caught(mutant);
+        assert!(
+            divergence.path == path && !shrunk.steps.is_empty() && shrunk.steps.len() <= most_steps,
+            "rule: a broken state machine is caught by its own comparison, {path:?}, and shrinks \
+             to at most {most_steps} steps; mutant {mutant:?} seed {seed}: {divergence}; shrunk \
+             to {} steps {:?} (profile {}); re-run: {}",
+            shrunk.steps.len(),
+            shrunk.steps,
+            shrunk.profile,
+            rerun()
+        );
+    }
+
+    #[test]
+    fn deletes_and_cas_match_the_model_on_seeded_logs() {
+        for seed in REGRESSION_SEEDS.iter().copied().chain(0..SEEDS) {
+            let log = generate(seed);
+            if let Err(divergence) = guarded(&log, Mutant::None) {
+                let shrunk = shrink(&log, Mutant::None);
+                let shrunk_divergence = guarded(&shrunk, Mutant::None).unwrap_err();
+                panic!(
+                    "rule: the state machine matches the reference model on random sequences of \
+                     PUT, DELETE and compare-and-swap (§10.14, T-7, F-3, F-5); seed {seed}: \
+                     {divergence}; shrunk log {:?} (profile {}) fails {shrunk_divergence}; \
+                     re-run: {RERUN}; add the seed to REGRESSION_SEEDS with the fix",
+                    shrunk.steps, shrunk.profile
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_generated_logs_reach_every_delete_and_cas_outcome() {
+        let mut total: BTreeMap<&str, u64> = BTreeMap::new();
+        for seed in 0..SEEDS {
+            let log = generate(seed);
+            if let Err(divergence) = guarded(&log, Mutant::None) {
+                panic!(
+                    "rule: outcomes are counted only over passing logs, and seed {seed} fails: \
+                     {divergence}; re-run: {RERUN_COVERAGE}"
+                );
+            }
+            for (name, count) in tally(&log) {
+                *total.entry(name).or_insert(0) += count;
+            }
+        }
+        let unfloored: Vec<&str> = total
+            .keys()
+            .copied()
+            .filter(|name| FLOORS.iter().all(|(floored, _)| floored != name))
+            .collect();
+        let short: Vec<(&str, u64, u64)> = FLOORS
+            .iter()
+            .map(|(name, floor)| (*name, total.get(name).copied().unwrap_or(0), *floor))
+            .filter(|(_, count, floor)| count < floor)
+            .collect();
+        assert!(
+            unfloored.is_empty() && short.is_empty(),
+            "rule: the generated logs reach DELETEs of live and absent keys, re-created keys, \
+             CASes that create and that swap, mismatches naming a version and naming absence, \
+             mismatches whose write would also break DM-6, CASes the quota refuses, replayed \
+             deletes and mismatches, conflicts and GETs of deleted keys, each at least its \
+             floor, so a pass is not vacuous (P10); below floor (name, count, floor): {short:?}; \
+             counts without a floor: {unfloored:?}; tally={total:?}; re-run: {RERUN_COVERAGE}"
+        );
+    }
+
+    #[test]
+    fn capacity_checked_before_the_expectation_is_caught() {
+        assert_caught(Mutant::CapacityBeforeMismatch, Path::Apply, 4);
+    }
+
+    #[test]
+    fn a_cas_applied_as_a_put_is_caught() {
+        assert_caught(Mutant::CasAsPut, Path::Apply, 2);
+    }
+
+    #[test]
+    fn a_delete_that_keeps_its_bytes_is_caught() {
+        assert_caught(Mutant::DeleteKeepsBytes, Path::Counters, 2);
+    }
+
+    #[test]
+    fn a_delete_that_always_existed_is_caught() {
+        assert_caught(Mutant::ExistedAlwaysTrue, Path::Apply, 1);
+    }
+
+    #[test]
+    fn a_mismatch_without_its_current_version_is_caught() {
+        assert_caught(Mutant::MismatchWithoutCurrent, Path::Apply, 2);
     }
 }
