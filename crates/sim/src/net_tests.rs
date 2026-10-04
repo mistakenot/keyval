@@ -16,7 +16,7 @@ use crate::net::{
     QueueBound,
 };
 use crate::scheduler::{EventBudget, VirtualTime};
-use crate::trace::{ClientId, Endpoint, ObservationBound, PacketFate, Record, Trace};
+use crate::trace::{ClientId, Endpoint, ObservationBound, PacketCopy, PacketFate, Record, Trace};
 
 fn node(id: u64) -> Endpoint {
     Endpoint::Node(NodeId::new(id).unwrap())
@@ -169,7 +169,16 @@ fn loss_follows_its_probability_on_each_path() {
 fn fate(record: &Record) -> PacketFate {
     match record {
         Record::Packet { fate, .. } => *fate,
-        other => panic!("fixture: not a packet record: {other:?}"),
+        Record::Disk { .. }
+        | Record::Role { .. }
+        | Record::Log { .. }
+        | Record::Commit { .. }
+        | Record::Applied { .. }
+        | Record::Journal { .. }
+        | Record::Invoked { .. }
+        | Record::Responded { .. }
+        | Record::FirstExecution { .. }
+        | Record::Verdict { .. } => panic!("fixture: not a packet record: {record:?}"),
     }
 }
 
@@ -304,15 +313,17 @@ fn a_cut_also_drops_traffic_already_in_flight() {
         .unwrap();
     net.links_mut().cut(id(1), id(2));
     let (_, packet) = sent.arrivals.pop().unwrap();
-    assert!(
-        matches!(
-            net.arrive(packet),
-            Arrival::Dropped(Record::Packet {
-                fate: PacketFate::Dropped(DropReason::CutInFlight),
-                ..
-            })
-        ),
-        "rule: a partition catches a packet in flight across it"
+    assert_eq!(
+        net.arrive(packet),
+        Arrival::Dropped(Record::Packet {
+            fate: PacketFate::Dropped(DropReason::CutInFlight),
+            copy: PacketCopy::Original,
+            from: node(1),
+            to: node(2),
+            bytes: b"in flight".to_vec(),
+        }),
+        "rule: a partition catches a packet in flight across it, traced with its endpoints and \
+         bytes"
     );
     assert_eq!(net.counts().cut_in_flight, 1, "rule: and counts it");
     assert_eq!(
@@ -374,7 +385,14 @@ fn a_full_link_queue_drops_and_counts_and_never_grows() {
         "rule: each directed link has its own queue"
     );
     let (_, first) = arrivals.remove(0);
-    assert!(matches!(net.arrive(first), Arrival::Delivered(..)));
+    let Arrival::Delivered(delivery, _) = net.arrive(first) else {
+        panic!("rule: the first queued packet is delivered");
+    };
+    assert_eq!(
+        (delivery.from, delivery.to),
+        (node(1), node(2)),
+        "rule: it is delivered on its own link"
+    );
     let room = net
         .send(VirtualTime::ZERO, node(1), node(2), &[0; 10])
         .unwrap();
@@ -707,4 +725,213 @@ fn real_sealed_peer_envelopes_cross_the_network_unchanged() {
         Ok(message),
         "rule: the destination opens the production envelope (§8.2, P3)"
     );
+}
+
+/// A network whose peer links are `peer` and client paths `client`, with link queues of
+/// `messages` packets and `bytes` bytes.
+fn queued(peer: LinkProfile, client: LinkProfile, messages: u64, bytes: u64) -> Network {
+    Network::new(
+        NetConfig {
+            peer,
+            client,
+            queue: QueueBound {
+                messages: ItemCount::new(messages),
+                bytes: ByteCount::new(bytes),
+            },
+            max_in_flight: EventBudget::DEFAULT,
+        },
+        SplitMix64::new(1),
+    )
+}
+
+#[test]
+fn every_fate_is_counted_under_its_own_field_and_nowhere_else() {
+    let fixed = LinkProfile::reliable(1);
+    let send = |net: &mut Network| net.send(VirtualTime::ZERO, node(1), node(2), b"m").unwrap();
+    let mut lossy = queued(
+        LinkProfile::new(1, 1, Ppm::ALWAYS, Ppm::NEVER).unwrap(),
+        fixed,
+        64,
+        1 << 20,
+    );
+    send(&mut lossy);
+    let mut cut = queued(fixed, fixed, 64, 1 << 20);
+    cut.links_mut().cut(id(1), id(2));
+    send(&mut cut);
+    let mut full = queued(fixed, fixed, 1, 1 << 20);
+    send(&mut full);
+    send(&mut full);
+    let mut severed = queued(fixed, fixed, 64, 1 << 20);
+    let mut in_flight = send(&mut severed);
+    severed.links_mut().cut(id(1), id(2));
+    deliver_all(&mut severed, &mut in_flight.arrivals);
+    let mut doubled = queued(
+        LinkProfile::new(1, 1, Ppm::NEVER, Ppm::ALWAYS).unwrap(),
+        fixed,
+        64,
+        1 << 20,
+    );
+    let mut both = send(&mut doubled);
+    deliver_all(&mut doubled, &mut both.arrivals);
+    let cases = [
+        (
+            "lost",
+            lossy.counts(),
+            NetCounts {
+                sent: 1,
+                lost: 1,
+                ..NetCounts::default()
+            },
+        ),
+        (
+            "cut at send",
+            cut.counts(),
+            NetCounts {
+                sent: 1,
+                cut_at_send: 1,
+                ..NetCounts::default()
+            },
+        ),
+        (
+            "queue full",
+            full.counts(),
+            NetCounts {
+                sent: 2,
+                queue_full: 1,
+                ..NetCounts::default()
+            },
+        ),
+        (
+            "cut in flight",
+            severed.counts(),
+            NetCounts {
+                sent: 1,
+                cut_in_flight: 1,
+                ..NetCounts::default()
+            },
+        ),
+        (
+            "duplicated",
+            doubled.counts(),
+            NetCounts {
+                sent: 1,
+                duplicated: 1,
+                delivered: 2,
+                ..NetCounts::default()
+            },
+        ),
+    ];
+    for (case, observed, expected) in cases {
+        assert_eq!(
+            observed, expected,
+            "rule: each fate is counted under its own field and nowhere else (br-3lhv); case={case}"
+        );
+    }
+}
+
+#[test]
+fn the_byte_bound_admits_n_minus_1_and_n_and_refuses_n_plus_1() {
+    let fixed = LinkProfile::reliable(1);
+    let mut net = queued(fixed, fixed, 64, 30);
+    let send = |net: &mut Network, len: usize| {
+        net.send(VirtualTime::ZERO, node(1), node(2), &vec![7; len])
+            .unwrap()
+            .dropped
+    };
+    assert_eq!(
+        send(&mut net, 29),
+        None,
+        "rule: N - 1 bytes in flight fit (CD-9)"
+    );
+    assert_eq!(
+        send(&mut net, 1),
+        None,
+        "rule: exactly N bytes in flight fit"
+    );
+    assert_eq!(
+        (send(&mut net, 1), net.load(id(1), id(2))),
+        (Some(DropReason::QueueFull), (2, 30)),
+        "rule: N + 1 bytes do not, and the load stays at N"
+    );
+    let mut one = queued(fixed, fixed, 64, 30);
+    assert_eq!(
+        (send(&mut one, 31), send(&mut one, 30)),
+        (Some(DropReason::QueueFull), None),
+        "rule: a single packet of N + 1 bytes is refused, and one of exactly N fits"
+    );
+}
+
+#[test]
+fn deliveries_and_records_carry_their_endpoints_and_bytes() {
+    let client = Endpoint::Client(ClientId::new(9));
+    let mut net = reliable(1);
+    for (from, to, bytes) in [
+        (node(1), node(2), b"peer".to_vec()),
+        (node(3), client, b"response".to_vec()),
+        (client, node(4), b"request".to_vec()),
+    ] {
+        let mut sent = net.send(VirtualTime::ZERO, from, to, &bytes).unwrap();
+        let packet = |fate| Record::Packet {
+            fate,
+            copy: PacketCopy::Original,
+            from,
+            to,
+            bytes: bytes.clone(),
+        };
+        assert_eq!(
+            sent.records,
+            vec![packet(PacketFate::Sent)],
+            "rule: a send is traced with its endpoints and bytes; {from}->{to}"
+        );
+        let (_, copy) = sent.arrivals.pop().unwrap();
+        assert_eq!(
+            net.arrive(copy),
+            Arrival::Delivered(
+                crate::net::Delivery {
+                    from,
+                    to,
+                    bytes: bytes.clone(),
+                },
+                packet(PacketFate::Delivered)
+            ),
+            "rule: a packet is delivered to its destination, from its source, unchanged; \
+             {from}->{to} (br-3lhv: never routed back to its sender)"
+        );
+    }
+}
+
+#[test]
+fn loss_follows_its_probability_on_client_paths_in_both_directions() {
+    let client = Endpoint::Client(ClientId::new(5));
+    for (from, to) in [(node(1), client), (client, node(1))] {
+        for (loss, low, high) in [
+            (0, 0, 0),
+            (300_000, 2_700, 3_300),
+            (1_000_000, 10_000, 10_000),
+        ] {
+            let lossy = LinkProfile::new(1, 1, Ppm::new(loss).unwrap(), Ppm::NEVER).unwrap();
+            // Peer links stay reliable: only the client profile may lose anything.
+            let mut net = network(LinkProfile::reliable(1), lossy, 13);
+            let mut lost = 0;
+            let mut arrivals = Vec::new();
+            for _ in 0..10_000 {
+                let sent = net.send(VirtualTime::ZERO, from, to, b"r").unwrap();
+                if sent.dropped == Some(DropReason::Lost) {
+                    lost += 1;
+                }
+                arrivals.extend(sent.arrivals);
+                deliver_all(&mut net, &mut arrivals);
+            }
+            assert!(
+                (low..=high).contains(&lost),
+                "rule: a {loss}-ppm client path loses about that share, whichever way it runs; \
+                 {from}->{to} lost {lost} of 10000 (br-3lhv)"
+            );
+            assert_eq!(
+                net.counts().lost,
+                lost,
+                "rule: every loss is counted; {from}->{to}"
+            );
+        }
+    }
 }

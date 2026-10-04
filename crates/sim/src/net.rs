@@ -320,8 +320,9 @@ struct Load {
 /// The simulated network of one run.
 ///
 /// Invariants: every link's load is within [`NetConfig::queue`] and is the sum over its
-/// queued copies in flight; at most [`NetConfig::max_in_flight`] copies are in flight; every
-/// packet sent and every extra copy made is delivered, dropped or still in flight.
+/// queued copies in flight (`NET-LOAD`, asserted on every hold and every free); at most
+/// [`NetConfig::max_in_flight`] copies are in flight (`NET-IN-FLIGHT`); every packet sent and
+/// every extra copy made is delivered, dropped or still in flight.
 #[derive(Clone, Debug)]
 pub struct Network {
     /// Its settings.
@@ -560,9 +561,7 @@ impl Network {
                 id.get()
             );
             if let Some(link) = link.filter(|_| queued) {
-                let load = self.loads.entry(link).or_default();
-                load.messages = load.messages.saturating_add(1);
-                load.bytes = load.bytes.saturating_add(len);
+                self.hold(link, len);
             }
             if copy > 0 {
                 self.counts.duplicated = self.counts.duplicated.saturating_add(1);
@@ -589,11 +588,8 @@ impl Network {
             (Endpoint::Node(_) | Endpoint::Client(_), Endpoint::Client(_))
             | (Endpoint::Client(_), Endpoint::Node(_)) => None,
         };
-        if let Some(link) = link.filter(|_| packet.queued)
-            && let Some(load) = self.loads.get_mut(&link)
-        {
-            load.messages = load.messages.saturating_sub(1);
-            load.bytes = load.bytes.saturating_sub(byte_len(packet.bytes.len()));
+        if let Some(link) = link.filter(|_| packet.queued) {
+            self.free(link, byte_len(packet.bytes.len()), id);
         }
         if link.is_some_and(|(a, b)| !self.links.allows(a, b)) {
             self.counts.record(DropReason::CutInFlight);
@@ -628,6 +624,46 @@ impl Network {
         let load = self.loads.get(&link).copied().unwrap_or_default();
         load.messages < self.config.queue.messages.get()
             && load.bytes.saturating_add(len) <= self.config.queue.bytes.get()
+    }
+
+    /// Adds a queued copy of `len` bytes to `link`'s load. [`Self::fits`] checked the room
+    /// before the send, so the load stays within the bound (`NET-LOAD`, br-byxl).
+    fn hold(&mut self, link: (NodeId, NodeId), len: u64) {
+        let bound = self.config.queue;
+        let load = self.loads.entry(link).or_default();
+        load.messages = load.messages.saturating_add(1);
+        load.bytes = load.bytes.saturating_add(len);
+        types::invariant!(
+            load.messages <= bound.messages.get() && load.bytes <= bound.bytes.get(),
+            "NET-LOAD",
+            "link n{}->n{} holds {} packets and {} bytes in flight, past its bound of {} and {}",
+            link.0,
+            link.1,
+            load.messages,
+            load.bytes,
+            bound.messages.get(),
+            bound.bytes.get()
+        );
+    }
+
+    /// Frees queued copy `id`'s slot and `len` bytes from `link`'s load. They were held when
+    /// it was sent and only its arrival frees them, so a shortfall is broken accounting, never
+    /// clamped (`NET-LOAD`, br-byxl).
+    fn free(&mut self, link: (NodeId, NodeId), len: u64, id: PacketId) {
+        let load = self.loads.entry(link).or_default();
+        types::invariant!(
+            load.messages >= 1 && load.bytes >= len,
+            "NET-LOAD",
+            "link n{}->n{} frees copy {} of {len} bytes but holds only {} packets and {} bytes \
+             in flight",
+            link.0,
+            link.1,
+            id.get(),
+            load.messages,
+            load.bytes
+        );
+        load.messages -= 1;
+        load.bytes -= len;
     }
 
     /// One draw: true with probability `p`.

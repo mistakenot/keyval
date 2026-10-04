@@ -1358,7 +1358,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                   past its message or byte bound and never grows; client paths use their own \
                   profile and are never partitioned; copies in flight are bounded; the same \
                   seed gives the same fates; and real sealed peer envelopes cross unchanged \
-                  and open at the destination",
+                  and open at the destination. Also (br-3lhv): every fate is counted under its \
+                  own field alone; a link queue holds exactly its byte bound; deliveries and \
+                  their records keep their endpoints and bytes; and client paths lose in both \
+                  directions",
         kind: Kind::TestGroup,
         covers: &["T-3", "P3"],
         class: ClaimClass::Invariant,
@@ -1367,7 +1370,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["net_tests::", "net_profile_tests::"],
         },
-        min_cases: 18,
+        min_cases: 22,
     },
     CheckDef {
         id: "SIM-NET-SCENARIOS",
