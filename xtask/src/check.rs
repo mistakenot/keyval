@@ -788,16 +788,18 @@ pub const CATALOGUE: &[CheckDef] = &[
         id: "JOURNAL-LOG",
         summary: "the logical log appends, truncates logically (never at or below the persisted \
                   commit), indexes and caches entries without the cache ever changing a \
-                  result; genesis verification refuses a conflicting start (DUR-8, CD-10)",
+                  result, refuses impossible histories, and only grows: no compaction, no \
+                  rewrite, until the DM-7 hard stop; genesis verification refuses a \
+                  conflicting start (DUR-4, DUR-8, CD-10)",
         kind: Kind::TestGroup,
-        covers: &["DUR-8", "CD-9", "CD-10"],
+        covers: &["DUR-4", "DUR-8", "CD-9", "CD-10"],
         class: ClaimClass::Invariant,
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "journal",
             filters: &["log_tests::"],
         },
-        min_cases: 12,
+        min_cases: 13,
     },
     CheckDef {
         id: "COMMAND-CODEC",

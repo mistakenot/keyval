@@ -664,3 +664,55 @@ fn the_cache_bound_holds_at_n_minus_one_n_and_n_plus_one() {
         }
     }
 }
+
+#[test]
+fn the_journal_only_grows_and_is_never_compacted() {
+    // DUR-4: no log compaction in v1. Every frame is appended at the end, no earlier byte
+    // is rewritten or dropped, a logical truncation leaves the replaced frame in place, and
+    // the earliest entry is still read from its original frame. Growth stops only at the
+    // DM-7 hard stop (the_hard_stop_refuses_before_changing_anything).
+    let (mut log, mut memory) = fresh(0);
+    let mut ends = vec![log.end()];
+    for next in [
+        batch(vec![entry(1, 1, 8), entry(2, 1, 8)], Some(state(1, 1))),
+        batch(vec![entry(3, 1, 8)], Some(state(1, 2))),
+        batch(vec![entry(3, 2, 9), entry(4, 2, 9)], Some(state(2, 2))),
+        batch(Vec::new(), Some(state(2, 4))),
+        batch(vec![entry(5, 2, 8)], None),
+    ] {
+        let before = memory.bytes.clone();
+        let end = log.end();
+        let frame = log.append(next).unwrap();
+        assert_eq!(
+            log.end(),
+            end + u64::try_from(frame.len()).unwrap(),
+            "rule: every frame is appended at the journal's end (DUR-4)"
+        );
+        memory.bytes.extend_from_slice(&frame);
+        assert!(
+            memory.bytes.starts_with(&before),
+            "rule: no earlier byte is ever rewritten (DUR-4)"
+        );
+        ends.push(log.end());
+    }
+    assert!(
+        ends.windows(2).all(|pair| pair[0] < pair[1]),
+        "rule: the journal only grows: {ends:?}"
+    );
+    let replaced = decode(&memory.bytes[usize::try_from(ends[1]).unwrap()..]).unwrap();
+    assert_eq!(
+        RaftBatch::decode(replaced.payload()).unwrap().entries(),
+        &[entry(3, 1, 8)],
+        "rule: a logical truncation leaves the replaced frame in the file (§7.6, DUR-4)"
+    );
+    assert_eq!(
+        log.term(EntryIndex::new(3).unwrap()),
+        Some(Term::new(2).unwrap()),
+        "rule: the logical log reads the replacement"
+    );
+    assert_eq!(
+        log.entry(EntryIndex::new(1).unwrap(), &memory),
+        Ok(entry(1, 1, 8)),
+        "rule: the earliest entry is read from its original frame: nothing is compacted"
+    );
+}
