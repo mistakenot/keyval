@@ -22,9 +22,13 @@
 //!   `sync_log`, and holds at most one command ([`MAX_COMMAND_BYTES`]). Entries follow the
 //!   message's index without a gap. Their terms run from the message's `log_term` up to its
 //!   `term`, never decreasing, and are never 0.
-//! - **Unknown fields:** refused at every depth. [`decode_message`] refuses them on the
-//!   message and its entries, and the only other nested message, the snapshot, is refused
-//!   outright.
+//! - **Unknown fields:** refused at every depth, before anything is parsed.
+//!   [`decode_message`] scans the wire format first: this build's field numbers and wire
+//!   types only, no groups, every length within the bytes, and bounded repeated fields, on
+//!   the message, its entries and a snapshot's nested messages alike. It then admits only
+//!   the canonical bytes v1's encoder writes, so nothing the runtime would skip or store
+//!   gets through (br-umjh, br-808c). A well-formed snapshot is refused by the snapshot
+//!   rule above.
 //!
 //! Every rule above is stateless. One more needs the node's log ([`fits_log`], br-1jtp): a
 //! heartbeat whose commit index is past this node's last index is refused, because raft-rs's

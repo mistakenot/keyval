@@ -99,6 +99,8 @@ mod admit_tests;
 mod cluster_tests;
 mod config;
 mod convert;
+#[cfg(test)]
+mod decode_tests;
 mod entropy;
 mod envelope;
 #[cfg(test)]
@@ -118,6 +120,7 @@ mod storage;
 mod term_change_tests;
 #[cfg(test)]
 mod test_support;
+mod wire;
 
 pub use admit::Inadmissible;
 pub use envelope::{

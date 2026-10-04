@@ -76,20 +76,35 @@ pub fn outbound(message: &eraftpb::Message) -> Option<OutboundMessage> {
     })
 }
 
-/// A peer message's bytes as a library message, or `None` if they do not decode, or carry
-/// fields this build does not know on the message or its entries. The protobuf runtime would
-/// keep an unknown field in a hash map and write it back on re-encoding, so the bytes would
-/// depend on the sender's build; it is refused instead (W02 audit H-3). The snapshot, the only
-/// other nested message, is refused whole by [`admit`](crate::admit::admit), which every peer
-/// message passes before the library sees it (br-xx08).
+/// A peer message's bytes as a library message, if they are the canonical encoding of one
+/// v1 can hold. Three checks, in order:
+///
+/// 1. [`wire::scan`](crate::wire::scan) reads the wire format before anything is parsed or
+///    allocated: only known fields and wire types at every depth, no groups, every length
+///    within the bytes, and bounded repeated fields (br-umjh).
+/// 2. The protobuf runtime parses them, and no unknown field may be stored on the message
+///    or its entries. The scan already refuses every one, but this is the runtime's own
+///    word for it.
+/// 3. They re-encode to exactly the same bytes. Every v1 peer encodes with this generated
+///    encoder, so anything else is not from a v1 peer: a group the runtime skipped, a
+///    repeated field, a non-minimal varint, a default written out, an over-long nested
+///    length (br-808c).
+///
+/// An unknown field would be kept in a hash map and written back on re-encoding, so the
+/// bytes would depend on the sender's build. That is the W02 audit's H-3, refused at every
+/// depth. `None` if any check fails.
 pub fn decode_message(bytes: &[u8]) -> Option<eraftpb::Message> {
+    crate::wire::scan(bytes).ok()?;
     let message = eraftpb::Message::parse_from_bytes(bytes).ok()?;
     let known = message.get_unknown_fields().iter().next().is_none()
         && message
             .get_entries()
             .iter()
             .all(|entry| entry.get_unknown_fields().iter().next().is_none());
-    known.then_some(message)
+    let canonical = message
+        .write_to_bytes()
+        .is_ok_and(|encoded| encoded == bytes);
+    (known && canonical).then_some(message)
 }
 
 #[cfg(test)]

@@ -427,9 +427,9 @@ fn unknown_fields_are_refused_at_every_depth() {
         .add_varint(1000, 1);
     assert_eq!(
         judge(&in_snapshot),
-        Err(Inadmissible::Snapshot),
-        "rule: a snapshot, the only other nested message, is refused outright, unknown \
-         fields and all (H-3)"
+        Err(Inadmissible::Undecodable),
+        "rule: an unknown field inside a snapshot is refused before decoding, like at every \
+         other depth (H-3, br-808c)"
     );
     assert_eq!(
         admit(&[0xff, 0xff, 0xff], me(), &voters()),

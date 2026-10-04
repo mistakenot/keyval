@@ -1184,7 +1184,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                   voter; it refuses every other message type, snapshots and snapshot \
                   requests, contexts and priorities, term 0, terms and indices above 2^53 - 1, \
                   entries v1 never replicates or that do not follow their predecessor, and \
-                  unknown fields at every depth; a vote request from a non-voter, a \
+                  unknown fields at every depth, refused before decoding by a bounded wire \
+                  scan (no groups, lengths within the bytes, at most 65,537 entries and 5 \
+                  snapshot node IDs) and canonical bytes only (br-umjh, br-808c); a vote \
+                  request from a non-voter, a \
                   proposal, a snapshot or a configuration change from the wire never reaches \
                   the library, a follower that knows its leader never forwards a \
                   proposal, a heartbeat committing past this node's log is refused (br-1jtp), \
@@ -1196,9 +1199,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "raft_adapter",
-            filters: &["admit_tests::"],
+            filters: &["admit_tests::", "decode_tests::"],
         },
-        min_cases: 18,
+        min_cases: 27,
     },
     CheckDef {
         id: "DIFFERENTIAL",
