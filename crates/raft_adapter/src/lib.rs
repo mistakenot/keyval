@@ -45,7 +45,19 @@
 //!   (DUR-2). A journal read that fails under the library stops the loop with its cause, and
 //!   the node moves to `failed` (§7.11).
 //!
-//! W13.3 adds the peer-envelope codec around the messages the loop sends.
+//! - **Admission** ([`Inadmissible`], br-xx08): `step` hands the library only the peer messages
+//!   v1 exchanges (§7.3, §8.2): `MsgAppend`, `MsgHeartbeat`, `MsgRequestVote` and
+//!   `MsgRequestPreVote` and their responses, to this node from another voter, with no
+//!   snapshot, no field v1 never sets, every term and index within 2^53 − 1, and only entries
+//!   v1 replicates, in order. raft-rs acts on
+//!   whatever it is given, so everything else is refused before it can grant a vote to a
+//!   non-voter, append a proposal from the wire or restore a snapshot.
+//! - **The peer envelope** ([`PeerCodec`], §8.2, D-63, D-71): every message between nodes
+//!   travels in an envelope carrying the cluster instance ID, the protocol version, the
+//!   semantic-config fingerprint and the sender and destination. A received envelope is opened
+//!   only if all five match this node's identity and the message inside is admissible and from
+//!   the envelope's sender; anything else is dropped and counted by reason. The simulated
+//!   network (W16) and the HTTP peer transport (W21) carry exactly these bytes (P3).
 //!
 //! **The port is the boundary (CD-1).** The library's configuration, entropy and storage
 //! adapters stay inside this crate, and so does mutable access to the log; nothing public
@@ -80,9 +92,15 @@
 //! }
 //! ```
 
+mod admit;
+#[cfg(test)]
+mod admit_tests;
 mod config;
 mod convert;
 mod entropy;
+mod envelope;
+#[cfg(test)]
+mod envelope_tests;
 mod node;
 #[cfg(test)]
 mod node_tests;
@@ -93,6 +111,11 @@ mod storage;
 #[cfg(test)]
 mod test_support;
 
+pub use admit::Inadmissible;
+pub use envelope::{
+    DropCounts, EnvelopeError, HEADER_BYTES, IdentityError, MAX_ENVELOPE_BYTES, PeerCodec,
+    SealError,
+};
 pub use node::{ConstructError, RaftNode};
 pub use ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
 pub use storage::ReadFailure;

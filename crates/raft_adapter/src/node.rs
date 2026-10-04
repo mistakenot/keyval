@@ -10,8 +10,9 @@ use types::{
     invariant,
 };
 
+use crate::admit::admit;
 use crate::config::library_config;
-use crate::convert::{decode_message, entries_from_library, hard_state_from_library, outbound};
+use crate::convert::{entries_from_library, hard_state_from_library, outbound};
 use crate::entropy::EntropySource;
 use crate::storage::{JournalStorage, ReadFailure};
 
@@ -315,7 +316,7 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
     /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
     fn step(&mut self, message: Vec<u8>) -> Result<(), StepError> {
         self.check_no_ready("a peer message");
-        let message = decode_message(&message).ok_or(StepError::Rejected)?;
+        let message = admit(&message, self.node, &self.voters).map_err(|_| StepError::Rejected)?;
         self.raw.step(message).map_err(|_| StepError::Rejected)
     }
 

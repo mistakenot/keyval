@@ -77,9 +77,11 @@ pub fn outbound(message: &eraftpb::Message) -> Option<OutboundMessage> {
 }
 
 /// A peer message's bytes as a library message, or `None` if they do not decode, or carry
-/// fields this build does not know. The protobuf runtime would keep an unknown field in a hash
-/// map and write it back on re-encoding, so the bytes would depend on the sender's build; it
-/// is refused instead (W02 audit H-3). W13.3's envelope codec checks the envelope around it.
+/// fields this build does not know on the message or its entries. The protobuf runtime would
+/// keep an unknown field in a hash map and write it back on re-encoding, so the bytes would
+/// depend on the sender's build; it is refused instead (W02 audit H-3). The snapshot, the only
+/// other nested message, is refused whole by [`admit`](crate::admit::admit), which every peer
+/// message passes before the library sees it (br-xx08).
 pub fn decode_message(bytes: &[u8]) -> Option<eraftpb::Message> {
     let message = eraftpb::Message::parse_from_bytes(bytes).ok()?;
     let known = message.get_unknown_fields().iter().next().is_none()

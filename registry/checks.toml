@@ -752,3 +752,27 @@ tier = "T0"
 run = "./dev check OBSERVATION-SCHEMA"
 min_cases = 7
 status = "implemented"
+
+[[check]]
+id = "PEER-ENVELOPE"
+summary = "the peer-envelope codec (§8.2, D-63, D-71): a sealed message opens at its destination byte for byte in the documented wire format; a mismatched protocol version, cluster instance, semantic fingerprint, sender (not another voter, or not the node the transport received it from) or destination drops the envelope and is counted under its own reason, as are malformed and oversized envelopes, inadmissible messages and a message whose own sender is not the envelope's; random bytes and every changed header byte drop without a panic (§10.19); and a three-voter cluster whose every message travels sealed elects a leader and commits with nothing dropped"
+kind = "test_group"
+covers = ["CD-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check PEER-ENVELOPE"
+min_cases = 9
+status = "implemented"
+
+[[check]]
+id = "PEER-ADMISSION"
+summary = "the adapter steps only peer messages v1 exchanges (br-xx08; §7.3, §7.8, §8.2; W02 audit S-1, H-3): Append, Heartbeat, RequestVote and RequestPreVote and their responses, addressed to this node from another voter; it refuses every other message type, snapshots and snapshot requests, contexts and priorities, terms and indices above 2^53 - 1, entries v1 never replicates or that do not follow their predecessor, and unknown fields at every depth; a vote request from a non-voter, a proposal, a snapshot or a configuration change from the wire never reaches the library, a follower that knows its leader never forwards a proposal, and a heartbeat from another voter still reaches the library"
+kind = "test_group"
+covers = ["CD-3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check PEER-ADMISSION"
+min_cases = 14
+status = "implemented"
