@@ -127,6 +127,6 @@ pub use envelope::{
     DropCounts, EnvelopeError, HEADER_BYTES, IdentityError, MAX_ENVELOPE_BYTES, PeerCodec,
     SealError,
 };
-pub use node::{ConstructError, RaftNode};
+pub use node::{ConstructError, RaftNode, StepRefusal};
 pub use ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
 pub use storage::ReadFailure;

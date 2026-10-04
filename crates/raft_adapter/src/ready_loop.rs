@@ -13,7 +13,9 @@
 //! 4. **Release:** after the frame's `SyncDone` ([`ReadyLoop::sync_done`]), the storage view
 //!    is unsealed, then every message is sent, in recorded order. Nothing is sent while the
 //!    sync is outstanding: no vote grant or append acknowledgement leaves on unsynced state
-//!    (DUR-2).
+//!    (DUR-2). An [`Effect::Send`] the loop pushes holds the Raft message's protobuf bytes
+//!    ([`OutboundMessage`]), not yet an envelope: the controller seals each one with
+//!    [`PeerCodec::seal`](crate::PeerCodec::seal) before it leaves the core (§8.2, W14).
 //! 5. **Apply** the committed entries in index order, through [`Apply`].
 //! 6. **Advance:** send the `LightReady`'s messages and apply its entries, then drain further
 //!    ready work before the next input, so committed work never waits on an idle queue.
@@ -25,10 +27,10 @@
 use journal::JournalError;
 use types::{
     Consensus, Effect, Entry, Incarnation, JournalRead, LogIndex, OutboundMessage, ProposeError,
-    Status, StepError, SyncSeq, invariant,
+    Status, SyncSeq, invariant,
 };
 
-use crate::node::RaftNode;
+use crate::node::{RaftNode, StepRefusal};
 use crate::storage::ReadFailure;
 
 #[cfg(test)]
@@ -50,7 +52,9 @@ pub trait Apply {
 pub enum RaftInput {
     /// One logical clock step.
     Tick,
-    /// A peer's encoded Raft message.
+    /// A peer's Raft message: its protobuf bytes, as
+    /// [`PeerCodec::open`](crate::PeerCodec::open) returned them. The node admits them again
+    /// ([`RaftNode::step_checked`]).
     Peer(Vec<u8>),
     /// One encoded command to propose.
     Propose(Vec<u8>),
@@ -61,8 +65,9 @@ pub enum RaftInput {
 pub enum Fed {
     /// The library ticked.
     Ticked,
-    /// The library stepped the message, or rejected it (counted, §8.2).
-    Stepped(Result<(), StepError>),
+    /// The library stepped the message, or it was refused, with the reason the controller
+    /// counts it under (§8.2).
+    Stepped(Result<(), StepRefusal>),
     /// The library took the proposal, or refused it with nothing appended (§7.8, A-5).
     Proposed(Result<(), ProposeError>),
     /// A sync is outstanding, so the library took no input (§7.4 step 3). The input comes
@@ -229,7 +234,7 @@ impl<R: JournalRead> ReadyLoop<R> {
                 self.node.tick();
                 Fed::Ticked
             }
-            RaftInput::Peer(message) => Fed::Stepped(self.node.step(message)),
+            RaftInput::Peer(message) => Fed::Stepped(self.node.step_checked(&message)),
             RaftInput::Propose(command) => Fed::Proposed(self.node.propose(command)),
         };
         self.check_reads()?;
@@ -464,7 +469,8 @@ impl<R: JournalRead> ReadyLoop<R> {
     }
 }
 
-/// Sends `messages` in their recorded order (steps 4 and 6).
+/// Sends `messages` in their recorded order (steps 4 and 6), as the library's protobuf
+/// bytes: the controller seals them (module documentation).
 fn send(messages: Vec<OutboundMessage>, effects: &mut Vec<Effect>) {
     effects.extend(messages.into_iter().map(|message| Effect::Send {
         to: message.to,

@@ -10,7 +10,7 @@ use types::{
     invariant,
 };
 
-use crate::admit::{admit, fits_log};
+use crate::admit::{Inadmissible, admit, fits_log};
 use crate::config::library_config;
 use crate::convert::{entries_from_library, hard_state_from_library, outbound};
 use crate::entropy::EntropySource;
@@ -35,6 +35,21 @@ pub enum ConstructError {
         /// The library's reason.
         reason: String,
     },
+}
+
+/// Why [`RaftNode::step_checked`] refused a peer message. The port answers every refusal
+/// as [`StepError::Rejected`]; this keeps the reason, for the controller's counters (§8.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepRefusal {
+    /// Admission refused it before the library saw it (module documentation of
+    /// [`Inadmissible`]), including a heartbeat committing past this node's log
+    /// ([`Inadmissible::CommitPastLog`]).
+    Inadmissible(Inadmissible),
+    /// The library refused an admitted message. Admission already refuses everything
+    /// raft-rs 0.7's `step` returns an error for (a local message type, a proposal, a response
+    /// from a node outside the voters), so this is defence in depth. The library's error is
+    /// not kept: no library type crosses the port (CD-1).
+    Library,
 }
 
 /// The Ready taken but not yet advanced past, and the frame it still owes.
@@ -154,6 +169,36 @@ impl<R: JournalRead> RaftNode<R> {
     /// whatever [`applied`](Consensus::applied) last reported.
     pub fn applied_index(&self) -> LogIndex {
         log_index(self.node, self.raw.raft.raft_log.applied, "applied")
+    }
+
+    /// Steps one peer message, the Raft message's protobuf bytes, keeping the reason for a
+    /// refusal. [`Consensus::step`] is this with the reason folded into
+    /// [`StepError::Rejected`].
+    ///
+    /// **Admission runs twice on the peer path, by decision (br-i0tk).**
+    /// - [`PeerCodec::open`](crate::PeerCodec::open) admits the message so that a drop is
+    ///   counted under its reason where the envelope is opened (§8.2).
+    /// - This step admits it again, so bytes that never went through `open` cannot reach the
+    ///   library either: a [`RaftInput::Peer`](crate::RaftInput::Peer) or a
+    ///   [`Consensus::step`] takes bytes from any caller. It also applies the one stateful
+    ///   rule, [`Inadmissible::CommitPastLog`], which needs this node's log.
+    ///
+    /// The second check costs one more decode of at most one message per input. CD-3's single
+    /// conversion is traded for that defence in depth.
+    ///
+    /// # Errors
+    ///
+    /// [`StepRefusal`] if admission or the library refused the message; nothing changed.
+    ///
+    /// # Panics
+    ///
+    /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
+    pub fn step_checked(&mut self, message: &[u8]) -> Result<(), StepRefusal> {
+        self.check_no_ready("a peer message");
+        let message = admit(message, self.node, &self.voters).map_err(StepRefusal::Inadmissible)?;
+        fits_log(&message, self.raw.raft.raft_log.last_index())
+            .map_err(StepRefusal::Inadmissible)?;
+        self.raw.step(message).map_err(|_| StepRefusal::Library)
     }
 
     /// Writes the outstanding Ready's entries and hard state as the journal's next frame,
@@ -359,14 +404,14 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
         }
     }
 
+    /// [`step_checked`](RaftNode::step_checked), with every refusal answered as
+    /// [`StepError::Rejected`].
+    ///
     /// # Panics
     ///
     /// `RA-INPUT-DURING-READY` if a Ready is outstanding.
     fn step(&mut self, message: Vec<u8>) -> Result<(), StepError> {
-        self.check_no_ready("a peer message");
-        let message = admit(&message, self.node, &self.voters).map_err(|_| StepError::Rejected)?;
-        fits_log(&message, self.raw.raft.raft_log.last_index()).map_err(|_| StepError::Rejected)?;
-        self.raw.step(message).map_err(|_| StepError::Rejected)
+        self.step_checked(&message).map_err(|_| StepError::Rejected)
     }
 
     /// # Panics

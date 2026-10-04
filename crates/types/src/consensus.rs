@@ -72,12 +72,14 @@ pub struct HardState {
     pub commit: LogIndex,
 }
 
-/// An encoded peer envelope addressed to a node.
+/// A Raft message addressed to a node, as the library sent it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutboundMessage {
     /// The destination node.
     pub to: NodeId,
-    /// The encoded envelope (§8.2), bounded by the batch limits of §7.11.
+    /// The Raft message's protobuf bytes, bounded by the batch limits of §7.11. They are not
+    /// yet a peer envelope: the adapter's envelope codec seals them for the wire (§8.2)
+    /// before they leave the core in an [`Effect::Send`](crate::Effect::Send).
     pub bytes: Vec<u8>,
 }
 
@@ -241,8 +243,9 @@ pub enum ProposeError {
 /// Why a peer message could not be stepped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepError {
-    /// The bytes are not a valid message, or come from an unknown peer. The message is
-    /// dropped and counted (§8.2).
+    /// The message was refused: its bytes are not a message v1 peers exchange, it is not
+    /// from another voter or not for this node, or the library refused it. It is dropped and
+    /// counted (§8.2).
     Rejected,
 }
 
@@ -256,11 +259,13 @@ pub trait Consensus {
     /// [`ProposeError`] if the library refused it with nothing appended.
     fn propose(&mut self, command: Vec<u8>) -> Result<(), ProposeError>;
 
-    /// Steps one peer message, already checked by the envelope codec (§8.2).
+    /// Steps one peer message: the Raft message's protobuf bytes, as the envelope codec
+    /// opened them (§8.2). The bytes may come from any caller, so the implementation checks
+    /// them again before the library sees them.
     ///
     /// # Errors
     ///
-    /// [`StepError::Rejected`] if the library rejects it.
+    /// [`StepError::Rejected`] if the message is refused, before the library or by it.
     fn step(&mut self, message: Vec<u8>) -> Result<(), StepError>;
 
     /// Advances the library's logical clock by one tick.

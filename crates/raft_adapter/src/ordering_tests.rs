@@ -315,11 +315,12 @@ mod adversarial {
     use raft::eraftpb::{self, MessageType};
     use types::{
         ByteCount, Config, Effect, Entry, EntryPayload, Incarnation, LogIndex, NodeId, Role,
-        StepError, SyncSeq,
+        SyncSeq,
     };
 
     use super::Rng;
-    use crate::node::RaftNode;
+    use crate::admit::Inadmissible;
+    use crate::node::{RaftNode, StepRefusal};
     use crate::ready_loop::{Apply, Fed, RaftInput, ReadyLoop, Synced};
     use crate::ready_loop_tests::{dur2_violation, durable_state};
     use crate::test_support::{BOUNDS, Journal, Seeded, config, journal_with_genesis};
@@ -972,9 +973,16 @@ mod adversarial {
                 run.nodes[&me].lp.status(),
                 run.nodes[&me].journal.bytes()
             ),
-            (Fed::Stepped(Err(StepError::Rejected)), &before, journal),
+            (
+                Fed::Stepped(Err(StepRefusal::Inadmissible(Inadmissible::MessageType {
+                    code: protobuf::ProtobufEnum::value(&MessageType::MsgSnapshot),
+                }))),
+                &before,
+                journal
+            ),
             "rule: a snapshot never reaches the library through the loop, so no snapshot \
-             Ready is ever taken (v1 never compacts, §7.4 step 2)"
+             Ready is ever taken (v1 never compacts, §7.4 step 2); v1 peers never exchange \
+             MsgSnapshot, and the refusal names that rule"
         );
         assert_eq!(
             (run.violations.clone(), run.network.len()),

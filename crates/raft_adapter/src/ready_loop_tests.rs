@@ -8,14 +8,16 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
 use journal::{JournalError, LogBounds, LogicalLog, RaftBatch};
-use raft::eraftpb::MessageType;
+use protobuf::Message as _;
+use raft::eraftpb::{self, MessageType};
 use types::{
-    ByteCount, Config, Effect, Entry, EntryPayload, HardState, Incarnation, LogIndex, NodeId, Role,
-    SyncSeq, Term,
+    ByteCount, Config, Consensus, Effect, Entry, EntryPayload, HardState, Incarnation, LogIndex,
+    NodeId, Role, StepError, SyncSeq, Term,
 };
 
+use crate::admit::Inadmissible;
 use crate::convert::decode_message;
-use crate::node::RaftNode;
+use crate::node::{RaftNode, StepRefusal};
 use crate::ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
 use crate::test_support::{Journal, Seeded, config, empty_log};
 
@@ -1276,4 +1278,72 @@ fn a_failed_journal_read_stops_the_loop_with_its_cause() {
         (Err(LoopError::Stopped), Err(LoopError::Stopped)),
         "rule: the loop takes no more work; the node is failed (§7.11)"
     );
+}
+
+#[test]
+fn a_refused_peer_message_comes_back_with_its_reason_and_the_port_folds_it() {
+    let config = config("three-voters");
+    let ids: Vec<NodeId> = config.voters().collect();
+    let (me, peer) = (ids[0], ids[1]);
+    let mut member = member(&config, me, 7);
+    let last = member.lp.status().last.get();
+    let mut heartbeat = eraftpb::Message::default();
+    heartbeat.set_msg_type(MessageType::MsgHeartbeat);
+    heartbeat.from = peer.get();
+    heartbeat.to = me.get();
+    heartbeat.term = 2;
+    heartbeat.commit = last + 5;
+    let mut from_a_stranger = heartbeat.clone();
+    from_a_stranger.from = 99;
+    from_a_stranger.commit = 0;
+    let cases = [
+        (
+            "bytes that are not a message",
+            vec![0xff, 0xff, 0xff],
+            Inadmissible::Undecodable,
+        ),
+        (
+            "a heartbeat from outside the voters",
+            from_a_stranger.write_to_bytes().unwrap(),
+            Inadmissible::Sender { from: 99 },
+        ),
+        (
+            "a heartbeat committing past this node's log",
+            heartbeat.write_to_bytes().unwrap(),
+            Inadmissible::CommitPastLog {
+                commit: last + 5,
+                last,
+            },
+        ),
+    ];
+    for (case, bytes, reason) in cases {
+        let status = member.lp.status().clone();
+        let before = member.effects.len();
+        assert_eq!(
+            member.feed(RaftInput::Peer(bytes.clone())),
+            Ok(Fed::Stepped(Err(StepRefusal::Inadmissible(reason)))),
+            "rule: the loop hands back the refusal with its reason, for the controller's \
+             counters (§8.2, br-i0tk); case: {case}"
+        );
+        assert_eq!(
+            (member.lp.status(), member.effects.len()),
+            (&status, before),
+            "rule: a refused message changes nothing and sends nothing; case: {case}"
+        );
+        let mut node = RaftNode::new(
+            &config.consensus(me).unwrap(),
+            config.voters(),
+            empty_log(),
+            Journal::default(),
+            Seeded::new(7),
+            LogIndex::ZERO,
+        )
+        .unwrap();
+        assert_eq!(
+            Consensus::step(&mut node, bytes),
+            Err(StepError::Rejected),
+            "rule: the port answers every refusal as Rejected; the reason stays in the \
+             adapter (br-i0tk); case: {case}"
+        );
+    }
 }
