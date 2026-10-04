@@ -19,7 +19,18 @@
 //! parent, so its entry is durable before anything is written into it (DUR-7).
 //!
 //! A [`StorageError`] carries no cause, so the adapter keeps the last one it saw
-//! ([`FsStorage::last_failure`]) for the composition root to log.
+//! ([`FsStorage::last_failure`]) for the composition root to log. Each call returns only
+//! the errors its contract names: [`StorageError::Missing`] means a missing data
+//! directory, parent or journal, never a path that could not be examined.
+//!
+//! **A failed write or sync latches the handle** (§7.11; br-zswx). After the operating
+//! system reports a failed append, truncate, sync or directory sync, what the journal
+//! holds durably is unknown: a failed `fdatasync` may already have dropped the dirty
+//! pages it reported, so a later one can succeed without them. Every later append,
+//! truncate, sync, directory sync and journal creation on that handle is therefore
+//! [`StorageError::Failed`] ([`FsStorage::latched`]), so no completion can claim
+//! durability the failure undid. A refusal that changes nothing (no journal yet, a
+//! lengthening truncate, an existing journal) does not latch.
 //!
 //! [`ReadOnlyDir`] is the doctor's handle (O-7, W23.1): it opens the journal for reading
 //! only, never creates or writes anything, and only probes the lock
@@ -59,19 +70,31 @@ pub struct Failure {
 }
 
 impl Failure {
-    /// A failure of `op` on `path` caused by `err`: `NotFound` is
-    /// [`StorageError::Missing`], anything else [`StorageError::Failed`].
+    /// A failure of `op` on `path` caused by the operating system's `err`: always
+    /// [`StorageError::Failed`]. Only the calls whose contract names
+    /// [`StorageError::Missing`] use [`Failure::io_or_missing`] (br-zswx).
     fn io(op: &'static str, path: &Path, err: &io::Error) -> Self {
-        let error = if err.kind() == ErrorKind::NotFound {
-            StorageError::Missing
-        } else {
-            StorageError::Failed
-        };
         Self {
             op,
             path: path.to_path_buf(),
             cause: err.to_string(),
-            error,
+            error: StorageError::Failed,
+        }
+    }
+
+    /// As [`Failure::io`], except that a path that does not exist, or that runs through
+    /// something other than a directory, is [`StorageError::Missing`]. Every other error
+    /// (permission denied, a symlink loop, an I/O error) is still
+    /// [`StorageError::Failed`]: a directory that cannot be examined is not missing.
+    fn io_or_missing(op: &'static str, path: &Path, err: &io::Error) -> Self {
+        let missing = matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory);
+        Self {
+            error: if missing {
+                StorageError::Missing
+            } else {
+                StorageError::Failed
+            },
+            ..Self::io(op, path, err)
         }
     }
 }
@@ -85,13 +108,7 @@ impl Failure {
 /// A [`Failure`] whose error is [`StorageError::Missing`] when the parent does not exist,
 /// and [`StorageError::Failed`] when `dir` exists or either step fails.
 pub fn create_data_dir(dir: &Path) -> Result<(), Failure> {
-    fs::create_dir(dir).map_err(|err| {
-        let mut failure = Failure::io("create_data_dir", dir, &err);
-        if err.kind() == ErrorKind::AlreadyExists {
-            failure.error = StorageError::Failed;
-        }
-        failure
-    })?;
+    fs::create_dir(dir).map_err(|err| Failure::io_or_missing("create_data_dir", dir, &err))?;
     let parent = dir
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -114,6 +131,8 @@ pub struct FsStorage {
     journal: Option<File>,
     /// `LOCK`, locked exclusively, once [`DataDir::lock`] succeeded.
     lock: Option<File>,
+    /// The failed write or sync that latched the handle, if one did (br-zswx).
+    latched: Option<Failure>,
     /// The cause of the last failure, for the root's log.
     last_failure: Mutex<Option<Failure>>,
 }
@@ -124,8 +143,9 @@ impl FsStorage {
     ///
     /// # Errors
     ///
-    /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` is not a directory,
-    /// or [`StorageError::Failed`] if the journal cannot be opened.
+    /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` does not exist or
+    /// is not a directory, or [`StorageError::Failed`] if it cannot be examined (for
+    /// example, permission denied) or the journal cannot be opened.
     pub fn open(dir: &Path) -> Result<Self, Failure> {
         Self::open_journal(dir, true)
     }
@@ -133,7 +153,9 @@ impl FsStorage {
     /// Opens `dir`'s journal, if it exists, for reading, and for appending when
     /// `writable`. Nothing is created and the lock is not taken.
     fn open_journal(dir: &Path, writable: bool) -> Result<Self, Failure> {
-        if !dir.is_dir() {
+        let metadata =
+            fs::metadata(dir).map_err(|err| Failure::io_or_missing("open", dir, &err))?;
+        if !metadata.is_dir() {
             return Err(Failure {
                 op: "open",
                 path: dir.to_path_buf(),
@@ -151,6 +173,7 @@ impl FsStorage {
             dir: dir.to_path_buf(),
             journal,
             lock: None,
+            latched: None,
             last_failure: Mutex::new(None),
         })
     }
@@ -174,6 +197,46 @@ impl FsStorage {
             *slot = Some(failure);
         }
         error
+    }
+
+    /// The failed write or sync that latched this handle, if one did: from then on every
+    /// append, truncate, sync, directory sync and journal creation is
+    /// [`StorageError::Failed`] (br-zswx).
+    #[must_use]
+    pub const fn latched(&self) -> Option<&Failure> {
+        self.latched.as_ref()
+    }
+
+    /// Refuses `op` once the handle has latched: after a failed write or sync, nothing
+    /// since the last good sync is known durable, so no later call may report success.
+    fn refuse_if_latched(&self, op: &'static str) -> Result<(), StorageError> {
+        self.latched.as_ref().map_or(Ok(()), |first| {
+            Err(self.fail(Failure {
+                op,
+                path: first.path.clone(),
+                cause: format!(
+                    "refused: an earlier {} failed ({}), so what the journal holds durably \
+                     is unknown",
+                    first.op, first.cause
+                ),
+                error: StorageError::Failed,
+            }))
+        })
+    }
+
+    /// Records the failed write or sync `failure` and latches the handle on it; the first
+    /// such failure is the one kept.
+    fn latch(&mut self, failure: Failure) -> StorageError {
+        if self.latched.is_none() {
+            self.latched = Some(failure.clone());
+        }
+        self.fail(failure)
+    }
+
+    /// Records the failed write or sync `op` of the journal and latches the handle.
+    fn latch_journal(&mut self, op: &'static str, err: &io::Error) -> StorageError {
+        let failure = Failure::io(op, &self.dir.join(JOURNAL), err);
+        self.latch(failure)
     }
 
     /// Records an I/O error of `op` on the journal.
@@ -243,10 +306,7 @@ impl DataDir for FsStorage {
                 cause: "another process holds the data directory's lock".to_owned(),
                 error: StorageError::Locked,
             })),
-            Err(TryLockError::Error(err)) => Err(self.fail(Failure {
-                error: StorageError::Failed,
-                ..Failure::io("lock", &path, &err)
-            })),
+            Err(TryLockError::Error(err)) => Err(self.fail(Failure::io("lock", &path, &err))),
         }
     }
 }
@@ -276,8 +336,9 @@ impl ReadOnlyDir {
     ///
     /// # Errors
     ///
-    /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` is not a directory,
-    /// or [`StorageError::Failed`] if the journal cannot be opened.
+    /// A [`Failure`] whose error is [`StorageError::Missing`] if `dir` does not exist or
+    /// is not a directory, or [`StorageError::Failed`] if it cannot be examined or the
+    /// journal cannot be opened.
     pub fn open(dir: &Path) -> Result<Self, Failure> {
         FsStorage::open_journal(dir, false).map(Self)
     }
@@ -326,10 +387,9 @@ impl ReadOnlyDir {
                 Ok(LockProbe::Acquired)
             }
             Err(TryLockError::WouldBlock) => Ok(LockProbe::Live),
-            Err(TryLockError::Error(err)) => Err(self.0.fail(Failure {
-                error: StorageError::Failed,
-                ..Failure::io("probe_lock", &path, &err)
-            })),
+            Err(TryLockError::Error(err)) => {
+                Err(self.0.fail(Failure::io("probe_lock", &path, &err)))
+            }
         }
     }
 }
@@ -346,6 +406,7 @@ impl ByteStorage for FsStorage {
     }
 
     fn create_journal(&mut self) -> Result<(), StorageError> {
+        self.refuse_if_latched("create_journal")?;
         let path = self.dir.join(JOURNAL);
         let created = OpenOptions::new()
             .read(true)
@@ -357,24 +418,27 @@ impl ByteStorage for FsStorage {
                 self.journal = Some(file);
                 Ok(())
             }
-            Err(err) => Err(self.fail(Failure {
-                // An existing journal is refused, never replaced.
-                error: StorageError::Failed,
-                ..Failure::io("create_journal", &path, &err)
-            })),
+            // An existing journal is refused, never replaced; nothing changed, so no latch.
+            Err(err) => Err(self.fail(Failure::io("create_journal", &path, &err))),
         }
     }
 
     fn sync_dir(&mut self) -> Result<(), StorageError> {
-        sync_directory(&self.dir).map_err(|err| self.fail(Failure::io("sync_dir", &self.dir, &err)))
+        self.refuse_if_latched("sync_dir")?;
+        sync_directory(&self.dir).map_err(|err| {
+            let failure = Failure::io("sync_dir", &self.dir, &err);
+            self.latch(failure)
+        })
     }
 
     fn append(&mut self, bytes: &[u8]) -> Result<(), StorageError> {
+        self.refuse_if_latched("append")?;
         let result = self.journal("append")?.write_all(bytes);
-        result.map_err(|err| self.journal_error("append", &err))
+        result.map_err(|err| self.latch_journal("append", &err))
     }
 
     fn truncate(&mut self, len: ByteCount) -> Result<(), StorageError> {
+        self.refuse_if_latched("truncate")?;
         let end = self.len_of("truncate")?;
         if len.get() > end {
             return Err(self.fail(Failure {
@@ -385,12 +449,13 @@ impl ByteStorage for FsStorage {
             }));
         }
         let result = self.journal("truncate")?.set_len(len.get());
-        result.map_err(|err| self.journal_error("truncate", &err))
+        result.map_err(|err| self.latch_journal("truncate", &err))
     }
 
     fn sync(&mut self) -> Result<(), StorageError> {
+        self.refuse_if_latched("sync")?;
         let result = self.journal("sync")?.sync_data();
-        result.map_err(|err| self.journal_error("sync", &err))
+        result.map_err(|err| self.latch_journal("sync", &err))
     }
 }
 
@@ -576,6 +641,184 @@ mod tests {
             "rule: one journal.log plus a LOCK file per data directory (§7.6)"
         );
         assert_eq!(storage.dir(), dir.as_path());
+    }
+
+    /// A data directory whose journal is `/dev/full`, so every write to it fails with
+    /// ENOSPC from the real operating system, and the handle on it.
+    fn full_disk(name: &str) -> (PathBuf, FsStorage) {
+        let dir = data_dir(name);
+        assert!(
+            Path::new("/dev/full").exists(),
+            "fixture: /dev/full gives these tests a real ENOSPC (Linux)"
+        );
+        std::os::unix::fs::symlink("/dev/full", dir.join(JOURNAL)).unwrap();
+        let storage = FsStorage::open(&dir).unwrap();
+        (dir, storage)
+    }
+
+    /// One mutating call on a handle, for [`assert_latched_on`].
+    type Call = fn(&mut FsStorage) -> Result<(), StorageError>;
+
+    /// Asserts that every mutating call on `storage` is refused by its latch, naming
+    /// `first`, the failed call that latched it.
+    fn assert_latched_on(storage: &mut FsStorage, first: &str) {
+        assert_eq!(storage.latched().map(|f| f.op), Some(first));
+        let calls: [(&str, Call); 5] = [
+            ("sync", |s| s.sync()),
+            ("sync_dir", |s| s.sync_dir()),
+            ("append", |s| s.append(b"frame")),
+            ("truncate", |s| s.truncate(ByteCount::new(0))),
+            ("create_journal", |s| s.create_journal()),
+        ];
+        for (op, call) in calls {
+            assert_eq!(
+                call(storage),
+                Err(StorageError::Failed),
+                "rule: after a failed {first}, {op} never reports success (br-zswx, §7.11)"
+            );
+            let refused = storage.last_failure().unwrap();
+            assert!(
+                refused.op == op
+                    && refused
+                        .cause
+                        .contains(&format!("an earlier {first} failed")),
+                "rule: the refusal names the failure that latched the handle; failure={refused:?}"
+            );
+        }
+        assert_eq!(
+            storage.latched().map(|f| f.op),
+            Some(first),
+            "rule: the first failure is the one kept"
+        );
+    }
+
+    #[test]
+    fn a_failed_append_latches_every_later_write_and_sync() {
+        let (dir, mut storage) = full_disk("latch-append");
+        assert_eq!(storage.latched(), None);
+        assert_eq!(storage.append(b"frame"), Err(StorageError::Failed));
+        let failed = storage.last_failure().unwrap();
+        assert_eq!(
+            (failed.op, failed.path.clone()),
+            ("append", dir.join(JOURNAL)),
+            "rule: a real ENOSPC is Failed with its cause; failure={failed:?}"
+        );
+        assert_latched_on(&mut storage, "append");
+        assert_eq!(
+            FsStorage::open(&dir).unwrap().sync_dir(),
+            Ok(()),
+            "fixture sanity: the directory itself syncs, so the refusal above is the latch"
+        );
+    }
+
+    #[test]
+    fn a_failed_truncate_latches_the_handle() {
+        // ftruncate on a character device is EINVAL.
+        let (_dir, mut storage) = full_disk("latch-truncate");
+        assert_eq!(
+            storage.truncate(ByteCount::new(0)),
+            Err(StorageError::Failed)
+        );
+        assert_latched_on(&mut storage, "truncate");
+    }
+
+    #[test]
+    fn refusals_that_change_nothing_do_not_latch() {
+        let dir = data_dir("no-latch");
+        let mut storage = FsStorage::open(&dir).unwrap();
+        assert_eq!(storage.append(b"x"), Err(StorageError::Missing));
+        assert_eq!(storage.create_journal(), Ok(()));
+        assert_eq!(storage.create_journal(), Err(StorageError::Failed));
+        assert_eq!(
+            storage.truncate(ByteCount::new(1)),
+            Err(StorageError::Failed)
+        );
+        assert_eq!(
+            storage.latched(),
+            None,
+            "rule: no journal, an existing journal and a lengthening truncate change \
+             nothing, so they leave the handle usable"
+        );
+        assert_eq!(storage.sync_dir(), Ok(()));
+        assert_eq!(storage.append(b"frame"), Ok(()));
+        assert_eq!(storage.sync(), Ok(()));
+        assert_eq!(storage.journal_len(), Ok(ByteCount::new(5)));
+    }
+
+    #[test]
+    fn a_vanished_directory_fails_lock_and_sync_dir_and_is_never_missing() {
+        let dir = data_dir("vanished");
+        let mut storage = FsStorage::open(&dir).unwrap();
+        fs::rename(&dir, dir.with_extension("moved")).unwrap();
+        assert_eq!(
+            storage.lock(),
+            Err(StorageError::Failed),
+            "rule: lock returns only Locked or Failed (DataDir::lock); failure={:?}",
+            storage.last_failure()
+        );
+        assert_eq!(
+            storage.sync_dir(),
+            Err(StorageError::Failed),
+            "rule: sync_dir returns only Failed (ByteStorage::sync_dir); failure={:?}",
+            storage.last_failure()
+        );
+        assert_eq!(storage.latched().map(|f| f.op), Some("sync_dir"));
+    }
+
+    #[test]
+    fn an_unexaminable_path_is_failed_and_only_a_missing_one_is_missing() {
+        // A symlink to itself: stat is ELOOP, whoever runs the test.
+        let looped = scratch("loop");
+        std::os::unix::fs::symlink(&looped, &looped).unwrap();
+        let open = |dir: &Path| {
+            FsStorage::open(dir)
+                .map(|_| ())
+                .map_err(|f| (f.op, f.error))
+        };
+        let examine = |dir: &Path| ReadOnlyDir::open(dir).map(|_| ()).map_err(|f| f.error);
+        assert_eq!(
+            (open(&looped), examine(&looped)),
+            (
+                Err(("open", StorageError::Failed)),
+                Err(StorageError::Failed)
+            ),
+            "rule: a directory that cannot be examined is Failed, not a missing one (§7.7)"
+        );
+        // A path through a regular file is ENOTDIR: nothing is there, so Missing.
+        let file = scratch("file");
+        fs::write(&file, b"").unwrap();
+        let below = file.join("data");
+        assert_eq!(
+            (open(&below), examine(&below), open(&file)),
+            (
+                Err(("open", StorageError::Missing)),
+                Err(StorageError::Missing),
+                Err(("open", StorageError::Missing))
+            ),
+            "rule: a path that is not a directory, or runs through a file, is Missing"
+        );
+        assert_eq!(
+            create_data_dir(&below).map_err(|f| f.error),
+            Err(StorageError::Missing),
+            "rule: a parent that is not a directory is a missing parent"
+        );
+    }
+
+    #[test]
+    fn an_unopenable_lock_file_is_failed() {
+        let dir = data_dir("lock-loop");
+        std::os::unix::fs::symlink(dir.join(LOCK), dir.join(LOCK)).unwrap();
+        let mut storage = FsStorage::open(&dir).unwrap();
+        assert_eq!(
+            storage.lock(),
+            Err(StorageError::Failed),
+            "rule: a LOCK that cannot be opened (ELOOP) is Failed, never Locked or Missing"
+        );
+        let failure = storage.last_failure().unwrap();
+        assert!(
+            failure.op == "lock" && !failure.cause.is_empty(),
+            "failure={failure:?}"
+        );
     }
 }
 
