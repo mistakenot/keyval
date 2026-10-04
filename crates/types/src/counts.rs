@@ -1,4 +1,5 @@
-//! Counts: [`Tick`], [`ByteCount`] and [`PageSize`] (CD-4). Arithmetic is checked.
+//! Counts: [`Tick`], [`ByteCount`], [`ItemCount`] and [`PageSize`] (CD-4). Arithmetic is
+//! checked.
 
 use core::fmt;
 
@@ -108,6 +109,54 @@ impl fmt::Display for ByteCount {
     }
 }
 
+/// A number of items: live keys (DM-6), queued messages, replication batches in flight
+/// (§7.11).
+///
+/// Invariant: none beyond its range; arithmetic never wraps (`checked_*` returns `None`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ItemCount(u64);
+
+impl ItemCount {
+    /// No items.
+    pub const ZERO: Self = Self(0);
+
+    /// An item count.
+    #[must_use]
+    pub const fn new(items: u64) -> Self {
+        Self(items)
+    }
+
+    /// The raw count.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// `self + other`, or `None` on overflow.
+    #[must_use]
+    pub const fn checked_add(self, other: Self) -> Option<Self> {
+        match self.0.checked_add(other.0) {
+            Some(sum) => Some(Self(sum)),
+            None => None,
+        }
+    }
+
+    /// `self - other`, or `None` if `other` is larger.
+    #[must_use]
+    pub const fn checked_sub(self, other: Self) -> Option<Self> {
+        match self.0.checked_sub(other.0) {
+            Some(difference) => Some(Self(difference)),
+            None => None,
+        }
+    }
+}
+
+impl fmt::Display for ItemCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} items", self.0)
+    }
+}
+
 /// The most items one SCAN page may hold (F-4).
 ///
 /// Invariant: 1 to [`PageSize::MAX`] (128).
@@ -191,6 +240,31 @@ mod tests {
             Some(ByteCount::new(65_600)),
             "rule: in-range sums are exact"
         );
+    }
+
+    #[test]
+    fn item_count_arithmetic_is_checked() {
+        assert_eq!(
+            ItemCount::new(u64::MAX).checked_add(ItemCount::new(1)),
+            None,
+            "rule: item arithmetic never wraps (CD-4)"
+        );
+        assert_eq!(
+            ItemCount::ZERO.checked_sub(ItemCount::new(1)),
+            None,
+            "rule: no negative item count"
+        );
+        assert_eq!(
+            ItemCount::new(16).checked_add(ItemCount::new(48)),
+            Some(ItemCount::new(64)),
+            "rule: in-range sums are exact"
+        );
+        assert_eq!(
+            ItemCount::new(64).checked_sub(ItemCount::new(16)),
+            Some(ItemCount::new(48)),
+            "rule: in-range differences are exact"
+        );
+        assert_eq!(ItemCount::new(64).to_string(), "64 items");
     }
 
     #[test]

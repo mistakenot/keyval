@@ -642,8 +642,8 @@ fn the_range_table_is_consistent_with_the_plan() {
 fn optional_local_limits_default_to_section_7_11_and_can_be_lowered() {
     let config = accepted(BASE, "BASE is valid");
     assert_eq!(config.replication_batch_bytes().get(), 256 << 10);
-    assert_eq!(config.replication_inflight_batches(), 16);
-    assert_eq!(config.peer_send_queue_messages(), 64);
+    assert_eq!(config.replication_inflight_batches(), ItemCount::new(16));
+    assert_eq!(config.peer_send_queue_messages(), ItemCount::new(64));
     assert_eq!(config.peer_send_queue_bytes().get(), 8 << 20);
     assert_eq!(config.max_uncommitted_bytes().get(), 4 << 20);
     assert_eq!(config.max_committed_bytes_per_ready().get(), 1 << 20);
@@ -652,6 +652,44 @@ fn optional_local_limits_default_to_section_7_11_and_can_be_lowered() {
         "a local limit may be lowered",
     );
     assert_eq!(lowered.replication_batch_bytes().get(), 1024);
+}
+
+#[test]
+fn counts_and_the_history_ceiling_cross_the_boundary_typed() {
+    let config = accepted(BASE, "BASE is valid");
+    assert_eq!(
+        config.max_live_keys(),
+        ItemCount::new(config.get(ConfigParam::MaxLiveKeys)),
+        "rule: counts are ItemCounts, not bare integers (CD-4)"
+    );
+    assert_eq!(
+        config.max_log_entries(),
+        LogIndex::new(config.get(ConfigParam::MaxLogEntries)).unwrap(),
+        "rule: DM-7's ceiling is compared with the commit index, so it is a LogIndex (CD-4)"
+    );
+    let largest = ConfigParam::MaxLogEntries.maximum();
+    assert!(
+        LogIndex::new(largest).is_ok(),
+        "rule: every admitted max_log_entries is a log index, so the conversion never \
+         refuses a config read_values admitted; maximum={largest}"
+    );
+    assert_eq!(
+        config.max_log_entries().get(),
+        largest,
+        "test setup: BASE sits at the maximum"
+    );
+    let smallest = ConfigParam::MaxLogEntries.minimum();
+    let at_minimum = accepted(
+        &with(
+            "max_log_entries = 1000000",
+            &format!("max_log_entries = {smallest}"),
+        ),
+        "the smallest max_log_entries is accepted",
+    );
+    assert_eq!(
+        at_minimum.max_log_entries(),
+        LogIndex::new(smallest).unwrap()
+    );
 }
 
 #[test]
@@ -1046,15 +1084,15 @@ fn consensus_settings_mirror_the_config() {
     assert_eq!(
         observed,
         (
-            2,
-            2,
-            20,
-            20,
-            40,
-            256 << 10,
-            16,
-            4 << 20,
-            1 << 20,
+            node(2),
+            Tick::new(2),
+            Tick::new(20),
+            Tick::new(20),
+            Tick::new(40),
+            ByteCount::new(256 << 10),
+            ItemCount::new(16),
+            ByteCount::new(4 << 20),
+            ByteCount::new(1 << 20),
             true,
             true,
             ReadMode::Safe
@@ -1073,15 +1111,15 @@ fn consensus_settings_mirror_the_config() {
 #[test]
 fn each_raft_rs_validate_constraint_is_its_own_rule() {
     let valid = accepted(BASE, "BASE is valid").consensus(node(1)).unwrap();
-    let cases: [Mutation; 11] = [
-        (
-            "node id 0",
-            |s| s.node_id = 0,
-            Err(ConsensusViolation::ZeroNodeId),
-        ),
+    assert!(
+        NodeId::new(0).is_err(),
+        "rule: raft-rs's first check, node ID 0 (INVALID_ID), holds by type: the settings \
+         carry a NodeId, which is never 0 (CD-2), so ZeroNodeId cannot occur"
+    );
+    let cases: [Mutation; 10] = [
         (
             "heartbeat 0",
-            |s| s.heartbeat_tick = 0,
+            |s| s.heartbeat_tick = Tick::ZERO,
             Err(ConsensusViolation::ZeroHeartbeat),
         ),
         (
@@ -1091,7 +1129,7 @@ fn each_raft_rs_validate_constraint_is_its_own_rule() {
         ),
         (
             "min election below election",
-            |s| s.min_election_tick = s.election_tick - 1,
+            |s| s.min_election_tick = Tick::new(s.election_tick.get() - 1),
             Err(ConsensusViolation::MinElectionBelowElection),
         ),
         (
@@ -1101,7 +1139,7 @@ fn each_raft_rs_validate_constraint_is_its_own_rule() {
         ),
         (
             "no in-flight messages",
-            |s| s.max_inflight_msgs = 0,
+            |s| s.max_inflight_msgs = ItemCount::ZERO,
             Err(ConsensusViolation::ZeroInflight),
         ),
         (
@@ -1119,7 +1157,7 @@ fn each_raft_rs_validate_constraint_is_its_own_rule() {
         ),
         (
             "uncommitted below message size",
-            |s| s.max_uncommitted_size = s.max_size_per_msg - 1,
+            |s| s.max_uncommitted_size = ByteCount::new(s.max_size_per_msg.get() - 1),
             Err(ConsensusViolation::UncommittedBelowMessageSize),
         ),
         (

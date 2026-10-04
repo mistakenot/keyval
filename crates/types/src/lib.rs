@@ -95,7 +95,7 @@ pub use consensus::{
     Consensus, Entry, EntryPayload, HardState, LightReady, OutboundMessage, Progress, ProposeError,
     Ready, Role, Status, StepError,
 };
-pub use counts::{ByteCount, PageSize, Tick};
+pub use counts::{ByteCount, ItemCount, PageSize, Tick};
 pub use data::{Key, KeyError, KeyValueLimits, Value, ValueError};
 pub use effects::{Effect, Inbound, Incarnation, Input, StorageOp, SyncSeq};
 pub use error_code::{ErrorCode, Terminality};

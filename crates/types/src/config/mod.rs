@@ -52,7 +52,7 @@ pub use params::{
     MAX_SCAN_PAGE_BYTES, PER_ENTRY_OVERHEAD_BOUND, PROTOCOL_VERSION,
 };
 
-use crate::{ByteCount, ClusterId, KeyValueLimits, NodeId, Tick};
+use crate::{ByteCount, ClusterId, ItemCount, KeyValueLimits, LogIndex, NodeId, Tick};
 use reader::{Document, Raw, Table};
 use rules::Values;
 
@@ -132,6 +132,8 @@ pub struct Config {
     values: Values,
     /// The key and value limits in force (D-80): `max_key_bytes` and `max_value_bytes`.
     key_value_limits: KeyValueLimits,
+    /// The commit-index admission ceiling (DM-7): `max_log_entries` as a log index.
+    max_log_entries: LogIndex,
     /// The voters, by ID.
     nodes: BTreeMap<NodeId, NodeConfig>,
 }
@@ -154,6 +156,7 @@ impl Config {
         let cluster_id = read_cluster_id(&document.top)?;
         let values = read_values(&document.top)?;
         let key_value_limits = key_value_limits(&document.top, &values)?;
+        let max_log_entries = history_ceiling(&document.top, &values)?;
         let nodes = read_nodes(&document, config_dir)?;
         rules::timing(&values)?;
         rules::limits(&values)?;
@@ -161,6 +164,7 @@ impl Config {
             cluster_id,
             values,
             key_value_limits,
+            max_log_entries,
             nodes,
         };
         for &node in config.nodes.keys() {
@@ -247,8 +251,8 @@ impl Config {
 
     /// The live-key limit (DM-6).
     #[must_use]
-    pub const fn max_live_keys(&self) -> u64 {
-        self.values.max_live_keys
+    pub const fn max_live_keys(&self) -> ItemCount {
+        ItemCount::new(self.values.max_live_keys)
     }
 
     /// The live key and value byte limit (DM-6).
@@ -257,10 +261,11 @@ impl Config {
         ByteCount::new(self.values.max_live_bytes)
     }
 
-    /// The commit-index admission ceiling (DM-7).
+    /// The commit-index admission ceiling (DM-7): the leader refuses new mutations once its
+    /// commit index reaches it.
     #[must_use]
-    pub const fn max_log_entries(&self) -> u64 {
-        self.values.max_log_entries
+    pub const fn max_log_entries(&self) -> LogIndex {
+        self.max_log_entries
     }
 
     /// The first-execution command byte ceiling (DM-7).
@@ -283,14 +288,14 @@ impl Config {
 
     /// Replication batches in flight per peer.
     #[must_use]
-    pub const fn replication_inflight_batches(&self) -> u64 {
-        self.values.replication_inflight_batches
+    pub const fn replication_inflight_batches(&self) -> ItemCount {
+        ItemCount::new(self.values.replication_inflight_batches)
     }
 
     /// The per-peer send queue's message bound.
     #[must_use]
-    pub const fn peer_send_queue_messages(&self) -> u64 {
-        self.values.peer_send_queue_messages
+    pub const fn peer_send_queue_messages(&self) -> ItemCount {
+        ItemCount::new(self.values.peer_send_queue_messages)
     }
 
     /// The per-peer send queue's byte bound.
@@ -344,15 +349,15 @@ impl Config {
     const fn settings(&self, node: NodeId) -> ConsensusSettings {
         let values = &self.values;
         ConsensusSettings {
-            node_id: node.get(),
-            heartbeat_tick: values.heartbeat_ticks,
-            election_tick: values.election_min_ticks,
-            min_election_tick: values.election_min_ticks,
-            max_election_tick: values.election_max_ticks_exclusive,
-            max_size_per_msg: values.replication_batch_bytes,
-            max_inflight_msgs: values.replication_inflight_batches,
-            max_uncommitted_size: values.max_uncommitted_bytes,
-            max_committed_size_per_ready: values.max_committed_bytes_per_ready,
+            node_id: node,
+            heartbeat_tick: Tick::new(values.heartbeat_ticks),
+            election_tick: Tick::new(values.election_min_ticks),
+            min_election_tick: Tick::new(values.election_min_ticks),
+            max_election_tick: Tick::new(values.election_max_ticks_exclusive),
+            max_size_per_msg: ByteCount::new(values.replication_batch_bytes),
+            max_inflight_msgs: ItemCount::new(values.replication_inflight_batches),
+            max_uncommitted_size: ByteCount::new(values.max_uncommitted_bytes),
+            max_committed_size_per_ready: ByteCount::new(values.max_committed_bytes_per_ready),
             check_quorum: true,
             pre_vote: true,
             read_mode: ReadMode::Safe,
@@ -473,6 +478,20 @@ fn key_value_limits(top: &Table, values: &Values) -> Result<KeyValueLimits, Conf
             line: top.get(param.key()).map_or(0, |entry| entry.line),
             param,
             value: values.get(param),
+        }
+    })
+}
+
+/// The commit-index admission ceiling as a [`LogIndex`]. The `max_log_entries` range lies
+/// far inside a log index's, so this refuses nothing that [`read_values`] admitted; the
+/// error names the parameter if they ever drift apart.
+fn history_ceiling(top: &Table, values: &Values) -> Result<LogIndex, ConfigError> {
+    LogIndex::new(values.max_log_entries).map_err(|_| {
+        let param = ConfigParam::MaxLogEntries;
+        ConfigError::OutOfRange {
+            line: top.get(param.key()).map_or(0, |entry| entry.line),
+            param,
+            value: values.max_log_entries,
         }
     })
 }
