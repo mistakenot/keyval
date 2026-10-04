@@ -1,10 +1,13 @@
 //! W14.2's tests of the write path (PLAN.md §7.8, F-7, A-5, DM-7): the decision order's
 //! precedence, the attempt state machine, attach and the same-ID race, deadlines,
 //! leadership loss and shutdown; first on a bench that drives the write path directly,
-//! then end to end through the controller.
+//! then end to end through the controller. W29.3 adds a seeded sweep of attempt schedules on
+//! the bench: A-5's `attempt_state` discipline on every path, and no invented result.
 #![cfg(test)]
 
 // check: NODE-WRITE-PATH
+
+use std::collections::BTreeMap;
 
 use statemachine::codec::{self, Command};
 use statemachine::{StateLimits, StateMachine};
@@ -1508,5 +1511,325 @@ fn a_three_voter_follower_redirects_to_the_leader() {
         vec![refused(2, Refusal::NotLeader { leader })],
         "rule: a follower answers a new write not_leader, naming the leader it believes in \
          (F-7, §8.4)"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// A-5 across every path, on seeded schedules (W29.3)
+// ---------------------------------------------------------------------------------------
+
+/// Seeded schedules of the A-5 sweep.
+const SCHEDULES: u64 = 200;
+
+/// Steps per schedule.
+const SCHEDULE_STEPS: usize = 120;
+
+/// The re-run command of the A-5 sweep.
+const SWEEP_RERUN: &str = "./dev check NODE-WRITE-PATH --case \
+                           write_path_tests::seeded_schedules_never_answer_a_submitted_attempt_not_submitted_or_invent_a_result";
+
+/// The `SplitMix64` stream the schedules draw from (P4: seeded, no RNG crate).
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    const fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    const fn below(&mut self, bound: u64) -> u64 {
+        self.next() % bound
+    }
+}
+
+/// What a schedule knows about one attempt, from outside the write path.
+#[derive(Debug)]
+struct Sent {
+    request_id: RequestId,
+    command: Vec<u8>,
+    /// A proposal carrying exactly its command was handed to the library while it waited, or
+    /// it waited on one that had been: it counts as submitted (A-5, §7.8 attach).
+    submitted: bool,
+    answered: bool,
+}
+
+/// The request ID a canonical command carries.
+fn request_in(command: &[u8]) -> RequestId {
+    codec::decode(command, types::KeyValueLimits::MAXIMA)
+        .unwrap()
+        .request_id
+}
+
+/// The name a refusal is counted under.
+const fn refusal_name(refusal: Refusal) -> &'static str {
+    match refusal {
+        Refusal::NotLeader { .. } => "not_leader",
+        Refusal::Busy => "busy",
+        Refusal::Unavailable => "unavailable",
+        Refusal::Recovering { .. } => "recovering",
+        Refusal::UnknownOutcome => "unknown_outcome",
+        Refusal::HistoryFull { .. } => "history_full",
+    }
+}
+
+/// One seeded schedule of attempts, hand-overs, drops, applications, deadlines, leadership
+/// changes and history ceilings on a bench leader, with what it knows from outside: the
+/// attempts sent, the commands handed to the library and not yet applied, the commands of
+/// the submitted proposals still pending, and the applied entries in order.
+struct Schedule {
+    rng: SplitMix64,
+    bench: Bench,
+    max_log_entries: LogIndex,
+    sent: BTreeMap<u64, Sent>,
+    handed: Vec<Vec<u8>>,
+    submitted: Vec<Vec<u8>>,
+    log: Vec<(RequestId, Vec<u8>)>,
+    attempts: u64,
+    term: u64,
+}
+
+impl Schedule {
+    fn new(seed: u64) -> Self {
+        Self {
+            rng: SplitMix64(seed),
+            bench: Bench::leader("small-limits"),
+            max_log_entries: config("small-limits").max_log_entries(),
+            sent: BTreeMap::new(),
+            handed: Vec::new(),
+            submitted: Vec::new(),
+            log: Vec::new(),
+            attempts: 0,
+            term: 2,
+        }
+    }
+
+    /// One of the four request IDs, with one of its two commands.
+    fn op(&mut self) -> ClientOp {
+        let value = if self.rng.below(2) == 0 { "x" } else { "y" };
+        put_id(1 + self.rng.below(4), "k", value)
+    }
+
+    /// One random step; returns its effects.
+    fn step(&mut self) -> Vec<Effect> {
+        match self.rng.below(16) {
+            0..=5 => self.attempt(),
+            6..=8 => self.hand_over(),
+            9..=10 => self.apply(),
+            11 => self.expire(),
+            12 => self.lead_or_follow(),
+            13 => {
+                // The commit index reaches max_log_entries, until the next entry applies.
+                self.bench.status.commit = self.max_log_entries;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// A new attempt. One that waits while a submitted proposal with its command is pending
+    /// waits on it, so it counts as submitted.
+    fn attempt(&mut self) -> Vec<Effect> {
+        let op = self.op();
+        self.attempts += 1;
+        let attempt = self.attempts;
+        let command = command(&op);
+        let effects = self.bench.attempt(attempt, op);
+        let waits = !effects.iter().any(|effect| is_response_to(effect, attempt));
+        self.sent.insert(
+            attempt,
+            Sent {
+                request_id: request_in(&command),
+                submitted: waits && self.submitted.contains(&command),
+                command,
+                answered: false,
+            },
+        );
+        effects
+    }
+
+    /// The next proposal goes to the library, which takes it or drops it synchronously
+    /// (nothing appended: not submitted).
+    fn hand_over(&mut self) -> Vec<Effect> {
+        let Some(proposal) = self.bench.next_proposal() else {
+            return Vec::new();
+        };
+        if self.rng.below(5) == 0 {
+            return self
+                .bench
+                .proposed(proposal.attempt.get(), Err(ProposeError::Dropped));
+        }
+        let effects = self.bench.proposed(proposal.attempt.get(), Ok(()));
+        for known in self.sent.values_mut() {
+            if !known.answered && known.command == proposal.command {
+                known.submitted = true;
+            }
+        }
+        self.submitted.push(proposal.command.clone());
+        self.handed.push(proposal.command);
+        effects
+    }
+
+    /// The oldest handed command applies, or an entry another leader proposed.
+    fn apply(&mut self) -> Vec<Effect> {
+        let entry = if !self.handed.is_empty() && self.rng.below(4) != 0 {
+            self.handed.remove(0)
+        } else {
+            let op = self.op();
+            command(&op)
+        };
+        let request_id = request_in(&entry);
+        self.submitted
+            .retain(|pending| request_in(pending) != request_id);
+        self.log.push((request_id, entry.clone()));
+        self.bench.apply(entry)
+    }
+
+    /// A waiting attempt reaches its deadline.
+    fn expire(&mut self) -> Vec<Effect> {
+        let waiting: Vec<u64> = self
+            .sent
+            .iter()
+            .filter(|(_, known)| !known.answered)
+            .map(|(attempt, _)| *attempt)
+            .collect();
+        if waiting.is_empty() {
+            return Vec::new();
+        }
+        let at = self.rng.below(u64::try_from(waiting.len()).unwrap());
+        self.bench.expire(waiting[usize::try_from(at).unwrap()])
+    }
+
+    /// Leadership is lost (to a known leader, or to none), or regained in a new term:
+    /// pending proposals fail either way.
+    fn lead_or_follow(&mut self) -> Vec<Effect> {
+        self.submitted.clear();
+        if self.bench.status.role == Role::Leader {
+            let leader = (self.rng.below(2) == 0).then(other_node);
+            self.bench.follow(leader);
+        } else {
+            self.term += 1;
+            self.bench.status.role = Role::Leader;
+            self.bench.status.leader = Some(self.bench.node());
+            self.bench.status.term = Term::new(self.term).unwrap();
+        }
+        self.bench.status_changed()
+    }
+
+    /// Checks every answer in `effects` against what the schedule knows, and counts it.
+    fn judge(
+        &mut self,
+        (seed, step): (u64, usize),
+        effects: &[Effect],
+        tally: &mut BTreeMap<&'static str, u32>,
+    ) {
+        for effect in effects {
+            let Effect::Respond { attempt, response } = effect else {
+                continue;
+            };
+            let attempt = attempt.get();
+            let known = self
+                .sent
+                .get_mut(&attempt)
+                .expect("fixture: an attempt the schedule sent");
+            assert!(
+                !known.answered,
+                "rule: an attempt is answered once (§7.8); seed {seed} step {step}: attempt \
+                 {attempt} answered again with {response:?}; re-run: {SWEEP_RERUN}"
+            );
+            known.answered = true;
+            let first = self
+                .log
+                .iter()
+                .position(|(request_id, _)| *request_id == known.request_id)
+                .map(|at| (u64::try_from(at).unwrap() + 1, &self.log[at].1));
+            let (name, sound) = match response {
+                Response::Written {
+                    result, replayed, ..
+                } => (
+                    if *replayed { "replayed" } else { "written" },
+                    first.is_some_and(|(index, command)| {
+                        *command == known.command && result.index().get() == index
+                    }),
+                ),
+                Response::Conflict { original_index } => (
+                    "conflict",
+                    first.is_some_and(|(index, command)| {
+                        *command != known.command && original_index.get() == index
+                    }),
+                ),
+                Response::Refused(refusal) => (
+                    refusal_name(*refusal),
+                    !known.submitted || refusal.submitted(),
+                ),
+                Response::Found { .. }
+                | Response::NotFound { .. }
+                | Response::Page(_)
+                | Response::Status { .. } => ("read", false),
+            };
+            assert!(
+                sound,
+                "rule: a submitted attempt (its command handed to the library while it waited, \
+                 or waiting on one that was) never answers a not_submitted refusal (A-5), and a \
+                 result is only ever its own command's first execution or a conflict naming \
+                 another command's, already applied (§7.8, §7.5 step 3); seed {seed} step \
+                 {step}: attempt {attempt} {known:?} answered {response:?}; first execution of \
+                 its ID (index, command): {first:?}; re-run: {SWEEP_RERUN}"
+            );
+            if known.submitted && name == "unknown_outcome" {
+                *tally.entry("submitted_unknown").or_insert(0) += 1;
+            }
+            *tally.entry(name).or_insert(0) += 1;
+        }
+    }
+}
+
+#[test]
+fn seeded_schedules_never_answer_a_submitted_attempt_not_submitted_or_invent_a_result() {
+    let mut tally: BTreeMap<&'static str, u32> = BTreeMap::new();
+    for seed in 0..SCHEDULES {
+        let mut schedule = Schedule::new(seed);
+        for step in 0..SCHEDULE_STEPS {
+            let effects = schedule.step();
+            schedule.judge((seed, step), &effects, &mut tally);
+        }
+        let effects = schedule.bench.shutdown();
+        schedule.judge((seed, SCHEDULE_STEPS), &effects, &mut tally);
+        let unanswered: Vec<u64> = schedule
+            .sent
+            .iter()
+            .filter(|(_, known)| !known.answered)
+            .map(|(attempt, _)| *attempt)
+            .collect();
+        assert!(
+            unanswered.is_empty(),
+            "rule: shutdown answers every attempt still waiting (§7.8); seed {seed}: \
+             unanswered {unanswered:?}; re-run: {SWEEP_RERUN}"
+        );
+    }
+    // Floors at about a quarter of what the schedules reached when they were set.
+    let floors = [
+        ("written", 59),           // measured 236
+        ("replayed", 845),         // measured 3382
+        ("conflict", 885),         // measured 3543
+        ("unknown_outcome", 60),   // measured 247
+        ("submitted_unknown", 50), // measured 200
+        ("busy", 40),              // measured 163
+        ("not_leader", 120),       // measured 489
+        ("unavailable", 144),      // measured 576
+        ("history_full", 86),      // measured 345
+    ];
+    let short: Vec<(&str, u32, u32)> = floors
+        .iter()
+        .map(|(name, floor)| (*name, tally.get(name).copied().unwrap_or(0), *floor))
+        .filter(|(_, count, floor)| count < floor)
+        .collect();
+    assert!(
+        short.is_empty(),
+        "fixture: the schedules reach every answer, each at least its floor, so the sweep is \
+         not vacuous (P10); below floor (name, count, floor): {short:?}; tally={tally:?}; \
+         re-run: {SWEEP_RERUN}"
     );
 }

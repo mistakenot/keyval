@@ -59,6 +59,8 @@
 //! tick counts are integers.
 
 #[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
 mod attempt_table_tests;
 mod controller;
 #[cfg(test)]

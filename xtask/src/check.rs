@@ -1537,8 +1537,11 @@ pub const CATALOGUE: &[CheckDef] = &[
                   mismatches, and their retries replay the original result; end to end through \
                   the controller, a lone leader commits and replays PUT, DELETE and \
                   compare-and-swap, a replay is answered while a sync is outstanding, a deadline \
-                  gives unknown_outcome, and a follower redirects to the leader; each \
-                  NODE-WRITE-* invariant fires on corrupt state",
+                  gives unknown_outcome, and a follower redirects to the leader; a seeded sweep \
+                  of 200 attempt schedules (hand-overs, synchronous drops, its own and other \
+                  leaders' entries applying, deadlines, leadership changes, history ceilings) \
+                  never answers a submitted attempt not_submitted and never invents a result \
+                  (A-5, W29.3); each NODE-WRITE-* invariant fires on corrupt state",
         kind: Kind::TestGroup,
         covers: &["F-7", "A-5", "DM-7", "C-5"],
         class: ClaimClass::Invariant,
@@ -1547,7 +1550,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "node",
             filters: &["write_path_tests::", "write_path::invariant_fixtures::"],
         },
-        min_cases: 39,
+        min_cases: 40,
     },
     CheckDef {
         id: "NODE-READ-PATH",
@@ -1865,6 +1868,29 @@ pub const CATALOGUE: &[CheckDef] = &[
         selector: Selector::CargoTest {
             package: "server",
             filters: &["restart_tests::"],
+        },
+        min_cases: 3,
+    },
+    CheckDef {
+        id: "HISTORY-ADMISSION",
+        summary: "history admission and the live-quota terminal flow end to end (§7.11, §8.3, \
+                  §8.4, DM-7, DM-6, A-5, F-10, W29.3), through controllers on a three-voter \
+                  small-limits cluster: once the state machine's committed command bytes at the \
+                  leader's applied index reach max_history_bytes, the leader refuses a new PUT \
+                  or DELETE before proposal with history_full naming max_history_bytes, not \
+                  submitted, appending nothing, while a follower still redirects, a retry of an \
+                  executed request replays and status lookups and GETs keep working; a new \
+                  leader's election no-op still commits past the ceiling while new writes there \
+                  stay history_full; and a write over the live-key quota is a terminal \
+                  capacity_exceeded, answered as a written result, replayed to a retry even \
+                  after room appears, executing again only under a new request ID",
+        kind: Kind::TestGroup,
+        covers: &["DM-7", "DM-6", "A-5", "F-10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "node",
+            filters: &["admission_tests::"],
         },
         min_cases: 3,
     },
