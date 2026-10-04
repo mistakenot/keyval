@@ -1094,7 +1094,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "journal",
             filters: &["examine_tests::"],
         },
-        min_cases: 6,
+        min_cases: 8,
     },
     CheckDef {
         id: "FS-DOCTOR",
@@ -1119,7 +1119,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                   reaches startup recovery's verdict on every recovery golden (clean, \
                   the torn tail it would discard, the refusal), verifies the genesis \
                   binding against --config/--node, refuses a live directory unexamined, \
-                  prints a keyval.cli.doctor/v1 report that validates against its \
+                  prints a keyval.cli.doctor/v2 report that validates against its \
                   schema, and leaves every file byte for byte as it was (O-7, O-6)",
         kind: Kind::TestGroup,
         covers: &["O-7", "O-6"],
@@ -1129,7 +1129,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "cli",
             filters: &["doctor_cli::"],
         },
-        min_cases: 12,
+        min_cases: 16,
     },
     CheckDef {
         id: "OBSERVATION-SCHEMA",

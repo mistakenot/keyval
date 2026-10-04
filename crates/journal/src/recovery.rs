@@ -188,7 +188,8 @@ pub enum RecoveryError {
     NotAnInterruptedInit {
         /// The journal's length.
         len: u64,
-        /// The length of a genesis frame for this configuration and node.
+        /// The length of a genesis frame for this configuration and node. Without a
+        /// configuration (the doctor), the longest any configuration gives (br-riea).
         genesis_len: u64,
     },
     /// A frame whose header is intact (its header checksum holds) but holds a field this
@@ -470,6 +471,17 @@ fn judge_remainder(
     Ok(shape)
 }
 
+/// The shortest genesis frame any valid configuration gives: a 1-byte cluster ID and one
+/// voter. A genesis frame is 92 bytes plus its cluster ID plus 8 per voter: the frame header
+/// (24) and trailer (8), the format version (2), the instance ID (16), the cluster ID's and
+/// the voter count's length bytes (1 each), the node ID (8) and the fingerprint (32).
+pub const MIN_GENESIS_FRAME_LEN: u64 = 92 + 1 + 8;
+
+/// The longest genesis frame any valid configuration gives: a 255-byte cluster ID
+/// (`ClusterId::MAX_BYTES`) and five voters (§7.10, D-45). Without the configuration, a
+/// journal longer than this holds content, never an interrupted `init` (br-riea).
+pub const MAX_GENESIS_FRAME_LEN: u64 = 92 + 255 + 8 * 5;
+
 /// The length of the genesis frame `init` writes for `node` under `config`, if the
 /// configuration lists the node. The instance ID's bytes do not change it.
 fn genesis_frame_len(config: &Config, node: NodeId) -> Option<u64> {
@@ -538,8 +550,9 @@ fn next_frame(
 ///
 /// With `binding`, the genesis is verified against that configuration and node (DUR-8),
 /// and a journal with no valid genesis is told apart from an interrupted `init` by the
-/// genesis frame's length for them. Without one, both checks are skipped: the doctor
-/// examines a directory without its configuration (O-7).
+/// genesis frame's length for them. Without one (the doctor examining a directory without
+/// its configuration, O-7), the binding is unchecked, and only a journal longer than the
+/// longest genesis frame any configuration gives is told apart (br-riea).
 ///
 /// # Errors
 ///
@@ -559,8 +572,12 @@ pub fn scan(
         judge_remainder(storage, 0, &first, journal_len, 0).map_err(refuse)?;
         // An interrupted init leaves at most one genesis frame's worth of bytes: a torn
         // prefix, perhaps filled out with zeros or garbage to the append's full length.
-        if let Some((config, node)) = binding
-            && let Some(genesis_len) = genesis_frame_len(config, node)
+        // Without the configuration, the longest genesis frame stands in (br-riea).
+        let genesis_len = match binding {
+            Some((config, node)) => genesis_frame_len(config, node),
+            None => Some(MAX_GENESIS_FRAME_LEN),
+        };
+        if let Some(genesis_len) = genesis_len
             && journal_len > genesis_len
         {
             return Err(refuse(RecoveryError::NotAnInterruptedInit {

@@ -11,7 +11,9 @@
 //!   how long, and what it looks like, e.g. "discard the 37-byte incomplete final frame
 //!   at offset 4096"), or refuse, with why.
 //! - Given the configuration and node, the genesis binding is verified too (DUR-8).
-//!   Without it, the doctor checks everything else and says the binding was unchecked.
+//!   Without it, the doctor checks everything else and says the binding was unchecked;
+//!   and whether `init` may re-run is known only where no configuration could change the
+//!   answer ([`Examination::init_allowed`], br-riea).
 //!
 //! The caller probes the data directory's lock first and refuses a live directory, so an
 //! in-flight append is never read as damage (O-7).
@@ -20,7 +22,7 @@ use types::{ByteCount, Config, HardState, JournalRead, LogIndex, NodeId, Term};
 
 use crate::log::{LogBounds, LogicalLog};
 use crate::record::Genesis;
-use crate::recovery::{RecoveryError, TornTail, scan};
+use crate::recovery::{MIN_GENESIS_FRAME_LEN, RecoveryError, TornTail, scan};
 
 /// Whether the genesis was verified against a configuration (DUR-8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +59,8 @@ pub struct Examination {
     log: Option<LogicalLog>,
     /// Whether the genesis binding was verified.
     binding: Binding,
+    /// Whether a configuration was given.
+    configured: bool,
     /// What recovery would do.
     verdict: Verdict,
 }
@@ -124,6 +128,23 @@ impl Examination {
     pub fn hard_state(&self) -> Option<HardState> {
         self.log.as_ref().map(LogicalLog::hard_state)
     }
+
+    /// Whether `init` may (re-)run on the journal, when recovery would refuse it (§7.7 step
+    /// 0): true only for an empty journal, or one holding no complete genesis and nothing
+    /// after it. Without the configuration the genesis frame's length is unknown, so a
+    /// journal holding no valid genesis but more bytes than the shortest genesis frame any
+    /// configuration gives is `None`: run again with the configuration to know (br-riea).
+    /// `None` too when recovery would start.
+    #[must_use]
+    pub fn init_allowed(&self) -> Option<bool> {
+        let Verdict::Refuse(error) = &self.verdict else {
+            return None;
+        };
+        let unknown = !self.configured
+            && *error == RecoveryError::IncompleteGenesis
+            && self.journal_len > MIN_GENESIS_FRAME_LEN;
+        (!unknown).then_some(error.permits_init())
+    }
 }
 
 /// Examines the journal of `journal_len` bytes as startup recovery would, modifying
@@ -152,6 +173,7 @@ pub fn examine(
     match scan(storage, journal_len, binding, bounds) {
         Ok(scanned) => Examination {
             journal_len,
+            configured: binding.is_some(),
             binding: checked(&Some(scanned.genesis.clone())),
             genesis: Some(scanned.genesis),
             log: Some(scanned.log),
@@ -161,6 +183,7 @@ pub fn examine(
             let refusal = *refusal;
             Examination {
                 journal_len,
+                configured: binding.is_some(),
                 binding: checked(&refusal.genesis),
                 genesis: refusal.genesis,
                 log: refusal.log,

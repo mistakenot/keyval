@@ -8,10 +8,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use types::{
-    ByteCount, Config, HardState, InstanceId, JournalRead, LogIndex, NodeId, ReadLen, StorageError,
-    Term,
+    ByteCount, ClusterId, Config, HardState, InstanceId, JournalRead, LogIndex, NodeId, ReadLen,
+    StorageError, Term,
 };
 
+use crate::recovery::{MAX_GENESIS_FRAME_LEN, MIN_GENESIS_FRAME_LEN};
 use crate::{
     Binding, FrameKind, Genesis, GenesisMismatch, LogBounds, RecoveryError, TailShape, Verdict,
     encode, examine, recover,
@@ -400,6 +401,112 @@ fn the_binding_is_verified_only_with_a_configuration() {
         &Verdict::Refuse(RecoveryError::IncompleteGenesis),
         "rule: without it the genesis frame's length is unknown, and the binding is \
          reported unchecked"
+    );
+}
+
+#[test]
+fn the_genesis_frame_bounds_cover_every_configuration() {
+    let config = config();
+    let cluster = u64::try_from(config.cluster_id().as_str().len()).unwrap();
+    let voters = u64::try_from(config.voter_count()).unwrap();
+    assert_eq!(
+        genesis_len(),
+        92 + cluster + 8 * voters,
+        "rule: a genesis frame is 92 bytes plus its cluster ID plus 8 per voter, as the \
+         bounds assume (br-riea)"
+    );
+    let longest = u64::try_from(ClusterId::MAX_BYTES).unwrap();
+    assert_eq!(
+        (MIN_GENESIS_FRAME_LEN, MAX_GENESIS_FRAME_LEN),
+        (92 + 1 + 8, 92 + longest + 8 * 5),
+        "rule: the bounds are a 1-byte cluster ID with one voter, and the longest cluster ID \
+         with five voters (§7.10, D-45)"
+    );
+    assert!(
+        (MIN_GENESIS_FRAME_LEN..=MAX_GENESIS_FRAME_LEN).contains(&genesis_len()),
+        "rule: local.toml's genesis frame lies within the bounds"
+    );
+}
+
+#[test]
+fn without_a_configuration_init_advice_follows_the_genesis_frame_bounds() {
+    let incomplete = include_bytes!("../golden/recovery/incomplete-genesis.bin").to_vec();
+    let mut damaged = golden("clean");
+    for at in [0, genesis_len(), genesis_len() + F2] {
+        damaged[usize::try_from(at).unwrap()] ^= 0xff;
+    }
+    let zeros = |n: usize| vec![0_u8; n];
+    let not_init = |len: usize| {
+        Verdict::Refuse(RecoveryError::NotAnInterruptedInit {
+            len: u64::try_from(len).unwrap(),
+            genesis_len: MAX_GENESIS_FRAME_LEN,
+        })
+    };
+    let incomplete_genesis = Verdict::Refuse(RecoveryError::IncompleteGenesis);
+    for (name, bytes, verdict, init) in [
+        (
+            "the 60-byte incomplete genesis",
+            incomplete.clone(),
+            incomplete_genesis.clone(),
+            Some(true),
+        ),
+        (
+            "101 zero bytes",
+            zeros(101),
+            incomplete_genesis.clone(),
+            Some(true),
+        ),
+        (
+            "102 zero bytes",
+            zeros(102),
+            incomplete_genesis.clone(),
+            None,
+        ),
+        (
+            "347 zero bytes",
+            zeros(347),
+            incomplete_genesis.clone(),
+            None,
+        ),
+        (
+            "a journal whose frames all lost their first byte",
+            damaged.clone(),
+            incomplete_genesis.clone(),
+            None,
+        ),
+        ("387 zero bytes", zeros(387), incomplete_genesis, None),
+        ("388 zero bytes", zeros(388), not_init(388), Some(false)),
+        ("4096 zero bytes", zeros(4096), not_init(4096), Some(false)),
+    ] {
+        let examination = examined(&bytes, false);
+        assert_eq!(
+            (examination.verdict(), examination.init_allowed()),
+            (&verdict, init),
+            "rule: without a configuration, init may re-run only at or below the shortest \
+             genesis frame, never past the longest, and is unknown between (§7.7 step 0, \
+             br-riea); journal={name}"
+        );
+    }
+    for (name, bytes, init) in [
+        ("the 60-byte incomplete genesis", incomplete, Some(true)),
+        ("347 zero bytes", zeros(347), Some(false)),
+        (
+            "a journal whose frames all lost their first byte",
+            damaged,
+            Some(false),
+        ),
+    ] {
+        assert_eq!(
+            examined(&bytes, true).init_allowed(),
+            init,
+            "rule: with the configuration the genesis frame's length decides (§7.7 step 0); \
+             journal={name}"
+        );
+    }
+    assert_eq!(
+        examined(&golden("clean"), false).init_allowed(),
+        None,
+        "rule: a journal recovery would start has no init advice"
     );
 }
 

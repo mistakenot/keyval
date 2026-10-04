@@ -421,7 +421,9 @@ impl DataDir for FsStorage {
 /// What probing a data directory's lock found ([`ReadOnlyDir::probe_lock`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockProbe {
-    /// There is no `LOCK` file: no process ever took the directory's lock.
+    /// There is no `LOCK` file: no node took the lock since the directory was created, or the
+    /// file was removed. Nothing then keeps a node from starting while the directory is read,
+    /// so a caller that needs a stable journal must look again afterwards (br-riea).
     NoLockFile,
     /// The lock was free, and the probing handle now holds it until it is dropped, so no
     /// node starts while the doctor reads.

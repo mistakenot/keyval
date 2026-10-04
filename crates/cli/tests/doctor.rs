@@ -22,8 +22,8 @@ use types::{
 /// The repository's local cluster config.
 const LOCAL: &str = include_str!("../../../config/local.toml");
 
-/// The report's JSON Schema.
-const SCHEMA: &str = include_str!("../../../schemas/cli/doctor.v1.schema.json");
+/// The report's JSON Schema (v2 since br-riea).
+const SCHEMA: &str = include_str!("../../../schemas/cli/doctor.v2.schema.json");
 
 /// The error envelope's JSON Schema (br-tdy6).
 const ERROR_SCHEMA: &str = include_str!("../../../schemas/cli/error.v1.schema.json");
@@ -629,6 +629,118 @@ mod doctor_cli {
     }
 
     #[test]
+    fn without_a_config_init_is_never_advised_past_any_genesis_frame() {
+        let incomplete = journal_of(&golden_named("incomplete-genesis"));
+        let mut damaged = journal_of(&golden_named("clean"));
+        for at in [0, 147, 147 + 113] {
+            damaged[at] ^= 0xff;
+        }
+        let config = local_config_path();
+        let bound = ["--config", config.to_str().unwrap(), "--node", "1"];
+        for (name, bytes, unbound, configured) in [
+            (
+                "4096 zero bytes",
+                vec![0_u8; 4096],
+                ("not_an_interrupted_init", json!(false)),
+                ("not_an_interrupted_init", json!(false)),
+            ),
+            (
+                "a journal whose frames all lost their first byte",
+                damaged,
+                ("incomplete_genesis", Value::Null),
+                ("not_an_interrupted_init", json!(false)),
+            ),
+            (
+                "347 zero bytes",
+                vec![0_u8; 347],
+                ("incomplete_genesis", Value::Null),
+                ("not_an_interrupted_init", json!(false)),
+            ),
+            (
+                "the 60-byte incomplete genesis",
+                incomplete,
+                ("incomplete_genesis", json!(true)),
+                ("incomplete_genesis", json!(true)),
+            ),
+        ] {
+            let dir = data_dir("init-advice", &bytes);
+            for (args, (code, init)) in [(&[][..], unbound), (&bound[..], configured)] {
+                let (report, _) = doctor_json(&dir, args);
+                assert_eq!(
+                    (
+                        report["refusal"]["code"].as_str(),
+                        &report["refusal"]["init_allowed"]
+                    ),
+                    (Some(code), &init),
+                    "rule: init is advised only where no configuration could change the answer; \
+                     never on a journal longer than any genesis frame (§7.7 step 0, br-riea); \
+                     journal={name} args={args:?} report={report}"
+                );
+                let text = String::from_utf8_lossy(
+                    &keyval(&[&["doctor", dir.to_str().unwrap()][..], args].concat()).stdout,
+                )
+                .into_owned();
+                let advised = text.contains("`init` may (re-)run");
+                let unknown = text.contains("run the doctor again with --config and --node");
+                assert_eq!(
+                    (advised, unknown),
+                    (init == json!(true), init.is_null()),
+                    "rule: the text says the same as init_allowed; journal={name} \
+                     args={args:?} output={text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_journal_read_without_a_lock_file_is_flagged() {
+        let dir = scratch("no-lock");
+        assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
+        fs::write(
+            dir.join(fs_storage::JOURNAL),
+            journal_of(&golden_named("clean")),
+        )
+        .unwrap();
+        let (report, code) = doctor_json(&dir, &[]);
+        assert_eq!(
+            (report["verdict"].as_str(), report["lock"].as_str(), code),
+            (Some("clean"), Some("no_lock_file"), 0),
+            "rule: an unchanged journal read without a LOCK file keeps its verdict; \
+             report={report}"
+        );
+        assert!(
+            report["would_do"].as_str().is_some_and(
+                |text| text.contains("no LOCK file") && text.contains("did not change")
+            ),
+            "rule: the report flags that nothing kept a node from starting (br-riea); \
+             report={report}"
+        );
+    }
+
+    #[test]
+    fn a_journal_that_cannot_be_read_is_unreadable_with_its_cause() {
+        let dir = data_dir("eisdir", &[]);
+        fs::remove_file(dir.join(fs_storage::JOURNAL)).unwrap();
+        fs::create_dir(dir.join(fs_storage::JOURNAL)).unwrap();
+        let (report, code) = doctor_json(&dir, &[]);
+        let would_do = report["would_do"].as_str().unwrap_or_default().to_owned();
+        assert_eq!(
+            (
+                report["verdict"].as_str(),
+                report["refusal"].is_null(),
+                code
+            ),
+            (Some("unreadable"), true, 1),
+            "rule: a journal that cannot be read is unreadable, not a refusal (br-riea); \
+             report={report}"
+        );
+        assert!(
+            would_do.contains("journal.log") && would_do.contains("directory"),
+            "rule: the report keeps the operation, path and OS cause; would_do={would_do}"
+        );
+    }
+
+    #[test]
     fn the_golden_table_is_every_recovery_golden_file() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../journal/golden/recovery");
         let files: BTreeSet<String> = fs::read_dir(&dir)
@@ -676,7 +788,7 @@ mod doctor_cli {
         let enums = [
             (
                 "/properties/verdict/enum",
-                every!(Conclusion: Clean, DiscardTail, Refuse, Live, NoJournal, Unreadable),
+                every!(Conclusion: Clean, DiscardTail, Refuse, Live, NoJournal, Unreadable, Changed),
             ),
             (
                 "/properties/lock/enum",

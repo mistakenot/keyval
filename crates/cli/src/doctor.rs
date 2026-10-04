@@ -4,16 +4,19 @@
 //! 1. The directory is opened read-only ([`ReadOnlyDir`]): nothing is created or written.
 //! 2. Its lock is probed first. A live directory (another process holds the lock) is
 //!    refused unexamined, so an in-flight append is never read as damage. A free lock is
-//!    held while the doctor reads, so no node starts meanwhile.
+//!    held while the doctor reads, so no node starts meanwhile. With no LOCK file nothing
+//!    keeps a node from starting, so the doctor looks again afterwards, and gives no
+//!    verdict on a journal or lock that moved (br-riea).
 //! 3. The journal is examined exactly as startup recovery reads it
 //!    ([`journal::examine`]): the genesis record, every frame's checksums and sequence,
 //!    index contiguity, term monotonicity and hard-state consistency. With `--config` and
 //!    `--node`, the genesis binding is verified too (DUR-8).
 //! 4. The report says what startup recovery would do (start, discard a described torn
-//!    tail, or refuse, with why), as text or as `keyval.cli.doctor/v1` JSON (O-6).
+//!    tail, or refuse, with why), as text or as `keyval.cli.doctor/v2` JSON (O-6).
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::time::SystemTime;
 
 use fs_storage::{Failure, LockProbe, ReadOnlyDir};
 use journal::{
@@ -23,8 +26,9 @@ use serde::Serialize;
 use types::{ByteCount, Config, LogIndex, NodeId, StorageError};
 
 /// The JSON report's schema identifier (O-6); its JSON Schema is
-/// `schemas/cli/doctor.v1.schema.json`.
-pub const SCHEMA: &str = "keyval.cli.doctor/v1";
+/// `schemas/cli/doctor.v2.schema.json`. v2 (br-riea): `refusal.init_allowed` may be null,
+/// and the verdict may be `changed`.
+pub const SCHEMA: &str = "keyval.cli.doctor/v2";
 
 /// The logical log's bounds without a configuration: the entry cache's fixed bound
 /// (`Limit::EntryCacheBytes`, 8 MiB). The doctor never appends, so the hard stop is
@@ -47,6 +51,9 @@ pub enum Conclusion {
     NoJournal,
     /// Not examined: the directory or journal cannot be read.
     Unreadable,
+    /// Read without a LOCK file, and the journal or the lock moved meanwhile: a node may
+    /// have started, so no verdict is given on bytes that moved (br-riea).
+    Changed,
 }
 
 impl Conclusion {
@@ -56,7 +63,7 @@ impl Conclusion {
     pub const fn exit_code(self) -> u8 {
         match self {
             Self::Clean | Self::DiscardTail => 0,
-            Self::Refuse | Self::Live | Self::NoJournal | Self::Unreadable => 1,
+            Self::Refuse | Self::Live | Self::NoJournal | Self::Unreadable | Self::Changed => 1,
         }
     }
 }
@@ -67,7 +74,9 @@ impl Conclusion {
 pub enum LockState {
     /// The lock was free; the doctor held it while reading.
     Acquired,
-    /// There is no LOCK file: no process ever took the directory's lock.
+    /// There is no LOCK file: no node took the lock since the directory was created, or
+    /// the file was removed. Nothing keeps a node from starting while the doctor reads, so it
+    /// looks again afterwards (br-riea).
     NoLockFile,
     /// Another process holds the lock.
     Live,
@@ -199,8 +208,9 @@ pub struct RefusalReport {
     pub code: RefusalCode,
     /// The refusal, in words.
     pub message: String,
-    /// Whether `init` may (re-)run on the directory (§7.7 step 0).
-    pub init_allowed: bool,
+    /// Whether `init` may (re-)run on the directory (§7.7 step 0); `None` when that depends
+    /// on the genesis frame's length and no configuration was given (br-riea).
+    pub init_allowed: Option<bool>,
 }
 
 /// The doctor's report: the `keyval.cli.doctor/v1` JSON object.
@@ -285,6 +295,14 @@ impl Report {
         self
     }
 
+    /// The report withdrawing its verdict because what it read moved: what was read stays,
+    /// the tail and refusal go.
+    fn withdrawn(mut self, verdict: Conclusion, would_do: String) -> Self {
+        self.tail = None;
+        self.refusal = None;
+        self.concluding(verdict, would_do)
+    }
+
     /// The report on a directory the doctor could not read.
     fn unreadable(self, failure: Option<Failure>) -> Self {
         let cause = failure.map_or_else(
@@ -347,15 +365,19 @@ impl Report {
                 self.concluding(Conclusion::DiscardTail, format!("{tail}, then start"))
             }
             Verdict::Refuse(error) => {
+                let init_allowed = examination.init_allowed();
                 self.refusal = Some(RefusalReport {
                     code: RefusalCode::of(error),
                     message: error.to_string(),
-                    init_allowed: error.permits_init(),
+                    init_allowed,
                 });
-                let init = if error.permits_init() {
-                    "; `init` may (re-)run on it"
-                } else {
-                    ""
+                let init = match init_allowed {
+                    Some(true) => "; `init` may (re-)run on it",
+                    Some(false) => "",
+                    None => {
+                        "; whether `init` may re-run depends on this node's genesis frame length: \
+                         run the doctor again with --config and --node"
+                    }
                 };
                 self.concluding(
                     Conclusion::Refuse,
@@ -456,7 +478,138 @@ pub fn doctor(dir: &Path, binding: Option<(&Config, NodeId)>) -> Report {
         }
         Err(_) => return report.unreadable(handle.last_failure()),
     };
+    let before = journal_stamp(dir);
     let bounds = binding.map_or(UNCONFIGURED, |(config, _)| LogBounds::of(config));
     let examination = examine(&handle, len, binding, bounds);
-    report.examined(&examination)
+    if let Verdict::Refuse(RecoveryError::Storage(_)) = examination.verdict() {
+        // The journal could not be read: say why, as for any unreadable directory.
+        return report.unreadable(handle.last_failure());
+    }
+    let report = report.examined(&examination);
+    match lock {
+        LockState::NoLockFile => recheck(report, &mut handle, dir, before),
+        LockState::Acquired | LockState::Live => report,
+    }
+}
+
+/// The journal file's length and modification time, to tell whether it changed.
+type Stamp = Option<(u64, SystemTime)>;
+
+/// `dir`'s journal stamp, if it can be read.
+fn journal_stamp(dir: &Path) -> Stamp {
+    let metadata = std::fs::metadata(dir.join(fs_storage::JOURNAL)).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// With no LOCK file, nothing kept a node from starting while the doctor read, so it looks
+/// again: a lock taken meanwhile, or a journal that changed, withdraws the verdict, which was
+/// given on bytes that may have moved (br-riea).
+fn recheck(mut report: Report, handle: &mut ReadOnlyDir, dir: &Path, before: Stamp) -> Report {
+    let moved = match handle.probe_lock() {
+        Ok(LockProbe::Live) => {
+            return report.withdrawn(
+                Conclusion::Live,
+                "not judged: a node took the data directory's lock while the doctor read it; \
+                 stop it, then run the doctor again"
+                    .to_owned(),
+            );
+        }
+        Ok(LockProbe::Acquired) => Some("a LOCK file appeared while the doctor read"),
+        Ok(LockProbe::NoLockFile) => {
+            (journal_stamp(dir) != before).then_some("the journal changed while the doctor read")
+        }
+        Err(_) => Some("the lock could not be probed again after reading"),
+    };
+    if let Some(why) = moved {
+        return report.withdrawn(
+            Conclusion::Changed,
+            format!(
+                "not judged: {why}; with no LOCK file nothing kept a node from starting, so \
+                 stop every node on this directory and run the doctor again"
+            ),
+        );
+    }
+    report.would_do.push_str(
+        " (there is no LOCK file, so nothing kept a node from starting; the journal did not \
+         change while it was read)",
+    );
+    report
+}
+
+#[cfg(test)]
+mod doctor_cli {
+    // The re-check after a read without a LOCK file (br-riea), driven directly: a race
+    // cannot be staged through the binary.
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A fresh data directory under the cargo target directory, holding `journal` and no
+    /// LOCK file.
+    fn unlocked_dir(name: &str, journal: &[u8]) -> std::path::PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let exe = std::env::current_exe().unwrap();
+        let target = exe.ancestors().nth(3).unwrap().to_path_buf();
+        let dir = target.join("doctor-recheck-scratch").join(format!(
+            "{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(fs_storage::JOURNAL), journal).unwrap();
+        dir
+    }
+
+    /// What the doctor's re-check concludes on `dir`, read with stamp `before`.
+    fn rechecked(dir: &Path, before: Stamp) -> Report {
+        let mut handle = ReadOnlyDir::open(dir).unwrap();
+        assert_eq!(
+            handle.probe_lock(),
+            Ok(LockProbe::NoLockFile),
+            "fixture: no LOCK file"
+        );
+        let report = Report::new(dir).concluding(Conclusion::Clean, "start".to_owned());
+        recheck(report, &mut handle, dir, before)
+    }
+
+    #[test]
+    fn a_read_without_a_lock_file_is_judged_only_if_nothing_moved() {
+        let dir = unlocked_dir("still", b"journal bytes");
+        let still = rechecked(&dir, journal_stamp(&dir));
+        assert!(
+            still.verdict == Conclusion::Clean && still.would_do.contains("no LOCK file"),
+            "rule: an unchanged journal keeps its verdict, flagged as read without a LOCK \
+             file (br-riea); report={still:?}"
+        );
+        let moved = rechecked(&dir, Some((0, SystemTime::UNIX_EPOCH)));
+        assert!(
+            moved.verdict == Conclusion::Changed && moved.would_do.contains("journal changed"),
+            "rule: a journal that changed while it was read is not judged (br-riea); \
+             report={moved:?}"
+        );
+        let mut handle = ReadOnlyDir::open(&dir).unwrap();
+        assert_eq!(handle.probe_lock(), Ok(LockProbe::NoLockFile));
+        std::fs::write(dir.join(fs_storage::LOCK), b"").unwrap();
+        let report = Report::new(&dir).concluding(Conclusion::Clean, "start".to_owned());
+        let appeared = recheck(report, &mut handle, &dir, journal_stamp(&dir));
+        assert!(
+            appeared.verdict == Conclusion::Changed
+                && appeared.would_do.contains("LOCK file appeared"),
+            "rule: a LOCK file that appeared while reading withdraws the verdict (br-riea); \
+             report={appeared:?}"
+        );
+        drop(handle);
+        let live_dir = unlocked_dir("live", b"journal bytes");
+        let mut handle = ReadOnlyDir::open(&live_dir).unwrap();
+        assert_eq!(handle.probe_lock(), Ok(LockProbe::NoLockFile));
+        let mut node = fs_storage::FsStorage::open(&live_dir).unwrap();
+        types::DataDir::lock(&mut node).unwrap();
+        let report = Report::new(&live_dir).concluding(Conclusion::Clean, "start".to_owned());
+        let live = recheck(report, &mut handle, &live_dir, journal_stamp(&live_dir));
+        assert_eq!(
+            live.verdict,
+            Conclusion::Live,
+            "rule: a node that took the lock while the doctor read makes the directory live \
+             (br-riea); report={live:?}"
+        );
+    }
 }
