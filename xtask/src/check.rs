@@ -917,6 +917,24 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 3,
     },
+    CheckDef {
+        id: "MODEL",
+        summary: "the reference model, written from the plan with no production dependency \
+                  (T-12), applies committed entries in order: PUT and CAS versions are the \
+                  execution index, DELETE reports existed, a CAS mismatch is decided before \
+                  capacity, DM-6 key and byte capacity refusals are terminal, a replay returns \
+                  the stored result and a conflict changes nothing; SCAN pages follow §8.5 and \
+                  §7.11 exactly (T-7, §10.14)",
+        kind: Kind::TestGroup,
+        covers: &["T-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "model",
+            filters: &["apply::", "data::", "scan::"],
+        },
+        min_cases: 32,
+    },
 ];
 
 /// Outcome of one requested check.
