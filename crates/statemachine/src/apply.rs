@@ -2,6 +2,7 @@
 //! `statemachine/apply`).
 
 use std::collections::BTreeMap;
+use std::ops::Bound;
 
 use types::{
     ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, LiveStateLimit, LogIndex,
@@ -124,6 +125,13 @@ impl StateMachine {
     /// The live keys with their values and versions, in byte-wise key order (DM-4).
     pub fn iter(&self) -> impl Iterator<Item = (&Key, &Stored)> {
         self.map.iter()
+    }
+
+    /// The live keys from `lower` on, in byte-wise key order: SCAN's view of the map (W28).
+    /// It takes only a lower bound, so `BTreeMap::range` never meets an empty or inverted
+    /// range; the scan stops at its own end bound.
+    pub(crate) fn keys_from(&self, lower: Bound<&Key>) -> impl Iterator<Item = (&Key, &Stored)> {
+        self.map.range::<Key, _>((lower, Bound::Unbounded))
     }
 
     /// The request history (DM-5): what each request ID's first execution decided.

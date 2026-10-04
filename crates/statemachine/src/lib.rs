@@ -39,6 +39,8 @@
 //! - **[`StateDigest`]**: [`StateMachine::digest`], SHA-256 over a canonical encoding of the
 //!   map and the request history: the applied state that convergence (K-7) and the god
 //!   view (T-5) compare. The applied index is not part of it.
+//! - **SCAN** ([`StateMachine::scan`]): one page of a key range from the applied state, by
+//!   §8.5's range rules and §7.11's exact accumulation rule (W28.1).
 //!
 //! Versions are execution indices (DM-3): a PUT at entry *i* gives its key version *i*,
 //! so versions strictly increase per key and have gaps.
@@ -58,9 +60,12 @@ mod capacity;
 pub mod codec;
 mod digest;
 mod history;
+mod scan;
 
 #[cfg(test)]
 mod properties;
+#[cfg(test)]
+mod scan_tests;
 
 pub use apply::{Applied, StateMachine, Stored};
 pub use capacity::StateLimits;

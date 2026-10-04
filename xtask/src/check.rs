@@ -1565,6 +1565,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "STATE-SCAN",
+        summary: "SCAN in the state machine (§8.5, §7.11, F-4, DM-4, W28.1): a page holds the keys \
+                  in [start, end) after an exclusive `after`, in byte-wise UTF-8 order; it takes \
+                  at most limit items and 1 MiB of decoded key+value bytes, stopping before the \
+                  item that would exceed either cap and never skipping to a smaller one, and \
+                  always returns the first item; has_more and next_after (the last returned key) \
+                  are set exactly when an in-range key remains, and neither that probe item's \
+                  bytes nor next_after's count; an independent, hand-derived Unicode byte-order \
+                  fixture; over seeded states, each page is the longest in-range run the caps \
+                  allow and continued pages return every in-range key once, in order",
+        kind: Kind::TestGroup,
+        covers: &["F-4", "DM-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["scan_tests::"],
+        },
+        min_cases: 14,
+    },
 ];
 
 /// Outcome of one requested check.
