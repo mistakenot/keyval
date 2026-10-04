@@ -1180,7 +1180,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                   §8.2; W02 audit S-1, H-3): Append, Heartbeat, RequestVote and \
                   RequestPreVote and their responses, addressed to this node from another \
                   voter; it refuses every other message type, snapshots and snapshot \
-                  requests, contexts and priorities, terms and indices above 2^53 - 1, \
+                  requests, contexts and priorities, term 0, terms and indices above 2^53 - 1, \
                   entries v1 never replicates or that do not follow their predecessor, and \
                   unknown fields at every depth; a vote request from a non-voter, a \
                   proposal, a snapshot or a configuration change from the wire never reaches \
@@ -1194,7 +1194,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["admit_tests::"],
         },
-        min_cases: 14,
+        min_cases: 16,
     },
     CheckDef {
         id: "DIFFERENTIAL",

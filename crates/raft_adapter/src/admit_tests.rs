@@ -267,6 +267,65 @@ fn terms_and_indices_above_2_53_are_refused() {
 }
 
 #[test]
+fn term_zero_is_refused_on_every_admitted_type() {
+    for (kind, carries_entries) in EXCHANGED {
+        let mut sent = if carries_entries {
+            append(&[])
+        } else {
+            message(kind)
+        };
+        sent.term = 0;
+        assert_eq!(
+            judge(&sent),
+            Err(Inadmissible::ZeroTerm),
+            "rule: a v1 peer never sends term 0, which raft-rs would take for a local message \
+             (br-e1sd); kind={kind:?}"
+        );
+    }
+}
+
+#[test]
+fn a_forged_term_zero_vote_never_reaches_the_library() {
+    // Without admission, raft-rs grants this vote with term 0 and then fatal!s on sending
+    // the grant ("term should be set when sending MsgRequestVoteResponse"), so one forged
+    // message from a voter would crash the node (br-e1sd).
+    let raw: [&[u8]; 2] = [
+        // MsgRequestVote (5), to 1, from 7: no term field, so term 0.
+        &[0x08, 0x05, 0x10, 0x01, 0x18, 0x07],
+        // MsgRequestPreVote (17), to 1, from 7.
+        &[0x08, 0x11, 0x10, 0x01, 0x18, 0x07],
+    ];
+    for bytes in raw {
+        let journal = Journal::default();
+        let mut node = follower(&journal);
+        let before = node.status();
+        assert_eq!(
+            node.step(bytes.to_vec()),
+            Err(StepError::Rejected),
+            "rule: a term-0 vote request is refused before the library sees it; bytes={bytes:02x?}"
+        );
+        assert_eq!(
+            (node.ready(), node.status()),
+            (None, before),
+            "rule: and leaves no Ready and no change; bytes={bytes:02x?}"
+        );
+    }
+    for kind in [MessageType::MsgAppend, MessageType::MsgHeartbeat] {
+        let journal = Journal::default();
+        let mut node = follower(&journal);
+        let mut sent = message(kind);
+        sent.term = 0;
+        sent.commit = 1;
+        assert_eq!(
+            node.step(encode(&sent)),
+            Err(StepError::Rejected),
+            "rule: a term-0 {kind:?} is refused; it would skip every term rule and could move \
+             commit or regress the term"
+        );
+    }
+}
+
+#[test]
 fn entries_v1_never_replicates_are_refused() {
     let mut cases: Vec<(&str, eraftpb::Message, usize)> = Vec::new();
     for kind in [EntryType::EntryConfChange, EntryType::EntryConfChangeV2] {

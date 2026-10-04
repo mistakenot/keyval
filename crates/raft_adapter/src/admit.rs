@@ -13,7 +13,11 @@
 //! - **Snapshots:** none, and no snapshot request. v1 never compacts (§7.3).
 //! - **Fields v1 never sets:** no message context (it carries only read-index and
 //!   leader-transfer data) and no election priority.
-//! - **Range:** every term and index at most 2^53 − 1 (R-22).
+//! - **Range:** a term of at least 1, and every term and index at most 2^53 − 1 (R-22).
+//!   raft-rs treats term 0 as a local message and skips every term rule, so a forged
+//!   term-0 vote request would be granted with term 0 and the library would `fatal!` on
+//!   sending the answer (br-e1sd). A v1 peer never sends term 0: every message carries its
+//!   sender's term, and a vote or pre-vote answer carries the request's.
 //! - **Entries:** only on `MsgAppend`. Each entry is `EntryNormal`, without a context or
 //!   `sync_log`, and holds at most one command ([`MAX_COMMAND_BYTES`]). Entries follow the
 //!   message's index without a gap. Their terms run from the message's `log_term` up to its
@@ -54,6 +58,8 @@ pub enum Inadmissible {
     UnusedField,
     /// A term or index above 2^53 − 1.
     OutOfRange,
+    /// A message term of 0, which only local messages carry.
+    ZeroTerm,
     /// The entry at `position` is not one v1 replicates: entries on a message type that
     /// carries none, a configuration change, a context, `sync_log`, or more than one
     /// command's bytes.
@@ -107,6 +113,9 @@ pub fn admit(
     ];
     if numbers.iter().any(|&number| number > MAX_SAFE_INTEGER) {
         return Err(Inadmissible::OutOfRange);
+    }
+    if message.term == 0 {
+        return Err(Inadmissible::ZeroTerm);
     }
     if !carries_entries && !message.entries.is_empty() {
         return Err(Inadmissible::Entry { position: 0 });
