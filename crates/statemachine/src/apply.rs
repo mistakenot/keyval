@@ -146,10 +146,11 @@ impl StateMachine {
         self.command_bytes
     }
 
-    /// The number of live keys.
+    /// The number of live keys (DM-6), as the quota counts them (CD-4). A count beyond
+    /// `u64` cannot occur; it would read as the largest count, so a quota still refuses.
     #[must_use]
-    pub fn live_keys(&self) -> usize {
-        self.map.len()
+    pub fn live_keys(&self) -> ItemCount {
+        u64::try_from(self.map.len()).map_or(ItemCount::new(u64::MAX), ItemCount::new)
     }
 
     /// Applies the committed entry that follows the applied index, and says what it did
@@ -201,7 +202,7 @@ impl StateMachine {
     /// The bounded collections are within their limits after every entry (CD-7, CD-9): the
     /// live state within the DM-6 quota, and at most one history record per applied entry.
     fn check_bounds(&self, index: EntryIndex) {
-        let keys = u64::try_from(self.map.len()).map_or(ItemCount::new(u64::MAX), ItemCount::new);
+        let keys = self.live_keys();
         invariant!(
             keys <= self.limits.max_live_keys && self.live_bytes <= self.limits.max_live_bytes,
             "SM-LIVE-WITHIN-QUOTA",
@@ -369,8 +370,7 @@ impl StateMachine {
 
     /// Whether one more live key fits `max_live_keys` (DM-6).
     fn has_room_for_a_key(&self) -> bool {
-        u64::try_from(self.map.len())
-            .is_ok_and(|keys| ItemCount::new(keys) < self.limits.max_live_keys)
+        self.live_keys() < self.limits.max_live_keys
     }
 }
 
@@ -446,7 +446,11 @@ mod tests {
             LogIndex::new(1).unwrap(),
             "rule: the applied index advances (§7.5 step 5)"
         );
-        assert_eq!(state.live_keys(), 0, "rule: an empty entry changes no key");
+        assert_eq!(
+            state.live_keys(),
+            ItemCount::new(0),
+            "rule: an empty entry changes no key"
+        );
     }
 
     #[test]
@@ -525,7 +529,7 @@ mod tests {
         );
         assert_eq!(
             state.live_keys(),
-            keys.len(),
+            ItemCount::new(u64::try_from(keys.len()).unwrap()),
             "rule: one live key per PUT key"
         );
     }

@@ -145,7 +145,7 @@ pub mod tests {
         );
         assert_eq!(
             state.live_keys(),
-            2,
+            ItemCount::new(2),
             "rule: the refused key was never created"
         );
         assert_eq!(
