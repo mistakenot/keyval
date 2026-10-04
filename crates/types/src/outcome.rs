@@ -80,6 +80,15 @@ impl TerminalResult {
         (index > LogIndex::ZERO).then_some(Self { index, decision })
     }
 
+    /// The result of a write first executed at entry `index`, which always exists.
+    #[must_use]
+    pub const fn executed_at(index: EntryIndex, decision: Decision) -> Self {
+        Self {
+            index: index.index(),
+            decision,
+        }
+    }
+
     /// The log index of the first execution.
     #[must_use]
     pub const fn index(self) -> LogIndex {
@@ -170,6 +179,11 @@ mod tests {
             "rule: index 0 holds no entry, so nothing executed there"
         );
         let set = TerminalResult::new(index(42), Decision::Set).unwrap();
+        assert_eq!(
+            TerminalResult::executed_at(EntryIndex::new(42).unwrap(), Decision::Set),
+            set,
+            "rule: executing at entry 42 is the same result as at log index 42"
+        );
         assert_eq!(
             set.index(),
             index(42),

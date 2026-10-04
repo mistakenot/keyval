@@ -778,6 +778,38 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 8,
     },
+    CheckDef {
+        id: "COMMAND-CODEC",
+        summary: "the canonical command codec round-trips every command shape, accepts only \
+                  canonical bytes, refuses malformed or oversized input with typed errors and \
+                  never panics, applies the configured key and value limits, and every valid \
+                  command fits 66 KiB (§7.5, §7.11, D-80)",
+        kind: Kind::TestGroup,
+        covers: &["DM-1", "DM-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["codec::tests::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
+        id: "APPLY-PUT",
+        summary: "apply sets a PUT's key with version = its execution index, an empty entry only \
+                  advances the applied index, keys iterate in byte order, replay rebuilds the \
+                  same state, and out-of-order, undecodable or unadmitted entries fire their \
+                  invariants (§7.5, DM-3, D-10)",
+        kind: Kind::TestGroup,
+        covers: &["DM-3", "DM-4", "F-1", "F-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["apply::tests::"],
+        },
+        min_cases: 9,
+    },
 ];
 
 /// Outcome of one requested check.

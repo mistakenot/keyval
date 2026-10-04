@@ -9,6 +9,7 @@ resolver = "3"
 members = [
     "crates/journal",
     "crates/sim",
+    "crates/statemachine",
     "crates/types",
     "xtask",
     "xtask/probes/deterministic",

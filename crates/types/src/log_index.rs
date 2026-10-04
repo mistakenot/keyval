@@ -149,6 +149,13 @@ impl EntryIndex {
         LogIndex(self.0)
     }
 
+    /// The version a write executed at this entry gives its key: the same number (DM-3).
+    /// Entry indices and versions share one range, so this never fails.
+    #[must_use]
+    pub const fn version(self) -> Version {
+        Version(self.0)
+    }
+
     /// The raw index.
     #[must_use]
     pub const fn get(self) -> u64 {
@@ -314,6 +321,11 @@ mod tests {
             "rule: version == index of the executing write (DM-3)"
         );
         assert_eq!(version.index(), index, "rule: the conversion back is exact");
+        assert_eq!(
+            EntryIndex::at(index).map(EntryIndex::version),
+            Some(version),
+            "rule: a write at entry 42 gets version 42 (DM-3)"
+        );
     }
 
     #[test]
