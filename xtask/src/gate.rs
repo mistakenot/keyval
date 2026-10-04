@@ -512,13 +512,29 @@ pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateRepo
     run_with(ctx, tier, steps, "bootstrap", None, CATALOGUE)
 }
 
-/// `./dev gate fast`: the registry set once the tree has `registry/checks.toml`, and W01's
-/// bootstrap set before (§10.10 "Staged contents").
+/// `./dev gate fast`: the registry set once the tree or its parent commit has
+/// `registry/checks.toml`, and W01's bootstrap set before (§10.10 "Staged contents").
 pub fn run_fast(ctx: &Context<'_>) -> Result<GateReport, String> {
-    if ctx.root.join(registry_gate::CHECKS).is_file() {
+    let tree_has_registry = ctx.root.join(registry_gate::CHECKS).is_file();
+    if registry_set_applies(tree_has_registry, &ctx.parent) {
         run_registry(ctx, CATALOGUE, &[Step::Fmt, Step::Clippy], &[Step::Ubs])
     } else {
         run(ctx, GateTier::Fast, BOOTSTRAP_SET)
+    }
+}
+
+/// Whether the registry set judges the tree. The switch from W01's bootstrap set is
+/// one-way (§10.10: "registry-driven staging takes over when W05 lands";
+/// br-gate-bootstrap-fallback-0z0a): a tree that drops the registry its parent commit had
+/// is still judged by the registry set, whose staging cannot read it and whose
+/// forward-only rule reports every parent row removed. With the parent unknown (candidate
+/// mode without `--parent-checks`) the registry set runs too, so the forward-only rule
+/// fails rather than skips (P10). Only when the parent has no registry does the tree
+/// decide.
+const fn registry_set_applies(tree_has_registry: bool, parent: &Parent) -> bool {
+    match parent {
+        Parent::Absent => tree_has_registry,
+        Parent::Unknown | Parent::Checks(_) => true,
     }
 }
 
@@ -531,7 +547,21 @@ pub fn run_registry(
     before: &[Step],
     after: &[Step],
 ) -> Result<GateReport, String> {
-    let staging = read(ctx.root, registry_gate::CHECKS).and_then(|checks| {
+    let present = ctx.root.join(registry_gate::CHECKS).is_file();
+    let missing = || {
+        format!(
+            "the tree has no {} although its parent commit's registry (or an unknown parent) \
+             requires one: registry staging never falls back to the bootstrap set once W05 \
+             has landed (§10.10)",
+            registry_gate::CHECKS
+        )
+    };
+    let checks = if present {
+        read(ctx.root, registry_gate::CHECKS)
+    } else {
+        Err(missing())
+    };
+    let staging = checks.and_then(|checks| {
         // An unreadable work graph only costs planned rows their work item; WORKGRAPH and
         // REGISTRY fail on it.
         let items = read(ctx.root, registry::WORKGRAPH)
@@ -926,7 +956,12 @@ fn staging_step(state: &State<'_>, result: &mut StepResult) -> StepOutcome {
 fn forward_step(ctx: &Context<'_>, state: &mut State<'_>, result: &mut StepResult) -> StepOutcome {
     result.unit = "row(s)";
     let fail = |why: String| StepFailure::new(why.clone(), why);
-    let tree = read(ctx.root, registry_gate::CHECKS).map_err(fail)?;
+    // A tree without a registry keeps none of its parent's rows: each is reported removed.
+    let tree = if ctx.root.join(registry_gate::CHECKS).is_file() {
+        read(ctx.root, registry_gate::CHECKS).map_err(fail)?
+    } else {
+        String::new()
+    };
     let parent = match &ctx.parent {
         Parent::Unknown => {
             return Err(fail(
@@ -2357,6 +2392,103 @@ pub mod tests {
              observed={tests:#?}"
         );
         assert_eq!(step(&report, "R-STATIC").status, Verdict::Passed);
+    }
+
+    #[test]
+    fn registry_set_applies_once_the_tree_or_its_parent_has_a_registry() {
+        let parent = || Parent::Checks(registry_checks(&[("R-STATIC", "implemented", 1)]));
+        let table = [
+            (true, Parent::Absent, true, "the tree has a registry"),
+            (
+                false,
+                Parent::Absent,
+                false,
+                "neither has one: W01's bootstrap set",
+            ),
+            (true, parent(), true, "both have one"),
+            (
+                false,
+                parent(),
+                true,
+                "the tree dropped its parent's registry (0z0a)",
+            ),
+            (
+                true,
+                Parent::Unknown,
+                true,
+                "candidate mode, parent unknown",
+            ),
+            (
+                false,
+                Parent::Unknown,
+                true,
+                "parent unknown: never fall back (P10)",
+            ),
+        ];
+        for (tree_has_registry, parent, expected, why) in table {
+            assert_eq!(
+                registry_set_applies(tree_has_registry, &parent),
+                expected,
+                "rule: {why} (§10.10: the switch to registry staging is one-way)"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_set_judges_a_tree_that_dropped_its_parents_registry() {
+        let parent = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+        ]);
+        // The gate-ok crate after a commit that deleted registry/checks.toml.
+        let root = scratch_dir("gate-registry-dropped");
+        for file in ["Cargo.toml", "Cargo.lock", "src/lib.rs"] {
+            let to = root.join(file);
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::copy(fixture("gate-ok").join(file), to).unwrap();
+        }
+        let ctx = Context {
+            root: &root,
+            tree: resolve_tree_with(
+                &root,
+                Some(TREE),
+                vec!["src/lib.rs".to_owned()],
+                &no_repository,
+            )
+            .unwrap(),
+            artifacts: scratch_dir("gate-registry-dropped-artifacts"),
+            cargo: nested_cargo("keyval-gate-dropped"),
+            tool_path: None,
+            progress: false,
+            parent: Parent::Checks(parent),
+            allow_demotions: Vec::new(),
+        };
+        let report = run_fast(&ctx).unwrap();
+        assert_eq!(
+            report.receipt.set, "registry",
+            "rule: a tree that drops its parent's registry never falls back to the bootstrap \
+             set (§10.10, 0z0a); receipt={:#?}",
+            report.receipt
+        );
+        let staging = step(&report, "staging");
+        assert!(
+            staging.status == Verdict::Failed
+                && staging
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("never falls back")),
+            "observed={staging:#?}"
+        );
+        let forward = step(&report, "forward-only");
+        assert!(
+            !report.ok
+                && forward.status == Verdict::Failed
+                && forward.detail.as_deref().is_some_and(|d| {
+                    d.contains("R-STATIC") && d.contains("R-TESTS") && d.contains("removed")
+                }),
+            "rule: every row of the parent's registry is reported removed (D-56); \
+             observed={forward:#?}"
+        );
     }
 
     #[test]

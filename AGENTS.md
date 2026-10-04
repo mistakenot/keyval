@@ -408,8 +408,8 @@ output only together with its schema, and bump the version when the change break
     valid marker is only reported;
   - logs every removal (or, with `--dry-run`, every removal it would make) in a
     `keyval.dev.prune/v1` receipt. Gate-run retention comes with W46.
-- `./dev gate fast` — the T0 gate (§10.10). A tree with `registry/checks.toml` gets the
-  **registry set** (W05.4):
+- `./dev gate fast` — the T0 gate (§10.10). A tree with `registry/checks.toml`, or whose
+  parent commit has one, gets the **registry set** (W05.4):
   - fmt, and clippy with denied warnings;
   - `staging`: every T0 row of `checks.toml`. Each `implemented` row runs, in file order.
     Each `planned` row is listed in the receipt with the work item whose `accept` names
@@ -418,12 +418,15 @@ output only together with its schema, and bump the version when the change break
   - `tests`: `cargo test -p <member> --all-targets --no-fail-fast` for each workspace
     member, then the doctests. Each cargo-test check is judged from this one run, never
     re-run: every case it selects passes, none is ignored, and at least its `min_cases`
-    ran (§10.11);
+    ran (§10.11). A package run that stopped early, or whose result lines do not add up to
+    libtest's and cargo's own counts, fails every check of that package (afvw);
   - each implemented check, as its own step (a static check runs in-process);
   - UBS on the exact changed files (all first-party sources if no source changed).
 
-  A tree without the registry gets W01's fixed bootstrap set (fmt, clippy, LINT-ALLOWS,
-  LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests, UBS). Either way it writes a
+  Only a tree whose parent has no registry either gets W01's fixed bootstrap set (fmt,
+  clippy, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests, UBS). The
+  switch is one-way: a commit that deletes `checks.toml` is still judged by the registry
+  set, and fails (0z0a). Either way it writes a
   `keyval.dev.receipt/v4` receipt to `artifacts/receipts/` with the tree ID, build ID,
   policy hashes, per-step case counts, the planned rows and any approved demotions.
   **It judges exact trees only (P11):** in a checkout it refuses unless the working tree
