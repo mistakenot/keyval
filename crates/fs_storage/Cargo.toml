@@ -1,0 +1,13 @@
+[package]
+name = "fs_storage"
+version = "0.1.0"
+description = "keyval's real-file byte-storage adapter: journal.log, the LOCK file and directory sync (adapter, PLAN.md §7.2, §7.6, §7.7)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+types = { workspace = true }
+
+[lints]
+workspace = true

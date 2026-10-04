@@ -668,3 +668,27 @@ tier = "T0"
 run = "./dev check SIM-DISK"
 min_cases = 6
 status = "implemented"
+
+[[check]]
+id = "STORAGE-CONTRACT-FS"
+summary = "the real-file adapter passes the one byte-storage contract suite unmodified, every case in its own test (§7.2, P3)"
+kind = "test_group"
+covers = ["P3"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check STORAGE-CONTRACT-FS"
+min_cases = 11
+status = "implemented"
+
+[[check]]
+id = "FS-STORAGE"
+summary = "the real-file adapter syncs the parent directory when it creates the data directory and refuses an existing one, its LOCK refuses a second process until the holder exits, a missing directory is Missing, and failures keep their cause for the root's log (§7.6, §7.7, DUR-7, DUR-8)"
+kind = "test_group"
+covers = ["DUR-7", "DUR-8"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check FS-STORAGE"
+min_cases = 6
+status = "implemented"

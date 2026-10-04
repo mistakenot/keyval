@@ -266,6 +266,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs_storage"
+version = "0.1.0"
+dependencies = [
+ "types",
+]
+
+[[package]]
 name = "fxhash"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

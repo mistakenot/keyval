@@ -1012,6 +1012,37 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 6,
     },
+    CheckDef {
+        id: "STORAGE-CONTRACT-FS",
+        summary: "the real-file adapter passes the one byte-storage contract suite \
+                  unmodified, every case in its own test (§7.2, P3)",
+        kind: Kind::TestGroup,
+        covers: &["P3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &["contract_fs::"],
+        },
+        min_cases: 11,
+    },
+    CheckDef {
+        id: "FS-STORAGE",
+        summary: "the real-file adapter syncs the parent directory when it creates the \
+                  data directory and refuses an existing one, its LOCK refuses a second \
+                  process until the holder exits, a missing directory is Missing, and \
+                  failures keep their cause for the root's log (§7.6, §7.7, DUR-7, \
+                  DUR-8)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-7", "DUR-8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &["tests::"],
+        },
+        min_cases: 6,
+    },
 ];
 
 /// Outcome of one requested check.

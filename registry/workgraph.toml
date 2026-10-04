@@ -168,6 +168,8 @@ accept = [
     "./dev check STORAGE-CONTRACT",
     "./dev check STORAGE-CONTRACT-SIM",
     "./dev check SIM-DISK",
+    "./dev check STORAGE-CONTRACT-FS",
+    "./dev check FS-STORAGE",
 ]
 bead = "br-w12-byte-storage-adapters-45u"
 
