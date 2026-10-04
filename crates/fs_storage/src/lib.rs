@@ -567,17 +567,7 @@ impl ByteStorage for FsStorage {
 mod tests {
     // check: FS-STORAGE
     use super::*;
-    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// The environment variable that turns a re-executed test binary into the second
-    /// process of [`a_second_process_is_refused_the_lock_until_the_first_exits`].
-    const PROBE: &str = "FS_STORAGE_LOCK_PROBE";
-
-    /// What the probe process reports through its exit code.
-    const LOCKED: i32 = 3;
-    const LOCKED_OK: i32 = 4;
-    const PROBE_FAILED: i32 = 5;
 
     /// A fresh path under the cargo target directory (never `/tmp`), not yet created.
     fn scratch(name: &str) -> PathBuf {
@@ -680,49 +670,10 @@ mod tests {
         );
     }
 
-    /// Re-executes this test binary as a second process that tries to lock `dir`, and
-    /// returns its exit code.
-    fn probe_lock(dir: &Path) -> Option<i32> {
-        // This very test binary, by a fixed path (Linux), as a second process.
-        let out = Command::new("/proc/self/exe")
-            .args([
-                "--exact",
-                "tests::a_second_process_is_refused_the_lock_until_the_first_exits",
-                "--test-threads=1",
-            ])
-            .env(PROBE, dir)
-            .output()
-            .unwrap();
-        out.status.code()
-    }
-
-    #[test]
-    fn a_second_process_is_refused_the_lock_until_the_first_exits() {
-        if let Some(dir) = std::env::var_os(PROBE) {
-            // The second process: report what locking the directory did, and exit.
-            let code = match FsStorage::open(Path::new(&dir)).map(|mut s| s.lock()) {
-                Ok(Err(StorageError::Locked)) => LOCKED,
-                Ok(Ok(())) => LOCKED_OK,
-                Ok(Err(_)) | Err(_) => PROBE_FAILED,
-            };
-            std::process::exit(code);
-        }
-        let dir = data_dir("lock-process");
-        let mut first = FsStorage::open(&dir).unwrap();
-        assert_eq!(first.lock(), Ok(()));
-        assert_eq!(
-            probe_lock(&dir),
-            Some(LOCKED),
-            "rule: two processes can never use one data directory (DUR-8, W12): a second \
-             process is refused while the first holds the lock"
-        );
-        drop(first);
-        assert_eq!(
-            probe_lock(&dir),
-            Some(LOCKED_OK),
-            "rule: the lock is released when its holder exits"
-        );
-    }
+    // The two-process lock test is in its own test binary, `tests/lock_process.rs`
+    // (br-b7xl). No test here spawns a process: a child spawned while a sibling test holds
+    // a LOCK open keeps that lock until it execs, so the sibling, having dropped it, could
+    // find it still held.
 
     #[test]
     fn locking_again_through_the_same_handle_keeps_the_lock() {
