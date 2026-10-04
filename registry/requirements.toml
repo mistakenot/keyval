@@ -228,19 +228,19 @@ title = "A restarted node recovers from disk and rejoins"
 [[requirement]]
 id = "DUR-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "No log compaction in v1"
 
 [[requirement]]
 id = "DUR-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A versioned on-disk format pinned by golden vectors"
 
 [[requirement]]
 id = "DUR-6"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A torn tail is discarded; detected corruption refuses to start"
 
 [[requirement]]
@@ -252,7 +252,7 @@ title = "File and directory creation is synced before dependent actions"
 [[requirement]]
 id = "DUR-8"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Genesis binding of each data directory, with an exclusive lock"
 
 [[requirement]]
