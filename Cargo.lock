@@ -885,6 +885,7 @@ version = "0.1.0"
 dependencies = [
  "journal",
  "model",
+ "node",
  "raft_adapter",
  "statemachine",
  "types",

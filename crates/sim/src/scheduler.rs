@@ -242,6 +242,14 @@ impl<E> Scheduler<E> {
         ItemCount::new(u64::try_from(self.queue.len()).unwrap_or(u64::MAX))
     }
 
+    /// The virtual time of the event [`Self::step`] would dispatch next, if any is pending.
+    /// Looking draws no tie priority and dispatches nothing, so a driver can stop at a time
+    /// without scheduling an event of its own: how often it looks never changes the run.
+    #[must_use]
+    pub fn next_time(&self) -> Option<VirtualTime> {
+        self.queue.iter().next().map(|(order, _)| order.time)
+    }
+
     /// Schedules `payload` at `at`, concerning `node` if any. Its causal parent is the
     /// event dispatched last; it draws its tie priority from the scheduler stream.
     ///
@@ -369,6 +377,52 @@ mod tests {
 
     fn payloads(events: &[Event<u32>]) -> Vec<u32> {
         events.iter().map(|event| event.payload).collect()
+    }
+
+    #[test]
+    fn next_time_peeks_without_drawing_or_dispatching() {
+        let mut peeked = scheduler(5, EventBudget::DEFAULT);
+        let mut plain = scheduler(5, EventBudget::DEFAULT);
+        assert_eq!(
+            peeked.next_time(),
+            None,
+            "rule: an empty queue has no next event"
+        );
+        for s in [&mut peeked, &mut plain] {
+            s.schedule(at(20), None, 2).unwrap();
+            s.schedule(at(10), None, 1).unwrap();
+        }
+        for _ in 0..3 {
+            assert_eq!(
+                peeked.next_time(),
+                Some(at(10)),
+                "rule: the earliest pending event's time, however often one looks"
+            );
+        }
+        assert_eq!(
+            peeked.now(),
+            VirtualTime::ZERO,
+            "rule: looking dispatches nothing"
+        );
+        assert_eq!(
+            peeked.pending(),
+            count(2),
+            "rule: looking dispatches nothing"
+        );
+        for s in [&mut peeked, &mut plain] {
+            s.schedule(at(10), None, 3).unwrap();
+        }
+        let (looked, _) = drain(&mut peeked);
+        let (unlooked, _) = drain(&mut plain);
+        assert_eq!(
+            looked, unlooked,
+            "rule: looking draws no tie priority, so the run is the one it would have been"
+        );
+        assert_eq!(
+            peeked.next_time(),
+            None,
+            "rule: a drained queue has no next event"
+        );
     }
 
     #[test]

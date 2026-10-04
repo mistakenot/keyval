@@ -20,8 +20,12 @@
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
-//! The composition of the cores (W17) builds on these.
+//! - [`cluster`]: the composition root itself (W17.1): every voter as a real core over
+//!   these adapters, crash and restart as new incarnations, every step recorded.
 
+pub mod cluster;
+#[cfg(test)]
+mod cluster_tests;
 pub mod disk;
 pub mod entropy;
 pub mod god_view;
@@ -34,6 +38,7 @@ pub mod replay;
 pub mod scheduler;
 pub mod trace;
 
+pub use cluster::{Answer, Cluster, ClusterError, Happening};
 pub use disk::{Crash, DiskHandle, Fill, SimDisk};
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};

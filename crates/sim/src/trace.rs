@@ -6,8 +6,9 @@
 //!   event; record lines (`R`) carry the step they belong to; metric lines (`M`) close the
 //!   trace in name order.
 //! - Endpoints are logical: `n<node>` or `n<node>/<incarnation>` for a node, `c<client>`
-//!   for a client. Host data (PIDs, wall-clock times, paths, memory addresses) has no
-//!   field, so it cannot enter; protocol decisions are never left out.
+//!   for a client, and a client's attempt is `a<attempt>`. Host data (PIDs, wall-clock
+//!   times, paths, memory addresses) has no field, so it cannot enter; protocol decisions
+//!   are never left out.
 //! - Diagnostics are free text that may carry host data, so they stay out of the
 //!   canonical bytes. A run keeps at most the structured-log queue's bound of them, each
 //!   cut to [`DIAGNOSTIC_TEXT_BYTES`]; past the bound they are dropped. Both counts are
@@ -26,8 +27,8 @@ use std::error::Error;
 use std::fmt;
 
 use types::{
-    ByteCount, Incarnation, ItemCount, Limit, LogIndex, NodeId, RequestId, Role, StorageOp,
-    SyncSeq, Term,
+    AttemptId, ByteCount, Incarnation, ItemCount, Limit, LogIndex, NodeId, RequestId, Role,
+    StorageOp, SyncSeq, Term,
 };
 
 use crate::scheduler::{Event, EventSeq, NodeIncarnation};
@@ -136,6 +137,8 @@ pub enum PacketFate {
     Sent,
     /// It reached its destination.
     Delivered,
+    /// It reached a node that was down: no incarnation was running to take it.
+    Undeliverable,
     /// The network dropped it, for this reason.
     Dropped(DropReason),
     /// The network made an extra copy of it, at send.
@@ -147,6 +150,7 @@ impl fmt::Display for PacketFate {
         match self {
             Self::Sent => f.write_str("sent"),
             Self::Delivered => f.write_str("delivered"),
+            Self::Undeliverable => f.write_str("undeliverable"),
             Self::Dropped(reason) => write!(f, "dropped:{}", reason.as_str()),
             Self::Duplicated => f.write_str("duplicated"),
         }
@@ -282,6 +286,18 @@ impl fmt::Display for Hex<'_> {
     }
 }
 
+/// A request ID if there is one: its hex, or `-`.
+struct MaybeRequest(Option<RequestId>);
+
+impl fmt::Display for MaybeRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(request) => write!(f, "{request}"),
+            None => f.write_str("-"),
+        }
+    }
+}
+
 /// One canonical record (§10.2 "Contains").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Record {
@@ -346,21 +362,29 @@ pub enum Record {
         /// The last durable index.
         synced: LogIndex,
     },
-    /// A client invoked an operation.
+    /// A client invoked an operation: one attempt, sent to one node (§10.3's history:
+    /// every attempt's invocation, target node, request and outcome).
     Invoked {
         /// The client.
         client: ClientId,
-        /// The request ID.
-        request: RequestId,
+        /// The attempt.
+        attempt: AttemptId,
+        /// The node it was sent to.
+        node: NodeId,
+        /// The request ID of the write it is an attempt of. A read or a status lookup has
+        /// none: it is no attempt of any logical write (K-3, K-10), whatever it asks about.
+        request: Option<RequestId>,
         /// The encoded operation.
         op: Vec<u8>,
     },
-    /// A client received a response.
+    /// A client received the response to an attempt: the first copy to reach it.
     Responded {
         /// The client.
         client: ClientId,
-        /// The request ID.
-        request: RequestId,
+        /// The attempt.
+        attempt: AttemptId,
+        /// The request ID of the write it is an attempt of, as in its invocation.
+        request: Option<RequestId>,
         /// The encoded response.
         result: Vec<u8>,
     },
@@ -425,14 +449,30 @@ impl fmt::Display for Record {
             ),
             Self::Invoked {
                 client,
+                attempt,
+                node,
                 request,
                 op,
-            } => write!(f, "invoke {client} {request} {}", Hex(op)),
+            } => write!(
+                f,
+                "invoke {client} a{} n{} {} {}",
+                attempt.get(),
+                node.get(),
+                MaybeRequest(*request),
+                Hex(op)
+            ),
             Self::Responded {
                 client,
+                attempt,
                 request,
                 result,
-            } => write!(f, "respond {client} {request} {}", Hex(result)),
+            } => write!(
+                f,
+                "respond {client} a{} {} {}",
+                attempt.get(),
+                MaybeRequest(*request),
+                Hex(result)
+            ),
             Self::FirstExecution { request, index } => {
                 write!(f, "first {request} {}", index.get())
             }
@@ -837,6 +877,18 @@ mod tests {
             "packet dropped:cut_in_flight/dup n1 n2 ab",
             "rule: a drop names its reason, and a duplicate copy reads differently (br-ktgc)"
         );
+        let undeliverable = Record::Packet {
+            fate: PacketFate::Undeliverable,
+            copy: PacketCopy::Original,
+            from: Endpoint::Node(node(1)),
+            to: Endpoint::Node(node(4)),
+            bytes: vec![0xAB],
+        };
+        assert_eq!(
+            undeliverable.to_string(),
+            "packet undeliverable n1 n4 ab",
+            "rule: a copy that reaches a node that is down reads differently from a delivery"
+        );
     }
 
     #[test]
@@ -927,18 +979,40 @@ mod tests {
             (
                 Record::Invoked {
                     client: ClientId::new(3),
-                    request: request(1),
+                    attempt: AttemptId::new(9),
+                    node: node(2),
+                    request: Some(request(1)),
                     op: b"put".to_vec(),
                 },
-                "invoke c3 ababababababababababababababab01 707574",
+                "invoke c3 a9 n2 ababababababababababababababab01 707574",
+            ),
+            (
+                Record::Invoked {
+                    client: ClientId::new(4),
+                    attempt: AttemptId::new(10),
+                    node: node(5),
+                    request: None,
+                    op: b"get".to_vec(),
+                },
+                "invoke c4 a10 n5 - 676574",
             ),
             (
                 Record::Responded {
                     client: ClientId::new(3),
-                    request: request(1),
+                    attempt: AttemptId::new(9),
+                    request: Some(request(1)),
                     result: Vec::new(),
                 },
-                "respond c3 ababababababababababababababab01 -",
+                "respond c3 a9 ababababababababababababababab01 -",
+            ),
+            (
+                Record::Responded {
+                    client: ClientId::new(4),
+                    attempt: AttemptId::new(10),
+                    request: None,
+                    result: b"ok".to_vec(),
+                },
+                "respond c4 a10 - 6f6b",
             ),
             (
                 Record::FirstExecution {

@@ -1730,6 +1730,34 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 13,
     },
+    CheckDef {
+        id: "SIM-CLUSTER",
+        summary: "the simulation composition root (§7.13, §10.2, W17.1): every voter of a \
+                  five-node config runs as the production core (controller, request lifecycle, \
+                  raft adapter, journal) over the simulated disk, network, clock and entropy in \
+                  one thread; the cores elect one leader every node knows; a PUT commits and \
+                  applies on all five nodes and a GET reads it back; a follower crashed with \
+                  unsynced bytes and a crashed leader restart as new incarnations from the bytes \
+                  their disks kept and catch up, and across seeds the crashes do lose unsynced \
+                  bytes; a sync completion of an earlier incarnation is ignored; a lossy, \
+                  duplicating network still commits; the god view's log mirror agrees with each \
+                  core's last index and term after every step and, audited in full, with each \
+                  disk's written and durable journal, and a deposed leader's replaced suffix is \
+                  never called durable before its sync; the trace records every client attempt's \
+                  invocation and first response, reads and status lookups under no request ID, and \
+                  one first execution per request across replays; how often the driver polls never \
+                  changes the run, and nothing is scheduled before the time it ran to; and the \
+                  same seed gives the same trace",
+        kind: Kind::TestGroup,
+        covers: &["T-2", "DUR-3", "P3"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["cluster_tests::"],
+        },
+        min_cases: 13,
+    },
 ];
 
 /// Outcome of one requested check.
