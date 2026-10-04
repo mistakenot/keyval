@@ -3,7 +3,7 @@
 //! incarnations, failure, and a cluster whose messages all travel sealed.
 #![cfg(test)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use statemachine::Applied;
 use types::{
@@ -885,5 +885,269 @@ fn sustained_writes_never_starve_the_leaders_peer_messages() {
          round={queued:?}",
         status.role,
         status.commit
+    );
+}
+
+/// The role changes `member` logged (O-3), as `(role, term, leader)`.
+fn role_changes<Q: crate::Requests>(member: &Member<Q>) -> Vec<(Role, u64, Option<NodeId>)> {
+    member
+        .logs()
+        .into_iter()
+        .filter_map(|event| match event {
+            LogEvent::RoleChanged { role, term, leader } => Some((role, term.get(), leader)),
+            LogEvent::LifecycleChanged { .. } | LogEvent::Dropped { .. } => None,
+        })
+        .collect()
+}
+
+/// `member`'s status as a role change logs it.
+fn role_now<Q: crate::Requests>(member: &Member<Q>) -> (Role, u64, Option<NodeId>) {
+    let status = member.ctl.status();
+    (status.role, status.term.get(), status.leader)
+}
+
+/// A fresh node's status before any change: a follower in term 0 that knows no leader.
+const FRESH: (Role, u64, Option<NodeId>) = (Role::Follower, 0, None);
+
+/// O-3's properties of a fresh node's role log: every event differs from the status before
+/// it (a change, never a repeat), and the last one is the node's status now.
+fn assert_role_log_follows_status<Q: crate::Requests>(member: &Member<Q>, context: &str) {
+    let mut seen = vec![FRESH];
+    seen.extend(role_changes(member));
+    for pair in seen.windows(2) {
+        assert_ne!(
+            pair[0], pair[1],
+            "rule: a role change is logged only when the role, term or leader changed (O-3, \
+             br-qb4p); node={} {context}; log={seen:?}",
+            member.id
+        );
+    }
+    assert_eq!(
+        seen.last().copied(),
+        Some(role_now(member)),
+        "rule: the last role change logged is the node's status now, so the log never lags \
+         it (O-3, br-qb4p); node={} {context}; log={seen:?}",
+        member.id
+    );
+}
+
+#[test]
+fn a_lone_voter_logs_no_role_change_at_start_and_then_its_election() {
+    let (config, id) = lone();
+    let mut member = Member::fresh(&config, id);
+    assert_eq!(
+        role_changes(&member),
+        Vec::new(),
+        "rule: starting changes no role, term or leader, so it logs none (O-3)"
+    );
+    member.elect(100);
+    let term = member.ctl.status().term.get();
+    assert_eq!(
+        role_changes(&member).last().copied(),
+        Some((Role::Leader, term, Some(id))),
+        "rule: the election is logged as RoleChanged, ending in the lead, its term and itself \
+         as leader (O-3, br-qb4p)"
+    );
+    assert_role_log_follows_status(&member, "after its election");
+}
+
+/// How one logged change differs from the status before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Change {
+    /// The role changed.
+    Role,
+    /// The term changed, in the same role.
+    Term,
+    /// Only the believed leader changed.
+    Leader,
+}
+
+/// The kinds of change in `member`'s role log.
+fn changes<Q: crate::Requests>(member: &Member<Q>) -> BTreeSet<Change> {
+    let mut seen = vec![FRESH];
+    seen.extend(role_changes(member));
+    seen.windows(2)
+        .map(|pair| {
+            if pair[0].0 != pair[1].0 {
+                Change::Role
+            } else if pair[0].1 != pair[1].1 {
+                Change::Term
+            } else {
+                Change::Leader
+            }
+        })
+        .collect()
+}
+
+/// Ticks every member and settles, until one leads; returns it.
+fn elect_one(cluster: &mut Cluster) -> NodeId {
+    for _ in 0..200 {
+        if let Some(leader) = cluster.leader() {
+            return leader;
+        }
+        for member in cluster.members.values_mut() {
+            member.step(Input::Tick);
+        }
+        cluster.settle();
+    }
+    panic!("fixture: no leader within 200 ticks");
+}
+
+#[test]
+fn followers_log_the_new_term_and_then_the_leader_they_learn() {
+    let config = config("three-voters");
+    let mut cluster = Cluster::new(&config);
+    let leader = elect_one(&mut cluster);
+    let term = cluster.members[&leader].ctl.status().term.get();
+    let mut kinds = BTreeSet::new();
+    for (id, member) in &cluster.members {
+        assert_role_log_follows_status(member, "after the election");
+        let expected = if *id == leader {
+            (Role::Leader, term, Some(leader))
+        } else {
+            (Role::Follower, term, Some(leader))
+        };
+        assert_eq!(
+            role_changes(member).last().copied(),
+            Some(expected),
+            "rule: every node logs the election's outcome: the leader its lead, each \
+             follower the leader it learned, in the new term (O-3); node={id}"
+        );
+        kinds.extend(changes(member));
+    }
+    assert_eq!(
+        kinds,
+        BTreeSet::from([Change::Role, Change::Term, Change::Leader]),
+        "rule: role changes, term changes in the same role, and leader changes alone are \
+         each logged (O-3, br-qb4p)"
+    );
+}
+
+impl Cluster {
+    /// Like [`Cluster::settle`], with `cut` partitioned off: its envelopes and those
+    /// addressed to it are lost.
+    fn settle_without(&mut self, cut: NodeId) {
+        loop {
+            let mut moved = false;
+            let ids: Vec<NodeId> = self.members.keys().copied().collect();
+            for id in &ids {
+                let member = self.members.get_mut(id).unwrap();
+                while member.complete_sync() {
+                    moved = true;
+                }
+                let outbox: Vec<(NodeId, Vec<u8>)> = member.outbox.drain(..).collect();
+                for (to, bytes) in outbox {
+                    if *id == cut || to == cut {
+                        continue;
+                    }
+                    moved = true;
+                    self.members
+                        .get_mut(&to)
+                        .unwrap()
+                        .step(Input::Peer { from: *id, bytes });
+                }
+            }
+            if !moved {
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_leader_change_is_logged_by_every_node_and_the_old_leader_logs_stepping_down() {
+    let config = config("three-voters");
+    let mut cluster = Cluster::new(&config);
+    let old = elect_one(&mut cluster);
+    let old_term = cluster.members[&old].ctl.status().term.get();
+    // The old leader is cut off; the other two elect a new one.
+    let mut new = None;
+    for _ in 0..300 {
+        new = cluster
+            .members
+            .iter()
+            .find(|(id, member)| **id != old && member.ctl.status().role == Role::Leader)
+            .map(|(id, _)| *id);
+        if new.is_some() {
+            break;
+        }
+        for (id, member) in &mut cluster.members {
+            if *id != old {
+                member.step(Input::Tick);
+            }
+        }
+        cluster.settle_without(old);
+    }
+    let new = new.expect("fixture: the two connected voters elect a leader within 300 ticks");
+    let new_term = cluster.members[&new].ctl.status().term.get();
+    // Reconnected, the old leader hears the new term and follows.
+    for _ in 0..50 {
+        if role_now(&cluster.members[&old]) == (Role::Follower, new_term, Some(new)) {
+            break;
+        }
+        for member in cluster.members.values_mut() {
+            member.step(Input::Tick);
+        }
+        cluster.settle();
+    }
+    for (id, member) in &cluster.members {
+        assert_role_log_follows_status(member, "after the leader change");
+        let expected = if *id == new {
+            (Role::Leader, new_term, Some(new))
+        } else {
+            (Role::Follower, new_term, Some(new))
+        };
+        assert_eq!(
+            role_changes(member).last().copied(),
+            Some(expected),
+            "rule: every node logs the new leader in its later term (O-3); node={id} \
+             old={old} new={new}"
+        );
+    }
+    let stepped = role_changes(&cluster.members[&old]);
+    assert!(
+        new_term > old_term
+            && stepped.contains(&(Role::Leader, old_term, Some(old)))
+            && stepped.last() == Some(&(Role::Follower, new_term, Some(new))),
+        "rule: the old leader's log shows its lead and then its step down to follow the new \
+         leader (O-3, br-qb4p); log={stepped:?}"
+    );
+}
+
+#[test]
+fn nothing_is_logged_while_role_term_and_leader_stay_the_same() {
+    let (config, id) = lone();
+    let mut member = Member::fresh(&config, id);
+    member.elect(100);
+    let elected = role_changes(&member);
+    for _ in 0..20 {
+        member.step(Input::Tick);
+        while member.complete_sync() {}
+    }
+    member.step(Input::Client {
+        attempt: AttemptId::new(1),
+        op: get("k"),
+    });
+    member.step(Input::Client {
+        attempt: AttemptId::new(2),
+        op: put(1, "k", "v"),
+    });
+    while member.complete_sync() {}
+    member.step(Input::StorageFailed {
+        op: StorageOp::Append,
+        incarnation: INCARNATION,
+    });
+    assert!(
+        member.logs().contains(&LogEvent::LifecycleChanged {
+            from: Lifecycle::Ready,
+            to: Lifecycle::Failed,
+        }),
+        "fixture: the storage failure changes the lifecycle"
+    );
+    assert_eq!(
+        role_changes(&member),
+        elected,
+        "rule: ticks, a read, a write and a lifecycle change log no role change while the \
+         role, term and leader stay the same (O-3, br-qb4p)"
     );
 }

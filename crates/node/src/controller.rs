@@ -275,6 +275,8 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
             },
         };
         controller.poll(&mut effects);
+        // The library starts as a follower in its hard state's term and campaigns only on
+        // ticks, so this first poll changes no role: there is no role change to log (O-3).
         controller.last_status = controller.status_key();
         Ok((controller, effects))
     }
@@ -587,12 +589,14 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
         }
     }
 
-    /// Tells the request lifecycle if the status changed since it was last told (§7.8).
+    /// Tells the request lifecycle if the status changed since it was last told (§7.8),
+    /// after logging a change of role, term or believed leader (O-3).
     fn observe_status(&mut self, effects: &mut Vec<Effect>) {
         let now = self.status_key();
         if now == self.last_status {
             return;
         }
+        log_role_change(self.last_status, now, effects);
         self.last_status = now;
         let mut view = View::new(&mut self.core, self.raft.status());
         self.requests.status_changed(&mut view, effects);
@@ -760,6 +764,18 @@ fn respond_busy(attempt: AttemptId, effects: &mut Vec<Effect>) {
         attempt,
         response: Response::Refused(Refusal::Busy),
     });
+}
+/// Logs a role change (O-3, br-qb4p) when the library's role, term or believed leader
+/// differs between `last` and `now`: once per observed change, in effect order. A change
+/// of lifecycle alone is not one; [`LogEvent::LifecycleChanged`] records that.
+fn log_role_change(last: StatusKey, now: StatusKey, effects: &mut Vec<Effect>) {
+    if (now.role, now.term, now.leader) != (last.role, last.term, last.leader) {
+        effects.push(Effect::Log(LogEvent::RoleChanged {
+            role: now.role,
+            term: now.term,
+            leader: now.leader,
+        }));
+    }
 }
 
 /// Logs a dropped peer message (§8.2, CD-9: dropped and counted, never silent).

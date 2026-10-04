@@ -1488,9 +1488,11 @@ pub const CATALOGUE: &[CheckDef] = &[
                   and nothing dropped; under one write per sync cycle a leader still takes its \
                   followers' responses (a queued peer envelope goes before a waiting proposal, \
                   br-m7x7), keeps leading and commits; the same inputs give the same effects; and \
-                  each NODE-* invariant fires on corrupt state",
+                  each NODE-* invariant fires on corrupt state; the controller logs RoleChanged \
+                  whenever the library's role, term or believed leader changes, once per change \
+                  and never otherwise (O-3, br-qb4p)",
         kind: Kind::TestGroup,
-        covers: &["CD-9", "CD-7", "T-3", "P3"],
+        covers: &["CD-9", "CD-7", "T-3", "P3", "O-3"],
         class: ClaimClass::Invariant,
         tier: Tier::T0,
         selector: Selector::CargoTest {
@@ -1502,7 +1504,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "invariant_fixtures::",
             ],
         },
-        min_cases: 32,
+        min_cases: 36,
     },
     CheckDef {
         id: "NODE-WRITE-PATH",
