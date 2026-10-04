@@ -16,7 +16,9 @@
 //!
 //! A SCAN page is the state machine's page of the range (§8.5), by §7.11's exact rule (W28).
 
-use types::{AttemptId, Effect, Key, NodeId, Refusal, RequestId, Response, ScanRange, ServedBy};
+use types::{
+    AttemptId, Effect, Key, NodeId, Refusal, RequestId, RequestState, Response, ScanRange, ServedBy,
+};
 
 use crate::requests::View;
 
@@ -51,9 +53,9 @@ impl ReadPath {
         effects.push(Effect::Respond { attempt, response });
     }
 
-    /// A status lookup (F-9): the request's stored terminal result if this node has applied
-    /// it, `None` (`unknown`) otherwise. It never proposes anything, and `unknown` never
-    /// means "did not happen".
+    /// A status lookup (F-9): `Known` with the request's original terminal result if this
+    /// node has applied it, `Unknown` otherwise. It reads the history and nothing else: it
+    /// never proposes or records anything, and `Unknown` never means "did not happen" (P8).
     pub fn status(
         &self,
         view: &View<'_>,
@@ -64,11 +66,13 @@ impl ReadPath {
         let response = match self.served_by(view) {
             Err(refusal) => Response::Refused(refusal),
             Ok(served_by) => Response::Status {
-                result: view
+                state: view
                     .state()
                     .history()
                     .get(request_id)
-                    .map(statemachine::Record::result),
+                    .map_or(RequestState::Unknown, |record| {
+                        RequestState::Known(record.result())
+                    }),
                 served_by,
             },
         };

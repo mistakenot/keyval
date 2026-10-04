@@ -348,6 +348,26 @@ impl Refusal {
     }
 }
 
+/// What a status lookup knows about a request (F-9, P8).
+///
+/// This node has applied it, so its original terminal result is known here, or it has not,
+/// so its outcome is unknown here. The API answers it as `state: "known"` with the result,
+/// or `state: "unknown"` (§8.2).
+///
+/// Invariant: `Known` holds the result of the request's first execution as the history
+/// recorded it, whatever later attempts with its ID did (§8.3: a success,
+/// `version_mismatch` or `capacity_exceeded`). `Unknown` says only that this node's applied
+/// prefix holds no record of the request. It never means the request did not happen: it
+/// may be committed and not yet applied here, or still in flight (P8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestState {
+    /// This node has applied the request: its original terminal result.
+    Known(TerminalResult),
+    /// This node's applied prefix holds no record of the request. Never evidence that it
+    /// did not happen.
+    Unknown,
+}
+
 /// What the core answers an attempt with (the client API port's effect, §7.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Response {
@@ -385,11 +405,11 @@ pub enum Response {
     },
     /// One SCAN page.
     Page(ScanPage),
-    /// A status lookup (F-9): the stored result if this node has applied the request.
-    /// `None` is `unknown`, which never means "did not happen".
+    /// A status lookup (F-9): whether this node has applied the request, with its original
+    /// terminal result if so. It is a `200` whatever the embedded result decided (§8.3).
     Status {
-        /// The stored terminal result, if known here.
-        result: Option<TerminalResult>,
+        /// Known here with the original result, or unknown here (P8).
+        state: RequestState,
         /// The serving node and its applied prefix.
         served_by: ServedBy,
     },
@@ -619,7 +639,13 @@ mod tests {
             },
             Response::NotFound { served_by },
             Response::Status {
-                result: None,
+                state: RequestState::Unknown,
+                served_by,
+            },
+            // A known terminal decision is still a `200` lookup: the embedded result says
+            // what happened (§8.3).
+            Response::Status {
+                state: RequestState::Known(at(Decision::VersionMismatch { current: None })),
                 served_by,
             },
             Response::Refused(Refusal::NotLeader {

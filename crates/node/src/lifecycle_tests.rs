@@ -10,8 +10,8 @@
 
 use types::{
     AttemptId, ClientOp, Config, Decision, Effect, EntryIndex, HardState, Input, Lifecycle,
-    LogIndex, NodeId, NotReadyLifecycle, Observation, PageSize, Refusal, Response, Role, ScanItem,
-    ScanPage, ScanRange, ServedBy, StorageOp, Term, TerminalResult, Version,
+    LogIndex, NodeId, NotReadyLifecycle, Observation, PageSize, Refusal, RequestState, Response,
+    Role, ScanItem, ScanPage, ScanRange, ServedBy, StorageOp, Term, TerminalResult, Version,
 };
 
 use crate::RequestLifecycle;
@@ -294,14 +294,14 @@ fn the_status_lookup_answers_known_or_unknown_from_the_history() {
         ),
         (
             Some(Response::Status {
-                result: Some(TerminalResult::executed_at(
+                state: RequestState::Known(TerminalResult::executed_at(
                     EntryIndex::new(index.get()).unwrap(),
                     Decision::Set
                 )),
                 served_by,
             }),
             Some(Response::Status {
-                result: None,
+                state: RequestState::Unknown,
                 served_by,
             }),
         ),

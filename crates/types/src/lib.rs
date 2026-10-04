@@ -84,8 +84,8 @@ mod telemetry;
 pub use bounded::{BoundedMap, BoundedQueue, MapFull, QueueFull, QueueRefused};
 pub use byte_storage::{ByteStorage, Executed, execute};
 pub use client::{
-    AttemptId, ClientOp, HistoryLimit, Refusal, Response, ScanItem, ScanPage, ScanRange,
-    ScanRangeError, ServedBy,
+    AttemptId, ClientOp, HistoryLimit, Refusal, RequestState, Response, ScanItem, ScanPage,
+    ScanRange, ScanRangeError, ServedBy,
 };
 pub use config::{
     AddressProblem, AddressRole, COMMAND_ENVELOPE_BOUND, COMMAND_FORMAT_VERSION, Config,

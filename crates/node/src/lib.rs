@@ -75,6 +75,8 @@ mod requests;
 #[cfg(test)]
 mod startup_tests;
 #[cfg(test)]
+mod status_tests;
+#[cfg(test)]
 mod test_support;
 mod write_path;
 #[cfg(test)]

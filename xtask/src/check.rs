@@ -1795,6 +1795,30 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 18,
     },
+    CheckDef {
+        id: "REQUEST-STATUS",
+        summary: "the request-status lookup (§7.9, §8.2, §8.3, F-9, P8, A-2, W29.1), through the \
+                  controller: a request this node has applied is known with its original \
+                  terminal result, whatever it decided (a set, a DELETE that existed or not, a \
+                  version_mismatch naming the current version or its absence, and a live-quota \
+                  capacity_exceeded on every node of a cluster), and retries or other commands \
+                  under its ID never change it; one it has not applied is unknown, which never \
+                  means it did not happen: the same request turns known once its entry applies, \
+                  on a lone leader after its outstanding sync and on a partitioned follower once \
+                  it catches up; the lookup is answered in one turn with served_by and nothing \
+                  else, never proposing or recording anything, so the ID later executes as a \
+                  first execution; and a node that is not Ready answers recovering, or \
+                  unavailable while stopping, never known or unknown",
+        kind: Kind::TestGroup,
+        covers: &["F-9", "P8", "A-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "node",
+            filters: &["status_tests::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.
