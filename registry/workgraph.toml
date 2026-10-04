@@ -164,7 +164,11 @@ deps = ["W11", "W15"]
 reqs = ["DUR-1", "DUR-7", "DUR-9", "T-2"]
 area = ["fs_storage (file adapter)", "sim/disk"]
 milestone = "m1"
-accept = ["./dev check STORAGE-CONTRACT"]
+accept = [
+    "./dev check STORAGE-CONTRACT",
+    "./dev check STORAGE-CONTRACT-SIM",
+    "./dev check SIM-DISK",
+]
 bead = "br-w12-byte-storage-adapters-45u"
 
 [[item]]

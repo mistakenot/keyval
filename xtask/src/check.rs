@@ -979,6 +979,39 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 16,
     },
+    CheckDef {
+        id: "STORAGE-CONTRACT-SIM",
+        summary: "the simulated disk passes the one byte-storage contract suite \
+                  unmodified, every case in its own test (§7.2, P3)",
+        kind: Kind::TestGroup,
+        covers: &["P3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["contract_sim_disk::"],
+        },
+        min_cases: 11,
+    },
+    CheckDef {
+        id: "SIM-DISK",
+        summary: "the simulated disk's crash model: a seed-chosen prefix of unsynced \
+                  appends survives (none, some or all) with an optional zero or garbage \
+                  fill to the append's extent, synced bytes are never damaged, a file \
+                  whose directory entry was never synced is lost, an unsynced truncation \
+                  may be lost, a crash ends every handle and frees the lock, a lost sync \
+                  completion is stale for the next incarnation, and the outcome is a \
+                  function of the seed (§10.2, DUR-7, DUR-9)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-7", "DUR-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["disk::tests::"],
+        },
+        min_cases: 6,
+    },
 ];
 
 /// Outcome of one requested check.
