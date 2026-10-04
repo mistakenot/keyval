@@ -20,8 +20,10 @@
 //!    marker under `crates/server/`.
 //! 6. **Spec and tests** (reported until W32). Every operation and error code is named by
 //!    a `// api-test: <name>` marker under `conformance/`.
-//! 7. **Bug variants.** Every `bug_variant` row names, in `catches`, at least one existing
-//!    checker; whether it is caught is T1's business (§10.6).
+//! 7. **Bug variants.** Every `bug_variant` row names, in `catches`, at least one catcher,
+//!    and each is an existing check of any kind but `bug_variant`: §10.6 designates
+//!    checkers, the registry gate (static), the conformance suite and fixture corpora.
+//!    Whether it is caught is T1's business (§10.6).
 //! 8. **Work graph.** `workgraph.toml` mirrors §12.2/§12.3 and is acyclic
 //!    ([`workgraph::judge`]), and each item's `deps` equal its bead's `blocks` edges to
 //!    other work-item beads in the tracker export; other beads' edges are free (§12.2).
@@ -750,7 +752,9 @@ fn spec_and_tests(spec: &Spec, sources: &[(String, String)], verdict: &mut Judge
     }
 }
 
-/// Condition 7: every bug variant names an existing checker that should catch it.
+/// Condition 7: every bug variant names existing checks that should catch it. A catcher
+/// may be of any kind that runs against the code (§10.6 designates static and conformance
+/// catchers too), never another bug variant.
 fn bug_variants(checks: &ChecksFile, verdict: &mut Judgement) {
     for c in checks.check.iter().filter(|c| c.kind == "bug_variant") {
         verdict.cases += 1;
@@ -758,12 +762,12 @@ fn bug_variants(checks: &ChecksFile, verdict: &mut Judgement) {
             checks
                 .check
                 .iter()
-                .any(|other| &other.id == *id && other.kind == "checker")
+                .any(|other| &other.id == *id && other.kind != "bug_variant")
         });
         if c.catches.is_empty() || catchers.count() != c.catches.len() {
             verdict.violations.push(format!(
                 "condition 7: bug variant {} needs a designated catcher: catches {:?} must \
-                 name existing checker rows",
+                 name existing check rows that are not bug variants",
                 c.id, c.catches
             ));
         }
@@ -1167,25 +1171,65 @@ impl ErrorCode {
         );
     }
 
-    #[test]
-    fn condition_7_fails_on_a_bug_variant_without_a_catcher() {
+    /// The fixture registry plus a planned checker K-2, a conformance check CONF-1 and the
+    /// bug variant B-1 with `catches`.
+    fn with_bug_variant(catches: &str) -> Texts {
         let mut texts = Texts::valid();
         texts.checks = [
             texts.checks.clone(),
+            row("K-2", "checker", "\"F-1\"", "planned", ""),
+            row("CONF-1", "conformance", "\"F-1\"", "planned", ""),
             row(
                 "B-1",
                 "bug_variant",
                 "\"F-1\"",
                 "planned",
-                "catches = [\"A-CHECK\"]\n",
+                &format!("catches = [{catches}]\n"),
             ),
         ]
         .concat();
-        fails_only(
-            &texts,
-            "condition 7",
-            "a bug variant's catcher is an existing checker",
-        );
+        texts
+    }
+
+    #[test]
+    fn condition_7_fails_on_a_bug_variant_without_a_catcher() {
+        for (catches, rule) in [
+            ("", "a bug variant names a catcher"),
+            ("\"NO-SUCH-CHECK\"", "a catcher is an existing check"),
+            (
+                "\"K-2\", \"NO-SUCH-CHECK\"",
+                "every catcher is an existing check, not just one",
+            ),
+            ("\"B-1\"", "a bug variant never catches a bug variant"),
+        ] {
+            fails_only(&with_bug_variant(catches), "condition 7", rule);
+        }
+    }
+
+    #[test]
+    fn condition_7_accepts_every_catcher_kind_section_10_6_designates() {
+        for (catches, designated) in [
+            ("\"K-2\"", "a checker (B-10 → K-2)"),
+            (
+                "\"B-CHECK\"",
+                "the registry gate, a static check (B-21 → §10.13)",
+            ),
+            (
+                "\"K-2\", \"CONF-1\"",
+                "a checker and the conformance suite (B-13 → K-2 / conformance)",
+            ),
+            (
+                "\"A-CHECK\"",
+                "checker unit fixtures, a test group (B-22 → fixtures and corpus)",
+            ),
+        ] {
+            let verdict = with_bug_variant(catches).judge();
+            assert!(
+                verdict.violations.is_empty(),
+                "rule: §10.6 designates {designated} as a catcher (br-cond7-checker-only-\
+                 catchers-ur1r); verdict={verdict:#?}"
+            );
+        }
     }
 
     #[test]
