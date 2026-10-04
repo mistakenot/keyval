@@ -883,6 +883,38 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "STATE-INVARIANTS",
+        summary: "every state-machine invariant is armed: a corrupted-state fixture makes each \
+                  fire with its ID, node and entry (applied beyond commit, a version that would \
+                  not grow, live state over quota, counter underflow or overflow, history past \
+                  the applied entries, a request executed twice) (CD-7)",
+        kind: Kind::TestGroup,
+        covers: &["CD-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["apply::invariant_fixtures::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
+        id: "STATE-PROPERTIES",
+        summary: "over seeded random logs with retries, conflicts and quota refusals: version = \
+                  execution index, a replay returns the original result, a conflicting command \
+                  changes nothing, and a quota refusal is terminal and deterministic; failures \
+                  shrink and name their seed (DM-3, DM-5, DM-6, C-6)",
+        kind: Kind::TestGroup,
+        covers: &["DM-3", "DM-5", "DM-6", "C-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["properties::"],
+        },
+        min_cases: 3,
+    },
 ];
 
 /// Outcome of one requested check.

@@ -153,13 +153,14 @@ impl StateMachine {
     }
 
     /// Applies the committed entry that follows the applied index, and says what it did
-    /// (§7.5). This is the only place writes change state. It is a pure, deterministic
-    /// function of the state and the entry, so replaying the log rebuilds the same state
-    /// and the same results (D-10).
+    /// (§7.5). `commit` is the commit index the caller applies up to. This is the only
+    /// place writes change state. It is a pure, deterministic function of the state and
+    /// the entry, so replaying the log rebuilds the same state and the same results (D-10).
     ///
     /// # Panics
     ///
     /// On a broken invariant (CD-7), naming the node and the entry:
+    /// - `SM-APPLIED-LE-COMMIT`: `entry` lies beyond `commit`;
     /// - `SM-APPLY-IN-ORDER`: `entry` is not the one after the applied index;
     /// - `SM-COMMAND-DECODES`: a committed command does not decode, although the leader
     ///   validated it before proposing it (step 2);
@@ -167,9 +168,19 @@ impl StateMachine {
     ///   admits before W27 implements their apply;
     /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds;
     /// - `SM-LIVE-BYTES` and `SM-COMMAND-BYTES`: a live-bytes or committed-command-bytes
-    ///   counter that would go below zero or overflow.
-    pub fn apply(&mut self, entry: &Entry) -> Applied {
+    ///   counter that would go below zero or overflow;
+    /// - `SM-VERSION-INCREASES`: a write that would not raise its key's version (DM-3);
+    /// - `SM-LIVE-WITHIN-QUOTA` and `SM-HISTORY-BOUNDED`: after the entry, the live state
+    ///   exceeds its DM-6 quota, or the history holds more records than entries applied.
+    pub fn apply(&mut self, entry: &Entry, commit: LogIndex) -> Applied {
         let index = entry.index;
+        invariant!(
+            index.index() <= commit,
+            "SM-APPLIED-LE-COMMIT",
+            "node {}: entry {index} applied beyond commit index {commit}; only committed \
+             entries apply",
+            self.node
+        );
         invariant!(
             self.applied.checked_next() == Some(index.index()),
             "SM-APPLY-IN-ORDER",
@@ -183,7 +194,34 @@ impl StateMachine {
             EntryPayload::Command(bytes) => self.execute(index, bytes),
         };
         self.applied = index.index();
+        self.check_bounds(index);
         applied
+    }
+
+    /// The bounded collections are within their limits after every entry (CD-7, CD-9): the
+    /// live state within the DM-6 quota, and at most one history record per applied entry.
+    fn check_bounds(&self, index: EntryIndex) {
+        let keys = u64::try_from(self.map.len()).map_or(ItemCount::new(u64::MAX), ItemCount::new);
+        invariant!(
+            keys <= self.limits.max_live_keys && self.live_bytes <= self.limits.max_live_bytes,
+            "SM-LIVE-WITHIN-QUOTA",
+            "node {}: after entry {index}: {} live keys and {} live bytes exceed the quota of \
+             {} keys and {} bytes",
+            self.node,
+            keys.get(),
+            self.live_bytes.get(),
+            self.limits.max_live_keys.get(),
+            self.limits.max_live_bytes.get()
+        );
+        let records = u64::try_from(self.history.len()).unwrap_or(u64::MAX);
+        invariant!(
+            records <= self.applied.get(),
+            "SM-HISTORY-BOUNDED",
+            "node {}: after entry {index}: {records} history records exceed the {} entries \
+             applied",
+            self.node,
+            self.applied.get()
+        );
     }
 
     /// Steps 2 to 4: decodes a committed command, then replays it, refuses it as a
@@ -281,6 +319,16 @@ impl StateMachine {
     /// refuses it (DM-6). The key count is checked first, then byte growth; an overwrite
     /// that keeps or shrinks the bytes always passes (br-dm6-limit-order-31o5).
     fn put(&mut self, index: EntryIndex, key: Key, value: Value) -> Decision {
+        let previous = self.map.get(&key).map(|stored| stored.version);
+        invariant!(
+            previous.is_none_or(|previous| previous < index.version()),
+            "SM-VERSION-INCREASES",
+            "node {}: entry {index} would set version {} on a key already at version {:?}; a \
+             key's version only grows (DM-3)",
+            self.node,
+            index.version(),
+            previous.map(Version::get)
+        );
         let new = entry_bytes(key.as_str(), value.as_str());
         let old = self
             .map
@@ -327,12 +375,16 @@ impl StateMachine {
 }
 
 #[cfg(test)]
+mod invariant_fixtures;
+
+#[cfg(test)]
 mod tests {
     // check: APPLY-PUT
 
     use types::{ExpectedVersion, KeyValueLimits, Term};
 
     use super::*;
+    use crate::capacity::tests::far;
 
     fn machine() -> StateMachine {
         StateMachine::new(NodeId::new(1).unwrap(), crate::capacity::tests::roomy())
@@ -385,7 +437,7 @@ mod tests {
             "rule: nothing applied yet"
         );
         assert_eq!(
-            state.apply(&entry(1, EntryPayload::Empty)),
+            state.apply(&entry(1, EntryPayload::Empty), far()),
             Applied::Empty,
             "rule: an empty entry carries no command (§7.5 step 1)"
         );
@@ -400,8 +452,8 @@ mod tests {
     #[test]
     fn a_put_sets_its_key_with_the_execution_index_as_version() {
         let mut state = machine();
-        state.apply(&entry(1, EntryPayload::Empty));
-        let applied = state.apply(&entry(2, put(7, "k", "v")));
+        state.apply(&entry(1, EntryPayload::Empty), far());
+        let applied = state.apply(&entry(2, put(7, "k", "v")), far());
         assert_eq!(
             applied,
             Applied::Executed {
@@ -435,7 +487,7 @@ mod tests {
             put(4, "a", "z"),
         ];
         for (index, payload) in (1..).zip(log) {
-            state.apply(&entry(index, payload));
+            state.apply(&entry(index, payload), far());
         }
         assert_eq!(
             state.get(&key("a")).map(Stored::version),
@@ -449,8 +501,8 @@ mod tests {
         );
 
         let mut same = machine();
-        same.apply(&entry(1, put(1, "k", "same")));
-        same.apply(&entry(2, put(2, "k", "same")));
+        same.apply(&entry(1, put(1, "k", "same")), far());
+        same.apply(&entry(2, put(2, "k", "same")), far());
         assert_eq!(
             same.get(&key("k")).map(Stored::version),
             Some(version(2)),
@@ -463,7 +515,7 @@ mod tests {
         let mut state = machine();
         let keys = ["b", "\u{e9}", "a", "B", "z", "a\u{0}"];
         for (index, (request, k)) in (1..).zip((1..).zip(keys)) {
-            state.apply(&entry(index, put(request, k, "v")));
+            state.apply(&entry(index, put(request, k, "v")), far());
         }
         let order: Vec<&str> = state.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
@@ -493,7 +545,7 @@ mod tests {
             let mut state = machine();
             let results: Vec<Applied> = (1..)
                 .zip(log())
-                .map(|(index, payload)| state.apply(&entry(index, payload)))
+                .map(|(index, payload)| state.apply(&entry(index, payload), far()))
                 .collect();
             (state, results)
         };
@@ -511,8 +563,8 @@ mod tests {
     )]
     fn skipping_an_entry_breaks_the_apply_order_invariant() {
         let mut state = machine();
-        state.apply(&entry(1, EntryPayload::Empty));
-        state.apply(&entry(3, EntryPayload::Empty));
+        state.apply(&entry(1, EntryPayload::Empty), far());
+        state.apply(&entry(3, EntryPayload::Empty), far());
     }
 
     #[test]
@@ -522,8 +574,8 @@ mod tests {
     )]
     fn applying_an_entry_twice_breaks_the_apply_order_invariant() {
         let mut state = machine();
-        state.apply(&entry(1, put(1, "k", "v")));
-        state.apply(&entry(1, put(1, "k", "v")));
+        state.apply(&entry(1, put(1, "k", "v")), far());
+        state.apply(&entry(1, put(1, "k", "v")), far());
     }
 
     #[test]
@@ -532,7 +584,7 @@ mod tests {
                                1 (3 bytes) does not decode"
     )]
     fn an_undecodable_committed_command_breaks_its_invariant() {
-        machine().apply(&entry(1, EntryPayload::Command(vec![1, 9, 9])));
+        machine().apply(&entry(1, EntryPayload::Command(vec![1, 9, 9])), far());
     }
 
     #[test]
@@ -549,6 +601,6 @@ mod tests {
                 value: value("v"),
             },
         });
-        machine().apply(&entry(1, EntryPayload::Command(cas)));
+        machine().apply(&entry(1, EntryPayload::Command(cas)), far());
     }
 }

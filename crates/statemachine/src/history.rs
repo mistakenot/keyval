@@ -132,6 +132,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::capacity::tests::far;
     use crate::{Applied, StateMachine};
 
     fn entry(index: u64, payload: EntryPayload) -> Entry {
@@ -189,9 +190,9 @@ mod tests {
     #[test]
     fn a_first_execution_is_recorded_with_index_digest_and_result() {
         let mut state = machine();
-        state.apply(&entry(1, EntryPayload::Empty));
+        state.apply(&entry(1, EntryPayload::Empty), far());
         let command = put(7, "k", "v");
-        state.apply(&entry(2, payload(&command)));
+        state.apply(&entry(2, payload(&command)), far());
         assert_eq!(
             state.history().get(&command.request_id),
             Some(&Record::new(
@@ -208,14 +209,14 @@ mod tests {
     fn a_replay_returns_the_original_result_and_changes_nothing() {
         let mut state = machine();
         let command = put(7, "k", "v");
-        state.apply(&entry(1, payload(&command)));
-        state.apply(&entry(2, payload(&put(8, "other", "x"))));
+        state.apply(&entry(1, payload(&command)), far());
+        state.apply(&entry(2, payload(&put(8, "other", "x"))), far());
         let before = (
             state.get(command.mutation.key()).cloned(),
             state.history().clone(),
         );
         assert_eq!(
-            state.apply(&entry(3, payload(&command))),
+            state.apply(&entry(3, payload(&command)), far()),
             Applied::Replayed {
                 request_id: command.request_id,
                 result: set_at(1),
@@ -241,11 +242,11 @@ mod tests {
     fn a_conflicting_command_changes_nothing_and_names_the_original() {
         let mut state = machine();
         let original = put(7, "k", "v");
-        state.apply(&entry(1, payload(&original)));
+        state.apply(&entry(1, payload(&original)), far());
         let different = put(7, "other", "w");
         let before = state.clone();
         assert_eq!(
-            state.apply(&entry(2, payload(&different))),
+            state.apply(&entry(2, payload(&different)), far()),
             Applied::Conflict {
                 request_id: original.request_id,
                 original_index: EntryIndex::new(1).unwrap(),
@@ -281,7 +282,7 @@ mod tests {
             let mut state = machine();
             let results: Vec<Applied> = (1..)
                 .zip(log())
-                .map(|(index, payload)| state.apply(&entry(index, payload)))
+                .map(|(index, payload)| state.apply(&entry(index, payload), far()))
                 .collect();
             (state, results)
         };

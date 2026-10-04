@@ -584,3 +584,27 @@ tier = "T0"
 run = "./dev check CAPACITY"
 min_cases = 7
 status = "implemented"
+
+[[check]]
+id = "STATE-INVARIANTS"
+summary = "every state-machine invariant is armed: a corrupted-state fixture makes each fire with its ID, node and entry (applied beyond commit, a version that would not grow, live state over quota, counter underflow or overflow, history past the applied entries, a request executed twice) (CD-7)"
+kind = "test_group"
+covers = ["CD-7"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check STATE-INVARIANTS"
+min_cases = 8
+status = "implemented"
+
+[[check]]
+id = "STATE-PROPERTIES"
+summary = "over seeded random logs with retries, conflicts and quota refusals: version = execution index, a replay returns the original result, a conflicting command changes nothing, and a quota refusal is terminal and deterministic; failures shrink and name their seed (DM-3, DM-5, DM-6, C-6)"
+kind = "test_group"
+covers = ["DM-3", "DM-5", "DM-6", "C-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check STATE-PROPERTIES"
+min_cases = 3
+status = "implemented"

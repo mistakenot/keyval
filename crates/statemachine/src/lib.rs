@@ -40,9 +40,10 @@
 //! Versions are execution indices (DM-3): a PUT at entry *i* gives its key version *i*,
 //! so versions strictly increase per key and have gaps.
 //!
-//! W09 grows this crate in steps: empty entries and PUT (W09.1), the request history
-//! (W09.2), and the live-state quota and committed-bytes counter (W09.3). The armed
-//! invariant set (W09.4) follows. DELETE and compare-and-swap apply in W27. Until
+//! W09 built this crate in steps: empty entries and PUT (W09.1), the request history
+//! (W09.2), the live-state quota and committed-bytes counter (W09.3), and the armed
+//! invariant set with its property tests (W09.4). Every invariant names its ID, the node and
+//! the entry, and a corrupted-state fixture proves each one fires. DELETE and compare-and-swap apply in W27. Until
 //! then no node admits them, and a committed one fails the `SM-COMMAND-ADMITTED`
 //! invariant.
 //!
@@ -53,6 +54,9 @@ mod apply;
 mod capacity;
 pub mod codec;
 mod history;
+
+#[cfg(test)]
+mod properties;
 
 pub use apply::{Applied, StateMachine, Stored};
 pub use capacity::StateLimits;

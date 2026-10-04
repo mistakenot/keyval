@@ -57,6 +57,11 @@ pub mod tests {
     use super::*;
     use crate::{Applied, Command, StateMachine, codec};
 
+    /// A commit index far beyond any test log, for tests that are not about it.
+    pub fn far() -> types::LogIndex {
+        types::LogIndex::new(types::MAX_SAFE_INTEGER).unwrap()
+    }
+
     /// Generous limits for tests that are not about the quota: 10,000 keys and 64 MiB.
     pub fn roomy() -> StateLimits {
         limits(10_000, 64 * 1024 * 1024)
@@ -77,11 +82,14 @@ pub mod tests {
         let results = (1..)
             .zip(log)
             .map(|(index, payload)| {
-                state.apply(&Entry {
-                    index: EntryIndex::new(index).unwrap(),
-                    term: Term::new(1).unwrap(),
-                    payload: payload.clone(),
-                })
+                state.apply(
+                    &Entry {
+                        index: EntryIndex::new(index).unwrap(),
+                        term: Term::new(1).unwrap(),
+                        payload: payload.clone(),
+                    },
+                    far(),
+                )
             })
             .collect();
         (state, results)
