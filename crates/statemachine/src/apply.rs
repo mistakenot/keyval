@@ -4,10 +4,11 @@
 use std::collections::BTreeMap;
 
 use types::{
-    Decision, Entry, EntryIndex, EntryPayload, Key, KeyValueLimits, LogIndex, Mutation, NodeId,
-    RequestId, TerminalResult, Value, Version, invariant,
+    ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, LiveStateLimit, LogIndex,
+    Mutation, NodeId, RequestId, TerminalResult, Value, Version, invariant,
 };
 
+use crate::capacity::{StateLimits, entry_bytes};
 use crate::codec::{self, Command};
 use crate::history::{CommandDigest, History, Record};
 
@@ -70,31 +71,40 @@ pub enum Applied {
 ///
 /// Invariants: entries are applied once each, in index order, from index 1, so the
 /// applied index is the last one's; every stored version is at most the applied index;
-/// a request ID is recorded once, at its first execution, and never changes.
+/// a request ID is recorded once, at its first execution, and never changes; the live
+/// keys and their key+value bytes stay within the DM-6 limits, and the live-bytes counter
+/// is their sum.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateMachine {
     /// The node this state belongs to, named in invariant messages (CD-7).
     node: NodeId,
-    /// The key and value limits commands are decoded under (D-80).
-    limits: KeyValueLimits,
+    /// The key/value limits commands are decoded under (D-80) and the DM-6 quota.
+    limits: StateLimits,
     /// The live keys, in byte-wise key order (DM-4).
     map: BTreeMap<Key, Stored>,
     /// Every request ID's first execution, kept forever (DM-5).
     history: History,
+    /// The live keys' decoded key+value bytes (DM-6).
+    live_bytes: ByteCount,
+    /// The canonical bytes of every first execution so far, whatever its result (DM-7).
+    command_bytes: ByteCount,
     /// The index of the last applied entry; 0 before the first.
     applied: LogIndex,
 }
 
 impl StateMachine {
-    /// The state before entry 1 is applied. Commands are decoded under `limits`, the
-    /// configured key and value limits (D-80).
+    /// The state before entry 1 is applied, under the configured `limits`: commands are
+    /// decoded under its key and value limits (D-80), and writes are held to its live-state
+    /// quota (DM-6).
     #[must_use]
-    pub const fn new(node: NodeId, limits: KeyValueLimits) -> Self {
+    pub const fn new(node: NodeId, limits: StateLimits) -> Self {
         Self {
             node,
             limits,
             map: BTreeMap::new(),
             history: History::new(),
+            live_bytes: ByteCount::ZERO,
+            command_bytes: ByteCount::ZERO,
             applied: LogIndex::ZERO,
         }
     }
@@ -122,6 +132,20 @@ impl StateMachine {
         &self.history
     }
 
+    /// The live keys' decoded key+value bytes (DM-6).
+    #[must_use]
+    pub const fn live_bytes(&self) -> ByteCount {
+        self.live_bytes
+    }
+
+    /// The committed-command-bytes counter (DM-7): the canonical length of every first
+    /// execution so far, whatever its terminal result. Admission reads it at the leader's
+    /// applied index (§7.5).
+    #[must_use]
+    pub const fn committed_command_bytes(&self) -> ByteCount {
+        self.command_bytes
+    }
+
     /// The number of live keys.
     #[must_use]
     pub fn live_keys(&self) -> usize {
@@ -141,7 +165,9 @@ impl StateMachine {
     ///   validated it before proposing it (step 2);
     /// - `SM-COMMAND-ADMITTED`: a committed DELETE or compare-and-swap, which no node
     ///   admits before W27 implements their apply;
-    /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds.
+    /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds;
+    /// - `SM-LIVE-BYTES` and `SM-COMMAND-BYTES`: a live-bytes or committed-command-bytes
+    ///   counter that would go below zero or overflow.
     pub fn apply(&mut self, entry: &Entry) -> Applied {
         let index = entry.index;
         invariant!(
@@ -163,7 +189,7 @@ impl StateMachine {
     /// Steps 2 to 4: decodes a committed command, then replays it, refuses it as a
     /// conflict, or executes it for the first time.
     fn execute(&mut self, index: EntryIndex, bytes: &[u8]) -> Applied {
-        let command = codec::decode(bytes, self.limits);
+        let command = codec::decode(bytes, self.limits.key_values);
         invariant!(
             command.is_ok(),
             "SM-COMMAND-DECODES",
@@ -187,18 +213,24 @@ impl StateMachine {
                     request_id: command.request_id,
                     original_index: record.first_index(),
                 },
-                None => self.first_execution(index, digest, command),
+                None => {
+                    // A command is at most 66 KiB (§7.11), so its length always fits.
+                    let size =
+                        u64::try_from(bytes.len()).map_or(ByteCount::new(u64::MAX), ByteCount::new);
+                    self.first_execution(index, digest, size, command)
+                }
             }
         })
     }
 
-    /// Step 4: a command's first execution, which sets a PUT's key with
-    /// `version = index` and records the result in the history, whatever it is. The
-    /// live-state quota (W09.3) refuses over-quota writes.
+    /// Step 4: a command's first execution. A PUT sets its key with `version = index`
+    /// unless the live-state quota refuses it. The result, whatever it is, is recorded in
+    /// the history, and the command's `size` is added to the DM-7 counter.
     fn first_execution(
         &mut self,
         index: EntryIndex,
         digest: CommandDigest,
+        size: ByteCount,
         command: Command,
     ) -> Applied {
         let Command {
@@ -218,9 +250,8 @@ impl StateMachine {
         );
         // The fallback is unreachable once the invariant above holds.
         put.map_or(Applied::Empty, |(key, value)| {
-            let version = index.version();
-            self.map.insert(key, Stored { value, version });
-            let result = TerminalResult::executed_at(index, Decision::Set);
+            let decision = self.put(index, key, value);
+            let result = TerminalResult::executed_at(index, decision);
             let earlier = self
                 .history
                 .insert(request_id, Record::new(index, digest, result));
@@ -231,8 +262,67 @@ impl StateMachine {
                  execution was {earlier:?}",
                 self.node
             );
+            let counted = self.command_bytes.checked_add(size);
+            invariant!(
+                counted.is_some(),
+                "SM-COMMAND-BYTES",
+                "node {}: entry {index}: adding {} bytes overflows the committed-command-bytes \
+                 counter at {}",
+                self.node,
+                size.get(),
+                self.command_bytes.get()
+            );
+            self.command_bytes = counted.unwrap_or(self.command_bytes);
             Applied::Executed { request_id, result }
         })
+    }
+
+    /// A PUT's step 4: sets the key with `version = index`, unless the live-state quota
+    /// refuses it (DM-6). The key count is checked first, then byte growth; an overwrite
+    /// that keeps or shrinks the bytes always passes (br-dm6-limit-order-31o5).
+    fn put(&mut self, index: EntryIndex, key: Key, value: Value) -> Decision {
+        let new = entry_bytes(key.as_str(), value.as_str());
+        let old = self
+            .map
+            .get(&key)
+            .map(|stored| entry_bytes(key.as_str(), stored.value.as_str()));
+        if old.is_none() && !self.has_room_for_a_key() {
+            return Decision::CapacityExceeded {
+                limit: LiveStateLimit::Keys,
+            };
+        }
+        let rest = self.live_bytes.checked_sub(old.unwrap_or(ByteCount::ZERO));
+        invariant!(
+            rest.is_some(),
+            "SM-LIVE-BYTES",
+            "node {}: entry {index}: live bytes {} are fewer than the overwritten entry's {:?}",
+            self.node,
+            self.live_bytes.get(),
+            old.map(ByteCount::get)
+        );
+        let after = rest.and_then(|rest| rest.checked_add(new));
+        let grows = after.is_none_or(|after| after > self.live_bytes);
+        if grows && after.is_none_or(|after| after > self.limits.max_live_bytes) {
+            return Decision::CapacityExceeded {
+                limit: LiveStateLimit::Bytes,
+            };
+        }
+        self.map.insert(
+            key,
+            Stored {
+                value,
+                version: index.version(),
+            },
+        );
+        // `after` is set here: an overflow counts as growth beyond the limit, refused above.
+        self.live_bytes = after.unwrap_or(self.live_bytes);
+        Decision::Set
+    }
+
+    /// Whether one more live key fits `max_live_keys` (DM-6).
+    fn has_room_for_a_key(&self) -> bool {
+        u64::try_from(self.map.len())
+            .is_ok_and(|keys| ItemCount::new(keys) < self.limits.max_live_keys)
     }
 }
 
@@ -240,12 +330,12 @@ impl StateMachine {
 mod tests {
     // check: APPLY-PUT
 
-    use types::{ExpectedVersion, Term};
+    use types::{ExpectedVersion, KeyValueLimits, Term};
 
     use super::*;
 
     fn machine() -> StateMachine {
-        StateMachine::new(NodeId::new(1).unwrap(), KeyValueLimits::MAXIMA)
+        StateMachine::new(NodeId::new(1).unwrap(), crate::capacity::tests::roomy())
     }
 
     fn entry(index: u64, payload: EntryPayload) -> Entry {

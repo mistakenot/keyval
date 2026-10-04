@@ -26,6 +26,11 @@
 //!   same state and the same results (D-10).
 //! - **[`codec`]**: the canonical, versioned command encoding that log entries carry
 //!   ([`Command`], at most 66 KiB).
+//! - **[`StateLimits`]**: the live-state quota (DM-6), judged at apply against committed
+//!   state: a write that would create a key past `max_live_keys`, or grow the key+value
+//!   bytes past `max_live_bytes`, gets the terminal result `capacity_exceeded`, keys first.
+//!   The state machine also keeps the committed-command-bytes counter that history
+//!   admission reads (DM-7).
 //! - **[`History`]**: each request ID's first execution, `request_id → (first_index,
 //!   command_digest, terminal_result)`, kept forever (DM-5). The same command again is a
 //!   replay of the stored result; another command under the same ID is a conflict (C-6).
@@ -35,9 +40,9 @@
 //! Versions are execution indices (DM-3): a PUT at entry *i* gives its key version *i*,
 //! so versions strictly increase per key and have gaps.
 //!
-//! W09 grows this crate in steps: empty entries and PUT (W09.1), and the request history
-//! (W09.2). The live-state quota and committed-bytes counter (W09.3) and the armed
-//! invariant set (W09.4) follow. DELETE and compare-and-swap apply in W27. Until
+//! W09 grows this crate in steps: empty entries and PUT (W09.1), the request history
+//! (W09.2), and the live-state quota and committed-bytes counter (W09.3). The armed
+//! invariant set (W09.4) follows. DELETE and compare-and-swap apply in W27. Until
 //! then no node admits them, and a committed one fails the `SM-COMMAND-ADMITTED`
 //! invariant.
 //!
@@ -45,9 +50,11 @@
 //! threads, hashed maps or I/O. Its `clippy.toml` and the lint block above enforce this.
 
 mod apply;
+mod capacity;
 pub mod codec;
 mod history;
 
 pub use apply::{Applied, StateMachine, Stored};
+pub use capacity::StateLimits;
 pub use codec::Command;
 pub use history::{CommandDigest, History, Record};

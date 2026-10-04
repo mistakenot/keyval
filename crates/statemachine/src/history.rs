@@ -157,7 +157,7 @@ mod tests {
     }
 
     fn machine() -> StateMachine {
-        StateMachine::new(NodeId::new(1).unwrap(), KeyValueLimits::MAXIMA)
+        StateMachine::new(NodeId::new(1).unwrap(), crate::capacity::tests::roomy())
     }
 
     fn set_at(index: u64) -> TerminalResult {

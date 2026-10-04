@@ -572,3 +572,15 @@ tier = "T0"
 run = "./dev check JOURNAL-RECOVERY"
 min_cases = 10
 status = "implemented"
+
+[[check]]
+id = "CAPACITY"
+summary = "the live-state quota admits N-1 and N and refuses N+1 for both live keys and decoded key+value bytes, checking keys first; equal and shrinking overwrites always pass; a refused write is terminal and replays; the committed-command-bytes counter counts first executions only and is identical after replay (DM-6, DM-7)"
+kind = "test_group"
+covers = ["DM-6", "DM-7"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check CAPACITY"
+min_cases = 7
+status = "implemented"

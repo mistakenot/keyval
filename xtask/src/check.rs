@@ -865,6 +865,23 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 10,
     },
+    CheckDef {
+        id: "CAPACITY",
+        summary: "the live-state quota admits N-1 and N and refuses N+1 for both live keys and \
+                  decoded key+value bytes, checking keys first; equal and shrinking overwrites \
+                  always pass; a refused write is terminal and replays; the \
+                  committed-command-bytes counter counts first executions only and is identical \
+                  after replay (DM-6, DM-7)",
+        kind: Kind::TestGroup,
+        covers: &["DM-6", "DM-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["capacity::tests::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.
