@@ -13,7 +13,11 @@
 //!
 //! Effects go where §7.2 says: storage effects to the I/O thread, in order; `Respond` and
 //! `Send` to the [`Outputs`] the HTTP adapters supply (W18.3); `Log` and `Observe` to the log.
-//! Adapters only translate (CD-1): admission, deadlines and every answer are the core's.
+//! Adapters only translate (CD-1): admission, deadlines and every answer are the core's. The
+//! hand-off applies the core's one inbound bound (§7.11) at the controller's door, over the
+//! inputs waiting and those the controller holds, so the core's own queue of that bound never
+//! fills and never refuses (`RUNTIME-ONE-BOUND`): the bound applies once and refusals are
+//! counted once, in the [`Snapshot`] (br-rl0u).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -25,7 +29,7 @@ use node::{Boot, Controller, RequestLifecycle, StartError};
 use serde_json::json;
 use types::{
     AttemptId, ClientOp, Config, Effect, Inbound, Incarnation, Input, Lifecycle, Limit, LogIndex,
-    LogLevel, NodeId, Response, Role, SyncSeq, Term,
+    LogLevel, NodeId, Response, Role, SyncSeq, Term, invariant,
 };
 
 use crate::clock;
@@ -78,9 +82,9 @@ pub struct Snapshot {
     pub applied: LogIndex,
     /// The ticks its clock has processed since boot (§7.10).
     pub ticks: u64,
-    /// Client attempts the hand-off refused (answered `busy`).
+    /// Client attempts refused at the one inbound bound (answered `busy`, §7.11).
     pub clients_refused: u64,
-    /// Peer messages the hand-off dropped.
+    /// Peer messages dropped at the one inbound bound (§7.11).
     pub peers_dropped: u64,
     /// Log records dropped because the log queue was full (O-3).
     pub log_records_dropped: u64,
@@ -270,6 +274,20 @@ impl Task {
                 };
                 self.route(effects);
             }
+            // The one inbound bound (§7.11): what the core still queues stays held; the
+            // rest was judged. The hand-off admitted only what the bound had left, so the
+            // core's own queue never fills.
+            inbox.settle(self.controller.queued());
+            let counters = self.controller.counters();
+            invariant!(
+                counters.clients_queue_full == 0 && counters.peers_queue_full == 0,
+                "RUNTIME-ONE-BOUND",
+                "node {}: the core's own queue refused {} client attempts and dropped {} peer \
+                 messages, though the hand-off admits only what the one bound has left",
+                self.node,
+                counters.clients_queue_full,
+                counters.peers_queue_full
+            );
             self.publish();
             if shutdown || closed {
                 break;
@@ -373,8 +391,9 @@ impl Node {
     ///
     /// # Errors
     ///
-    /// [`Busy`] when the hand-off holds its bound or the node is stopping: the attempt was
-    /// not submitted, and the caller answers it `busy` (§7.11).
+    /// [`Busy`] when the one inbound bound is full (the inputs waiting and those the
+    /// controller holds) or the node is stopping: the attempt was not submitted, and the
+    /// caller answers it `busy` (§7.11).
     pub fn client(&self, attempt: AttemptId, op: ClientOp) -> Result<(), Busy> {
         self.inbox
             .offer(Input::Client { attempt, op })

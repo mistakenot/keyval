@@ -1019,14 +1019,14 @@ status = "implemented"
 
 [[check]]
 id = "SERVER-RUNTIME"
-summary = "the production node's wiring (§7.12, §7.2, §7.10, §7.11, O-3, W18.2): one serial controller thread owns the core and is fed through one bounded hand-off: client attempts and peer messages up to controller_queue_inputs (1,024), past which a client attempt is refused busy (not submitted) and a peer message dropped, both counted, while every attempt handed over is still answered; I/O completions and shutdown bypass the bound (INBOX-UNREFUSABLE), and ticks merge into a count; storage effects run in order on an I/O thread whose completions return as inputs, so a write answered by the node survives a restart and is applied again from the journal; a ticker turns the monotonic clock into ticks, never more than elapsed, a pause coming back as one batch, and drives elections; entropy is seeded once at boot from the operating system, logged, and each draw moves its stream on; the node's log is one JSON object per line (boot with the seed, lifecycle changes, observations, stop), behind a log_queue_records (4,096) queue whose full drops are counted and reported in the log; and the node's essential threads (controller, I/O, clock, log writer, HTTP accept) run under a watch: a panic on any of them halts the node, which then reads failed, takes no more input, logs thread_panicked, and stops (CD-7, A-2, br-7tjt)"
+summary = "the production node's wiring (§7.12, §7.2, §7.10, §7.11, O-3, W18.2): one serial controller thread owns the core and is fed through one bounded hand-off: client attempts and peer messages up to controller_queue_inputs (1,024), past which a client attempt is refused busy (not submitted) and a peer message dropped, both counted, while every attempt handed over is still answered; I/O completions and shutdown bypass the bound (INBOX-UNREFUSABLE), and ticks merge into a count; storage effects run in order on an I/O thread whose completions return as inputs, so a write answered by the node survives a restart and is applied again from the journal; a ticker turns the monotonic clock into ticks, never more than elapsed, a pause coming back as one batch, and drives elections; entropy is seeded once at boot from the operating system, logged, and each draw moves its stream on; the node's log is one JSON object per line (boot with the seed, lifecycle changes, observations, stop), behind a log_queue_records (4,096) queue whose full drops are counted and reported in the log; and the node's essential threads (controller, I/O, clock, log writer, HTTP accept) run under a watch: a panic on any of them halts the node, which then reads failed, takes no more input, logs thread_panicked, and stops (CD-7, A-2, br-7tjt); the bound counts the inputs the controller holds, taken and not yet judged or queued in the core, so it applies once and refusals are counted once (RUNTIME-ONE-BOUND, br-rl0u)"
 kind = "test_group"
 covers = ["O-3", "DUR-3", "CD-9"]
 api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SERVER-RUNTIME"
-min_cases = 19
+min_cases = 22
 status = "implemented"
 
 [[check]]
@@ -1086,7 +1086,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SERVER-RESTART"
-min_cases = 3
+min_cases = 4
 status = "implemented"
 
 [[check]]

@@ -2,10 +2,14 @@
 //! controller task from the adapters' threads.
 //!
 //! It has three lanes, each bounded:
-//! - **inputs**, client attempts and peer messages: at most `controller_queue_inputs`
-//!   (1,024). Past that an offer is refused, and the adapter answers a client attempt
-//!   `busy` (not submitted) or drops and counts a peer message, as the core's own queue
-//!   does (§7.11);
+//! - **inputs**, client attempts and peer messages, under the node's **one** inbound bound,
+//!   `controller_queue_inputs` (1,024, §7.11): the inputs waiting here plus those the
+//!   controller **holds** (taken and not yet judged, or still queued in the core, such as
+//!   peer messages waiting for an outstanding sync) never exceed it. Past it an offer is
+//!   refused, and the adapter answers a client attempt `busy` (not submitted) or drops and
+//!   counts a peer message, as §7.11 says. The controller settles what it holds after each
+//!   batch ([`Inbox::settle`]), so the core's own queue of the same bound never fills and
+//!   never refuses: the bound is applied once, and refusals are counted once (br-rl0u);
 //! - **unrefusable** inputs: I/O completions and the shutdown signal. They are never
 //!   refused, so a waiting Ready always resolves (§7.12). They are bounded by construction:
 //!   at most one sync is outstanding per node (§7.11), so at most one Ready's storage
@@ -50,9 +54,14 @@ pub enum Refused {
 }
 
 /// The pending inputs.
+///
+/// Invariant: `inputs.len() + held` never exceeds the inbox's `max_inputs`.
 #[derive(Debug, Default)]
 struct Lanes {
     inputs: VecDeque<Input>,
+    /// Client attempts and peer messages the controller took and has not settled: being
+    /// judged, or still queued in the core.
+    held: usize,
     unrefusable: VecDeque<Input>,
     ticks: u64,
     closed: bool,
@@ -63,15 +72,17 @@ struct Lanes {
 pub struct Inbox {
     lanes: Mutex<Lanes>,
     wake: Condvar,
-    /// The inputs lane's bound: `controller_queue_inputs`.
+    /// The one inbound bound, `controller_queue_inputs`: over the inputs waiting here and
+    /// those the controller holds.
     max_inputs: usize,
     /// The unrefusable lane's bound, by construction.
     max_unrefusable: usize,
 }
 
 impl Inbox {
-    /// A hand-off holding at most `max_inputs` client attempts and peer messages, and at
-    /// most `max_unrefusable` completions (by construction, asserted).
+    /// A hand-off under one bound of `max_inputs` client attempts and peer messages,
+    /// counting those its controller holds, and at most `max_unrefusable` completions (by
+    /// construction, asserted).
     #[must_use]
     pub fn new(max_inputs: usize, max_unrefusable: usize) -> Self {
         Self {
@@ -90,18 +101,31 @@ impl Inbox {
     ///
     /// # Errors
     ///
-    /// The input back, with [`Refused::Full`] when the lane holds its bound or
-    /// [`Refused::Closed`] once the node is stopping.
+    /// The input back, with [`Refused::Full`] when the inputs waiting here and those the
+    /// controller holds reach the one bound, or [`Refused::Closed`] once the node is
+    /// stopping.
+    ///
+    /// # Panics
+    ///
+    /// `INBOX-ONE-BOUND` if accepting it left more than the bound held.
     pub fn offer(&self, input: Input) -> Result<(), (Refused, Input)> {
         let mut lanes = self.lanes();
         if lanes.closed {
             return Err((Refused::Closed, input));
         }
-        if lanes.inputs.len() >= self.max_inputs {
+        if lanes.inputs.len() + lanes.held >= self.max_inputs {
             return Err((Refused::Full, input));
         }
         lanes.inputs.push_back(input);
+        let total = lanes.inputs.len() + lanes.held;
         drop(lanes);
+        invariant!(
+            total <= self.max_inputs,
+            "INBOX-ONE-BOUND",
+            "{total} client attempts and peer messages are waiting or held, more than the one \
+             inbound bound of {}",
+            self.max_inputs
+        );
         self.wake.notify_one();
         Ok(())
     }
@@ -157,7 +181,35 @@ impl Inbox {
         self.lanes().inputs.len()
     }
 
+    /// The client attempts and peer messages the controller holds: taken and not settled.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.lanes().held
+    }
+
+    /// The controller has judged everything it took: of the inputs it held, `queued` are
+    /// still queued in the core ([`node::Controller::queued`]) and stay held; the rest were
+    /// answered, dropped or handled, and leave the bound.
+    ///
+    /// # Panics
+    ///
+    /// `INBOX-ONE-BOUND` if the core queues more than the controller took and held: an
+    /// input reached the core around the bound.
+    pub fn settle(&self, queued: usize) {
+        let mut lanes = self.lanes();
+        let held = lanes.held;
+        lanes.held = queued;
+        drop(lanes);
+        invariant!(
+            queued <= held,
+            "INBOX-ONE-BOUND",
+            "the core queues {queued} client attempts and peer messages, more than the {held} \
+             the controller took from the hand-off"
+        );
+    }
+
     /// Waits until something is pending or the hand-off is closed, then takes everything.
+    /// The client attempts and peer messages taken are held until [`settle`](Self::settle).
     pub fn take(&self) -> Batch {
         let mut lanes = self.lanes();
         while lanes.inputs.is_empty()
@@ -170,10 +222,13 @@ impl Inbox {
                 .wait(lanes)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+        let inputs: Vec<Input> = lanes.inputs.drain(..).collect();
+        // Taken inputs stay under the bound until the controller settles them.
+        lanes.held += inputs.len();
         Batch {
             unrefusable: lanes.unrefusable.drain(..).collect(),
             ticks: std::mem::take(&mut lanes.ticks),
-            inputs: lanes.inputs.drain(..).collect(),
+            inputs,
             closed: lanes.closed,
         }
     }
@@ -236,6 +291,100 @@ mod tests {
              controller_queue_inputs and are refused past it; completions bypass the bound \
              and ticks merge into a count (§7.11, §7.12)"
         );
+    }
+
+    #[test]
+    fn what_the_controller_holds_counts_toward_the_one_bound() {
+        let inbox = Inbox::new(4, 2);
+        let first: Vec<bool> = (1..=4).map(|n| inbox.offer(client(n)).is_ok()).collect();
+        let batch = inbox.take();
+        // The controller is judging all four: the hand-off has no room.
+        let while_judging = inbox.offer(client(5)).map_err(|(why, _)| why);
+        // Three peer messages stay queued in the core behind an outstanding sync.
+        inbox.settle(3);
+        let behind_a_sync: Vec<bool> = (6..=7).map(|n| inbox.offer(client(n)).is_ok()).collect();
+        let held = (inbox.held(), inbox.waiting());
+        // The sync completes and the core takes them: the bound frees up.
+        inbox.take();
+        inbox.settle(0);
+        let freed: Vec<bool> = (8..=12).map(|n| inbox.offer(client(n)).is_ok()).collect();
+        assert_eq!(
+            (
+                first,
+                batch.inputs.len(),
+                while_judging,
+                behind_a_sync,
+                held,
+                freed
+            ),
+            (
+                vec![true; 4],
+                4,
+                Err(Refused::Full),
+                vec![true, false],
+                (3, 1),
+                vec![true, true, true, true, false]
+            ),
+            "rule: client attempts and peer messages pass one bound end to end: the inputs \
+             waiting in the hand-off plus those the controller holds, being judged or queued \
+             in the core behind an outstanding sync, never exceed controller_queue_inputs \
+             (§7.11, §7.12, br-rl0u)"
+        );
+    }
+
+    #[test]
+    fn concurrent_offers_never_hold_more_than_the_one_bound() {
+        const BOUND: usize = 16;
+        let inbox = Arc::new(Inbox::new(BOUND, 2));
+        let offerers: Vec<_> = (0..4)
+            .map(|_| {
+                let inbox = Arc::clone(&inbox);
+                thread::spawn(move || {
+                    (0..500)
+                        .filter(|n| inbox.offer(client(u8::try_from(n % 251).unwrap())).is_ok())
+                        .count()
+                })
+            })
+            .collect();
+        // A controller that keeps a varying share queued, as peers behind a sync would be.
+        let mut taken = 0;
+        let mut queued = 0;
+        let mut worst = 0;
+        for round in 0..2_000 {
+            // A tick keeps the take from waiting once the offerers are done.
+            inbox.tick(1);
+            let batch = inbox.take();
+            taken += batch.inputs.len();
+            let holding = queued + batch.inputs.len();
+            worst = worst.max(holding + inbox.waiting());
+            queued = holding.min(round % 7);
+            inbox.settle(queued);
+            if offerers.iter().all(thread::JoinHandle::is_finished) && inbox.waiting() == 0 {
+                break;
+            }
+        }
+        let accepted: usize = offerers
+            .into_iter()
+            .map(|offerer| offerer.join().unwrap())
+            .sum();
+        inbox.tick(1);
+        taken += inbox.take().inputs.len();
+        assert_eq!(
+            (worst <= BOUND, accepted, accepted < 2_000),
+            (true, taken, true),
+            "rule: under concurrent offers the inputs waiting plus those the controller holds \
+             never exceed the one bound, and every accepted input is taken exactly once \
+             (§7.11, br-rl0u); worst {worst}, accepted {accepted}, taken {taken}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant INBOX-ONE-BOUND violated")]
+    fn a_core_queueing_more_than_it_took_breaks_the_invariant() {
+        let inbox = Inbox::new(4, 2);
+        inbox.offer(client(1)).unwrap();
+        inbox.take();
+        inbox.settle(2);
     }
 
     #[test]

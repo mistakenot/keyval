@@ -688,7 +688,8 @@ mod runtime_tests {
         let config = fast(&dir);
         init(&config, node(1), instance()).unwrap();
         let bound = config.limit(Limit::ControllerQueueInputs);
-        // The controller answers attempt 1, then blocks until released: the hand-off fills.
+        // The controller answers attempt 1, then blocks until released: it still holds that
+        // attempt, so the one inbound bound leaves the hand-off room for bound - 1 more.
         let (entered, blocked) = mpsc::channel::<()>();
         let (release, released) = mpsc::channel::<()>();
         let released = Mutex::new(released);
@@ -709,20 +710,33 @@ mod runtime_tests {
             .client(AttemptId::new(1), get(&config, "k"))
             .unwrap();
         blocked.recv_timeout(Duration::from_secs(10)).unwrap();
-        let accepted = (2..2 + bound)
+        let accepted = (2..=bound)
             .filter(|n| {
                 running
                     .client(AttemptId::new(*n), get(&config, "k"))
                     .is_ok()
             })
             .count();
-        let refused = running.client(AttemptId::new(2 + bound), get(&config, "k"));
+        let refused = running.client(AttemptId::new(1 + bound), get(&config, "k"));
         let peer = running.peer(NodeId::new(2).unwrap(), vec![0; 8]);
         release.send(()).unwrap();
-        let last = answer(&answers, 1 + bound);
+        let last = answer(&answers, bound);
         let counted = wait_for(&running, "the counts are published", |s| {
             s.clients_refused == 1 && s.peers_dropped == 1
         });
+        // Once the controller has judged what it held, the bound frees: a client retrying
+        // busy gets in again and is answered.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let freed = loop {
+            match running.client(AttemptId::new(2 + bound), get(&config, "k")) {
+                Ok(()) => break true,
+                Err(Busy) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(Busy) => break false,
+            }
+        };
+        let answered = freed && matches!(answer(&answers, 2 + bound), Response::NotFound { .. });
         running.shutdown().unwrap();
         assert_eq!(
             (
@@ -730,19 +744,23 @@ mod runtime_tests {
                 refused,
                 peer,
                 matches!(last, Response::NotFound { .. }),
-                (counted.clients_refused, counted.peers_dropped)
+                (counted.clients_refused, counted.peers_dropped),
+                answered
             ),
             (
-                usize::try_from(bound).unwrap(),
+                usize::try_from(bound - 1).unwrap(),
                 Err(Busy),
                 false,
                 true,
-                (1, 1)
+                (1, 1),
+                true
             ),
-            "rule: while the controller is busy the hand-off takes controller_queue_inputs \
-             ({bound}) client attempts and peer messages; past that a client attempt is \
-             refused busy (not submitted) and a peer message dropped, both counted, and every \
-             attempt handed over is still answered (§7.11, §7.12)"
+            "rule: client attempts and peer messages pass one inbound bound of \
+             controller_queue_inputs ({bound}) end to end, counting the attempt the busy \
+             controller holds, so the hand-off takes {bound} - 1 more (br-rl0u); past that a \
+             client attempt is refused busy (not submitted) and a peer message dropped, both \
+             counted once, and every attempt handed over is still answered; once the \
+             controller has judged what it held, the bound frees again (§7.11, §7.12)"
         );
     }
 }

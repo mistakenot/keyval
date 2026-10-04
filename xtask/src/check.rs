@@ -1719,7 +1719,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                   reported in the log; and the node's essential threads (controller, I/O, clock, \
                   log writer, HTTP accept) run under a watch: a panic on any of them halts the \
                   node, which then reads failed, takes no more input, logs thread_panicked, and \
-                  stops (CD-7, A-2, br-7tjt)",
+                  stops (CD-7, A-2, br-7tjt); \
+                  the bound counts the inputs the controller holds, taken and \
+                  not yet judged or queued in the core, so it applies once and \
+                  refusals are counted once (RUNTIME-ONE-BOUND, br-rl0u)",
         kind: Kind::TestGroup,
         covers: &["O-3", "DUR-3", "CD-9"],
         class: ClaimClass::Invariant,
@@ -1735,7 +1738,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "watch::tests::",
             ],
         },
-        min_cases: 19,
+        min_cases: 22,
     },
     CheckDef {
         id: "SIM-CLUSTER",
@@ -1873,7 +1876,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "server",
             filters: &["restart_tests::"],
         },
-        min_cases: 3,
+        min_cases: 4,
     },
     CheckDef {
         id: "HISTORY-ADMISSION",
