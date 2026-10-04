@@ -70,6 +70,8 @@ mod lifecycle_tests;
 mod queue;
 #[cfg(test)]
 mod queue_tests;
+#[cfg(test)]
+mod race_tests;
 mod reads;
 mod requests;
 #[cfg(test)]

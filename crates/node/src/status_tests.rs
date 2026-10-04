@@ -14,12 +14,14 @@
 use statemachine::Record;
 use types::{
     AttemptId, ClientOp, Decision, Effect, EntryIndex, ExpectedVersion, Input, LiveStateLimit,
-    LogIndex, Mutation, NodeId, NotReadyLifecycle, Refusal, RequestState, Response, Role, ServedBy,
-    StorageOp, TerminalResult, Version,
+    LogIndex, Mutation, NotReadyLifecycle, Refusal, RequestState, Response, ServedBy, StorageOp,
+    TerminalResult, Version,
 };
 
 use crate::RequestLifecycle;
-use crate::test_support::{INCARNATION, Member, config, key, put, request, value};
+use crate::test_support::{
+    Cluster, INCARNATION, Member, answered, config, key, put, request, value,
+};
 
 /// A lone voter that leads, with the real request lifecycle.
 fn leader() -> Member<RequestLifecycle> {
@@ -135,96 +137,6 @@ fn version_at(index: EntryIndex) -> Version {
     Version::at(index.index()).unwrap()
 }
 
-/// The voters of a config, with the real request lifecycle, exchanging messages in rounds.
-/// A node in `cut` neither sends nor receives.
-struct Cluster {
-    members: Vec<Member<RequestLifecycle>>,
-    cut: Vec<NodeId>,
-}
-
-impl Cluster {
-    /// The cluster of the config called `name`, run until it has a leader.
-    fn elected(name: &str) -> Self {
-        let config = config(name);
-        let mut cluster = Self {
-            members: config
-                .voters()
-                .map(|id| Member::fresh_lifecycle(&config, id))
-                .collect(),
-            cut: Vec::new(),
-        };
-        let mut rounds = 0;
-        while cluster.leader().is_none() {
-            assert!(rounds < 300, "fixture: a leader within 300 rounds");
-            cluster.round();
-            rounds += 1;
-        }
-        cluster
-    }
-
-    fn leader(&self) -> Option<usize> {
-        self.members
-            .iter()
-            .position(|member| member.ctl.status().role == Role::Leader)
-    }
-
-    /// One round: every node ticks and completes its syncs, then every message is delivered,
-    /// except to or from a cut node.
-    fn round(&mut self) {
-        for member in &mut self.members {
-            member.step(Input::Tick);
-            while member.complete_sync() {}
-        }
-        for from in 0..self.members.len() {
-            let outbox: Vec<(NodeId, Vec<u8>)> = self.members[from].outbox.drain(..).collect();
-            let sender = self.members[from].id;
-            if self.cut.contains(&sender) {
-                continue;
-            }
-            for (to, bytes) in outbox {
-                if self.cut.contains(&to) {
-                    continue;
-                }
-                if let Some(target) = self.members.iter_mut().find(|member| member.id == to) {
-                    target.step(Input::Peer {
-                        from: sender,
-                        bytes,
-                    });
-                    while target.complete_sync() {}
-                }
-            }
-        }
-    }
-
-    /// Runs rounds until every node not cut has applied request `n`.
-    fn settle(&mut self, n: u8) {
-        let mut rounds = 0;
-        while self
-            .members
-            .iter()
-            .any(|member| !self.cut.contains(&member.id) && first_index(member, n).is_none())
-        {
-            assert!(
-                rounds < 300,
-                "fixture: request {n} applies everywhere within 300 rounds"
-            );
-            self.round();
-            rounds += 1;
-        }
-    }
-
-    /// Writes `op` (request `n`) as attempt `attempt` through the leader, and runs rounds
-    /// until every node not cut has applied it.
-    fn write(&mut self, attempt: u64, n: u8, op: ClientOp) {
-        let leader = self.leader().expect("fixture: a leader");
-        self.members[leader].step(Input::Client {
-            attempt: AttemptId::new(attempt),
-            op,
-        });
-        self.settle(n);
-    }
-}
-
 #[test]
 fn every_stored_decision_is_answered_known_with_its_original_result() {
     let mut member = leader();
@@ -282,7 +194,7 @@ fn a_capacity_refusal_is_answered_known_on_every_node_like_a_success() {
     // capacity_exceeded; every node that applied it reports it as known (§8.3).
     let mut cluster = Cluster::elected("small-limits");
     for n in 1..=9_u8 {
-        cluster.write(u64::from(n), n, put(n, &format!("k{n}"), "v"));
+        cluster.write(u64::from(n), request(n), put(n, &format!("k{n}"), "v"));
     }
     let leader = cluster.leader().expect("fixture: a leader");
     let refused = first_index(&cluster.members[leader], 9).expect("fixture: request 9 applied");
@@ -341,16 +253,17 @@ fn a_lagging_follower_answers_unknown_for_a_committed_request_until_it_applies_i
     let lagging = (0..cluster.members.len())
         .find(|index| *index != leader)
         .unwrap();
-    cluster.cut.push(cluster.members[lagging].id);
-    cluster.write(1, 7, put(7, "k", "v"));
+    let lagging_id = cluster.members[lagging].id;
+    cluster.isolate(lagging_id);
+    cluster.write(1, request(7), put(7, "k", "v"));
     let leader = cluster
         .leader()
         .expect("fixture: the leader keeps its majority");
     let original = first_index(&cluster.members[leader], 7).expect("fixture: committed");
     let behind = served(&cluster.members[lagging]);
     let while_behind = ask(&mut cluster.members[lagging], 2, status(7));
-    cluster.cut.clear();
-    cluster.settle(7);
+    cluster.heal();
+    cluster.settle(request(7));
     let caught_up = served(&cluster.members[lagging]);
     let after = ask(&mut cluster.members[lagging], 3, status(7));
     assert_eq!(
@@ -377,11 +290,7 @@ fn a_status_lookup_never_proposes_and_records_nothing() {
     step(&mut member, 2, put(9, "k", "v"));
     while member.complete_sync() {}
     let index = first_index(&member, 9).expect("fixture: request 9 applied");
-    let written = member
-        .effects
-        .iter()
-        .rev()
-        .find_map(|effect| response_to(std::slice::from_ref(effect), 2));
+    let written = answered(&member, 2);
     assert_eq!(
         (effects, unchanged, written),
         (

@@ -1,10 +1,11 @@
 //! Test support for the controller: an in-memory journal, seeded entropy, the committed
-//! fixture configs, a recording [`Requests`] double and a member harness that executes
-//! effects. Test-only (rule 17).
+//! fixture configs, a recording [`Requests`] double, a member harness that executes effects,
+//! and a cluster of members exchanging messages over links a test can cut (W29). Test-only
+//! (rule 17).
 #![cfg(test)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -599,5 +600,184 @@ impl Requests for Writes {
 
     fn shutdown(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>) {
         self.path.shutdown(view, effects);
+    }
+}
+
+/// The answer `member` gave client attempt `attempt`, if it has answered.
+pub fn answered<Q: Requests>(member: &Member<Q>, attempt: u64) -> Option<Response> {
+    member.effects.iter().find_map(|effect| match effect {
+        Effect::Respond {
+            attempt: to,
+            response,
+        } if to.get() == attempt => Some(response.clone()),
+        Effect::Respond { .. }
+        | Effect::Append { .. }
+        | Effect::Truncate { .. }
+        | Effect::Sync { .. }
+        | Effect::CreateJournal
+        | Effect::SyncDir { .. }
+        | Effect::Send { .. }
+        | Effect::Log(_)
+        | Effect::Observe(_) => None,
+    })
+}
+
+/// The voters of a config, each with the node's real request lifecycle, exchanging messages
+/// in rounds (W29). A test partitions it by cutting directed links: a message on a cut link
+/// is dropped.
+pub struct Cluster {
+    pub members: Vec<Member<RequestLifecycle>>,
+    /// Directed links `(from, to)` that drop every message.
+    pub cut: BTreeSet<(NodeId, NodeId)>,
+}
+
+impl Cluster {
+    /// The cluster of the config called `name`, run until it has a leader whose log every
+    /// node has applied, so a test starts from a quiet cluster.
+    pub fn elected(name: &str) -> Self {
+        let config = config(name);
+        let mut cluster = Self {
+            members: config
+                .voters()
+                .map(|id| Member::fresh_lifecycle(&config, id))
+                .collect(),
+            cut: BTreeSet::new(),
+        };
+        cluster.until(300, "a leader whose log every node applied", |cluster| {
+            cluster.leader().is_some_and(|leader| {
+                let last = cluster.members[leader].ctl.status().last;
+                cluster
+                    .members
+                    .iter()
+                    .all(|member| member.ctl.state().applied_index() >= last)
+            })
+        });
+        cluster
+    }
+
+    /// The member that leads, if any (the first, if a deposed leader has not noticed yet).
+    pub fn leader(&self) -> Option<usize> {
+        self.members
+            .iter()
+            .position(|member| member.ctl.status().role == types::Role::Leader)
+    }
+
+    /// The member that leads, other than `old`, if any.
+    pub fn leader_other_than(&self, old: usize) -> Option<usize> {
+        (0..self.members.len())
+            .find(|at| *at != old && self.members[*at].ctl.status().role == types::Role::Leader)
+    }
+
+    /// The member that is node `id`.
+    pub fn at(&self, id: NodeId) -> usize {
+        self.members
+            .iter()
+            .position(|member| member.id == id)
+            .unwrap()
+    }
+
+    fn ids(&self) -> Vec<NodeId> {
+        self.members.iter().map(|member| member.id).collect()
+    }
+
+    /// Cuts every link to and from node `id`.
+    pub fn isolate(&mut self, id: NodeId) {
+        for other in self.ids() {
+            if other != id {
+                self.cut.insert((id, other));
+                self.cut.insert((other, id));
+            }
+        }
+    }
+
+    /// Cuts every link into node `id`: it still sends, and hears nothing.
+    pub fn deafen(&mut self, id: NodeId) {
+        for other in self.ids() {
+            if other != id {
+                self.cut.insert((other, id));
+            }
+        }
+    }
+
+    /// Restores every link.
+    pub fn heal(&mut self) {
+        self.cut.clear();
+    }
+
+    /// Whether node `id` still exchanges messages both ways with some other node.
+    pub fn connected(&self, id: NodeId) -> bool {
+        self.ids().into_iter().any(|other| {
+            other != id && !self.cut.contains(&(id, other)) && !self.cut.contains(&(other, id))
+        })
+    }
+
+    /// One round: every node ticks and completes its syncs, then every message is delivered
+    /// in send order, except on a cut link.
+    pub fn round(&mut self) {
+        for member in &mut self.members {
+            member.step(Input::Tick);
+            while member.complete_sync() {}
+        }
+        for from in 0..self.members.len() {
+            let outbox: Vec<(NodeId, Vec<u8>)> = self.members[from].outbox.drain(..).collect();
+            let sender = self.members[from].id;
+            for (to, bytes) in outbox {
+                if self.cut.contains(&(sender, to)) {
+                    continue;
+                }
+                if let Some(target) = self.members.iter_mut().find(|member| member.id == to) {
+                    target.step(Input::Peer {
+                        from: sender,
+                        bytes,
+                    });
+                    while target.complete_sync() {}
+                }
+            }
+        }
+    }
+
+    /// Runs rounds until `done` holds, at most `limit` of them.
+    pub fn until(&mut self, limit: u32, what: &str, done: impl Fn(&Self) -> bool) {
+        let mut rounds = 0;
+        while !done(self) {
+            assert!(rounds < limit, "fixture: {what} within {limit} rounds");
+            self.round();
+            rounds += 1;
+        }
+    }
+
+    /// Runs rounds until every connected node has applied `request_id`.
+    pub fn settle(&mut self, request_id: RequestId) {
+        self.until(
+            300,
+            "the request applied on every connected node",
+            |cluster| {
+                cluster.members.iter().all(|member| {
+                    !cluster.connected(member.id)
+                        || member.ctl.state().history().get(&request_id).is_some()
+                })
+            },
+        );
+    }
+
+    /// Hands client attempt `attempt`, carrying `op`, to member `at`.
+    pub fn send(&mut self, at: usize, attempt: u64, op: ClientOp) {
+        self.members[at].step(Input::Client {
+            attempt: AttemptId::new(attempt),
+            op,
+        });
+    }
+
+    /// Writes `op` (carrying `request_id`) as attempt `attempt` through the leader, and runs
+    /// rounds until every connected node has applied it.
+    pub fn write(&mut self, attempt: u64, request_id: RequestId, op: ClientOp) {
+        let leader = self.leader().expect("fixture: a leader");
+        self.send(leader, attempt, op);
+        self.settle(request_id);
+    }
+
+    /// The answer member `at` gave client attempt `attempt`, if it has answered.
+    pub fn answer(&self, at: usize, attempt: u64) -> Option<Response> {
+        answered(&self.members[at], attempt)
     }
 }

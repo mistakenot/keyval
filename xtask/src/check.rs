@@ -1819,6 +1819,31 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "REQUEST-ID-RACE",
+        summary: "the same-request-ID race (§7.8, §7.5 step 3, F-6, C-6, A-5, W29.2), across \
+                  nodes and leader changes through the real request lifecycle: two commands \
+                  under one request ID never both execute; on one leader the command admitted \
+                  first is the original in either order and the other is request_id_conflict \
+                  naming it; a command already in the new leader's log stays the original over \
+                  one proposed there later; a command lost with its leader yields to the one \
+                  proposed at the next, its submitted attempt answering unknown_outcome and a \
+                  waiter behind it a non-terminal refusal; a waiter behind a stalled proposal \
+                  times out busy and its submitted owner unknown_outcome, never a conflict \
+                  before the original is known; and a seeded sweep of two clients racing and \
+                  retrying through isolated leaders and redirects ends, every run, with exactly \
+                  one original and one conflict that every node agrees on, reaching both \
+                  winners, unknown outcomes and redirects at or above floors",
+        kind: Kind::TestGroup,
+        covers: &["F-6", "C-6", "A-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "node",
+            filters: &["race_tests::"],
+        },
+        min_cases: 5,
+    },
 ];
 
 /// Outcome of one requested check.

@@ -344,7 +344,7 @@ deps = ["W14", "W27"]
 reqs = ["F-6", "F-9", "F-10", "C-6", "A-5", "DM-7"]
 area = ["node/write_path", "node/lifecycle", "statemachine/history"]
 milestone = "m3"
-accept = ["./dev check REQUEST-STATUS"]
+accept = ["./dev check REQUEST-STATUS", "./dev check REQUEST-ID-RACE"]
 bead = "br-w29-request-status-retry-lifecycle-8yt"
 
 [[item]]
