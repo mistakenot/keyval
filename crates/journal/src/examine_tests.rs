@@ -309,9 +309,9 @@ fn a_clean_journal_reports_what_was_read() {
             Verdict::Clean,
             Binding::Verified,
             3,
-            LogIndex::new(3).unwrap(),
+            LogIndex::new(3).ok(),
             Term::new(1).ok(),
-            ByteCount::new(genesis_len() + F2 + F3),
+            Some(ByteCount::new(genesis_len() + F2 + F3)),
             ByteCount::new(genesis_len() + F2 + F3),
         ),
         "rule: the report counts the genesis and both batches, entries 1-3 in term 1"
@@ -337,7 +337,7 @@ fn a_clean_journal_reports_what_was_read() {
             replaced.last_index(),
             replaced.last_term()
         ),
-        (4, LogIndex::new(4).unwrap(), Term::new(2).ok()),
+        (4, LogIndex::new(4).ok(), Term::new(2).ok()),
         "rule: a logical truncation's replacement entries are what the log holds"
     );
 }
@@ -371,6 +371,17 @@ fn the_binding_is_verified_only_with_a_configuration() {
         (1, Some(node(1))),
         "rule: the refused genesis is still reported"
     );
+    assert_eq!(
+        (other.binding(), other.durable_len(), other.last_index()),
+        (Binding::Verified, None, None),
+        "rule: the genesis was checked; no logical log was built, so nothing reads as an \
+         empty log (br-ljgh)"
+    );
+    assert_eq!(
+        examined(&golden("empty"), true).binding(),
+        Binding::Unchecked,
+        "rule: without a genesis record nothing was verified, configuration or not (br-ljgh)"
+    );
     let mut damaged = golden("clean");
     damaged.truncate(usize::try_from(genesis_len()).unwrap());
     damaged[3] ^= 0x40;
@@ -395,13 +406,13 @@ fn the_binding_is_verified_only_with_a_configuration() {
 #[test]
 fn a_refusal_keeps_what_was_read_before_it() {
     for (name, frames, last) in [
-        ("empty", 0, 0),
-        ("incomplete-genesis", 0, 0),
-        ("bad-checksum-mid", 1, 0),
-        ("corrupt-header-then-valid", 2, 2),
-        ("sequence-gap", 2, 2),
-        ("truncation-below-commit", 3, 3),
-        ("commit-regression", 3, 3),
+        ("empty", 0, None),
+        ("incomplete-genesis", 0, None),
+        ("bad-checksum-mid", 1, Some(0)),
+        ("corrupt-header-then-valid", 2, Some(2)),
+        ("sequence-gap", 2, Some(2)),
+        ("truncation-below-commit", 3, Some(3)),
+        ("commit-regression", 3, Some(3)),
     ] {
         let examination = examined(&golden(name), true);
         assert!(
@@ -410,7 +421,10 @@ fn a_refusal_keeps_what_was_read_before_it() {
             examination.verdict()
         );
         assert_eq!(
-            (examination.frames(), examination.last_index().get()),
+            (
+                examination.frames(),
+                examination.last_index().map(LogIndex::get)
+            ),
             (frames, last),
             "rule: the report keeps the frames read before the refusal; golden={name}"
         );

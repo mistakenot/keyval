@@ -20,7 +20,7 @@ use journal::{
     Binding, Examination, LogBounds, RecoveryError, TailShape, TornTail, Verdict, examine,
 };
 use serde::Serialize;
-use types::{ByteCount, Config, NodeId, StorageError};
+use types::{ByteCount, Config, LogIndex, NodeId, StorageError};
 
 /// The JSON report's schema identifier (O-6); its JSON Schema is
 /// `schemas/cli/doctor.v1.schema.json`.
@@ -220,11 +220,12 @@ pub struct Report {
     pub binding: BindingState,
     /// The journal's length, if it was read.
     pub journal_len: Option<u64>,
-    /// Where the frames read end: the durable prefix, or where a refusal was found.
+    /// Where the frames read end: the durable prefix, or where a refusal was found. `None`
+    /// when no logical log was built, never 0 as if read (br-ljgh).
     pub durable_len: Option<u64>,
     /// The frames read and applied, the genesis included.
     pub frames: Option<u64>,
-    /// The last index of the logical log.
+    /// The last index of the logical log; `None` when no logical log was built.
     pub last_index: Option<u64>,
     /// The term of the last entry, if there is one.
     pub last_term: Option<u64>,
@@ -303,9 +304,9 @@ impl Report {
     /// The report filled in from `examination`.
     fn examined(mut self, examination: &Examination) -> Self {
         self.journal_len = Some(examination.journal_len().get());
-        self.durable_len = Some(examination.durable_len().get());
+        self.durable_len = examination.durable_len().map(ByteCount::get);
         self.frames = Some(examination.frames());
-        self.last_index = Some(examination.last_index().get());
+        self.last_index = examination.last_index().map(LogIndex::get);
         self.last_term = examination.last_term().map(types::Term::get);
         self.hard_state = examination.hard_state().map(|state| HardStateReport {
             term: state.term.get(),
@@ -319,10 +320,10 @@ impl Report {
             voters: genesis.voters().iter().map(|voter| voter.get()).collect(),
             fingerprint: genesis.fingerprint().to_string(),
         });
-        // Recovery checks the binding as soon as it has decoded the genesis record, and
-        // refuses on a mismatch; a genesis record past any other point has matched.
+        // The examination reports a binding verified only once a genesis record was read
+        // and checked; recovery refuses a mismatch, so any other verdict matched.
         let bound = match examination.binding() {
-            Binding::Verified => examination.genesis().is_some(),
+            Binding::Verified => true,
             Binding::Unchecked => false,
         };
         let refusal = match examination.verdict() {
@@ -376,17 +377,19 @@ impl Report {
             };
             let _ = writeln!(out, "  lock: {lock}");
         }
-        if let (Some(len), Some(durable), Some(frames)) =
-            (self.journal_len, self.durable_len, self.frames)
-        {
-            let _ = writeln!(
-                out,
-                "  journal: {len} bytes; {frames} frames read through byte {durable}; last index \
-                 {}{}",
-                self.last_index.unwrap_or_default(),
-                self.last_term
-                    .map_or_else(String::new, |term| format!(" (term {term})"))
-            );
+        if let (Some(len), Some(frames)) = (self.journal_len, self.frames) {
+            // What was never read is left out, never shown as 0 (br-ljgh).
+            let mut line = format!("  journal: {len} bytes; {frames} frames read");
+            if let Some(durable) = self.durable_len {
+                let _ = write!(line, " through byte {durable}");
+            }
+            if let Some(last) = self.last_index {
+                let _ = write!(line, "; last index {last}");
+                if let Some(term) = self.last_term {
+                    let _ = write!(line, " (term {term})");
+                }
+            }
+            let _ = writeln!(out, "{line}");
         }
         if let Some(state) = &self.hard_state {
             let vote = state

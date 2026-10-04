@@ -12,9 +12,12 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fs_storage::{DataDirCreated, FsStorage, create_data_dir};
-use journal::{FrameKind, Genesis, encode};
-use serde_json::Value;
-use types::{Config, DataDir, InstanceId, NodeId};
+use journal::{FrameKind, Genesis, LogBounds, TailShape, Verdict, encode, examine};
+use serde_json::{Value, json};
+use types::{
+    ByteCount, Config, DataDir, InstanceId, JournalRead, LogIndex, NodeId, ReadLen, StorageError,
+    Term,
+};
 
 /// The repository's local cluster config.
 const LOCAL: &str = include_str!("../../../config/local.toml");
@@ -221,6 +224,89 @@ macro_rules! every {
     }};
 }
 
+/// The logical log's bounds the CLI uses without a configuration (`doctor::UNCONFIGURED`).
+const UNCONFIGURED: LogBounds = LogBounds::new(ByteCount::new(8 << 20), ByteCount::new(u64::MAX));
+
+/// A journal held in memory, for examining the same bytes the CLI reads.
+struct Memory(Vec<u8>);
+
+impl JournalRead for Memory {
+    fn read_at(&self, offset: ByteCount, len: ReadLen) -> Result<Vec<u8>, StorageError> {
+        let start = usize::try_from(offset.get()).unwrap().min(self.0.len());
+        let end = (start + usize::try_from(len.get()).unwrap()).min(self.0.len());
+        if end - start < usize::try_from(len.get()).unwrap() {
+            return Err(StorageError::ShortRead {
+                wanted: len,
+                got: u32::try_from(end - start).unwrap(),
+            });
+        }
+        Ok(self.0[start..end].to_vec())
+    }
+}
+
+/// The report's numbers that `journal::examine` gives for `bytes`, as the report would
+/// write them (no configuration).
+fn examined_numbers(bytes: &[u8]) -> Value {
+    let len = ByteCount::new(u64::try_from(bytes.len()).unwrap());
+    let examination = examine(&Memory(bytes.to_vec()), len, None, UNCONFIGURED);
+    let tail = match examination.verdict() {
+        Verdict::DiscardTail(tail) => Some(*tail),
+        Verdict::Clean | Verdict::Refuse(_) => None,
+    };
+    json!({
+        "journal_len": examination.journal_len().get(),
+        "durable_len": examination.durable_len().map(ByteCount::get),
+        "frames": examination.frames(),
+        "last_index": examination.last_index().map(LogIndex::get),
+        "last_term": examination.last_term().map(Term::get),
+        "hard_state": examination.hard_state().map(|state| json!({
+            "term": state.term.get(),
+            "vote": state.vote.map(NodeId::get),
+            "commit": state.commit.get(),
+        })),
+        "tail": tail.map(|tail| {
+            let (frame_len, sequence) = match tail.shape() {
+                TailShape::Incomplete { frame_len } => (Some(frame_len), None),
+                TailShape::Stale { sequence } => (None, Some(sequence)),
+                TailShape::ChecksumFailed | TailShape::Unreadable => (None, None),
+            };
+            json!({
+                "start": tail.start().get(),
+                "len": tail.len().get(),
+                "frame_len": frame_len,
+                "sequence": sequence,
+            })
+        }),
+    })
+}
+
+/// The same numbers from `report` (the tail without its shape, which the verdict tests own).
+fn reported_numbers(report: &Value) -> Value {
+    let tail = &report["tail"];
+    json!({
+        "journal_len": report["journal_len"],
+        "durable_len": report["durable_len"],
+        "frames": report["frames"],
+        "last_index": report["last_index"],
+        "last_term": report["last_term"],
+        "hard_state": report["hard_state"],
+        "tail": if tail.is_null() { Value::Null } else { json!({
+            "start": tail["start"],
+            "len": tail["len"],
+            "frame_len": tail["frame_len"],
+            "sequence": tail["sequence"],
+        }) },
+    })
+}
+
+/// The golden named `name`.
+fn golden_named(name: &str) -> Golden {
+    goldens()
+        .into_iter()
+        .find(|golden| golden.name == name)
+        .unwrap()
+}
+
 /// A golden's journal bytes: whole, or its body after node 1's genesis.
 fn journal_of(golden: &Golden) -> Vec<u8> {
     if golden.whole {
@@ -413,6 +499,129 @@ mod doctor_cli {
             output.status.code(),
             Some(2),
             "rule: an unreadable --config is a usage error"
+        );
+    }
+
+    #[test]
+    fn the_report_gives_the_numbers_recovery_read() {
+        for golden in goldens() {
+            let bytes = journal_of(&golden);
+            let (report, _) = doctor_json(&data_dir(golden.name, &bytes), &[]);
+            assert_eq!(
+                reported_numbers(&report),
+                examined_numbers(&bytes),
+                "rule: the report gives exactly the numbers recovery read (O-7); golden={}",
+                golden.name
+            );
+        }
+        // Pinned from the goldens' README (F2 113 bytes, F3 87, F4 114) and the 147-byte
+        // genesis of node 1 under config/local.toml.
+        let genesis = u64::try_from(genesis_frame().len()).unwrap();
+        assert_eq!(genesis, 147, "fixture: the genesis frame the pins assume");
+        let torn = journal_of(&golden_named("torn-mid-payload"));
+        let (report, _) = doctor_json(&data_dir("numbers-torn", &torn), &[]);
+        assert_eq!(
+            (
+                &report["tail"],
+                &report["durable_len"],
+                &report["journal_len"]
+            ),
+            (
+                &json!({"start": 347, "len": 44, "shape": "incomplete", "frame_len": 114, "sequence": null}),
+                &json!(347),
+                &json!(391)
+            ),
+            "rule: the tail is the 44 bytes of F4 after the durable 347 (O-7); report={report}"
+        );
+        let clean = journal_of(&golden_named("clean"));
+        let (report, _) = doctor_json(&data_dir("numbers-clean", &clean), &[]);
+        assert_eq!(
+            (
+                &report["frames"],
+                &report["last_index"],
+                &report["last_term"],
+                &report["hard_state"]
+            ),
+            (
+                &json!(3),
+                &json!(3),
+                &json!(1),
+                &json!({"term": 1, "vote": 1, "commit": 2})
+            ),
+            "rule: clean.bin holds the genesis, F2 and F3: entries 1-3 in term 1, hard state \
+             term 1, vote 1, commit 2; report={report}"
+        );
+        let mut stale = clean;
+        stale.extend_from_slice(&golden_named("clean").bytes[..113]);
+        let (report, _) = doctor_json(&data_dir("numbers-stale", &stale), &[]);
+        assert_eq!(
+            &report["tail"],
+            &json!({"start": 347, "len": 113, "shape": "stale", "frame_len": null, "sequence": 2}),
+            "rule: a stale copy of F2 after clean.bin is reported with its sequence; \
+             report={report}"
+        );
+        let corrupt = journal_of(&golden_named("bad-checksum-mid"));
+        let (report, _) = doctor_json(&data_dir("numbers-refused", &corrupt), &[]);
+        assert_eq!(
+            (
+                &report["durable_len"],
+                &report["frames"],
+                &report["last_index"]
+            ),
+            (&json!(147), &json!(1), &json!(0)),
+            "rule: a refusal at F2 reports the genesis read before it; report={report}"
+        );
+    }
+
+    #[test]
+    fn fields_never_read_are_null_not_zero() {
+        let (empty, _) = doctor_json(&data_dir("unread-empty", &[]), &[]);
+        assert_eq!(
+            (
+                &empty["frames"],
+                &empty["durable_len"],
+                &empty["last_index"],
+                &empty["last_term"],
+                &empty["hard_state"]
+            ),
+            (
+                &json!(0),
+                &Value::Null,
+                &Value::Null,
+                &Value::Null,
+                &Value::Null
+            ),
+            "rule: with no genesis read, nothing reads as an empty log (br-ljgh); report={empty}"
+        );
+        let dir = data_dir("unread-mismatch", &genesis_frame());
+        let config = local_config_path();
+        let args = ["--config", config.to_str().unwrap(), "--node", "2"];
+        let (other, _) = doctor_json(&dir, &args);
+        assert_eq!(
+            (
+                &other["frames"],
+                &other["durable_len"],
+                &other["last_index"],
+                &other["binding"]
+            ),
+            (&json!(1), &Value::Null, &Value::Null, &json!("mismatch")),
+            "rule: a refused genesis was read, but no log was built, so nothing reads as \
+             byte 0 or index 0 (br-ljgh); report={other}"
+        );
+        let output = keyval(&[
+            "doctor",
+            dir.to_str().unwrap(),
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+        ]);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("1 frames read")
+                && !text.contains("through byte")
+                && !text.contains("last index"),
+            "rule: the text leaves out what was never read, never 0; output={text}"
         );
     }
 

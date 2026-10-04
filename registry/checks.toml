@@ -738,7 +738,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check DOCTOR-CLI"
-min_cases = 9
+min_cases = 11
 status = "implemented"
 
 [[check]]

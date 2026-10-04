@@ -25,9 +25,10 @@ use crate::recovery::{RecoveryError, TornTail, scan};
 /// Whether the genesis was verified against a configuration (DUR-8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Binding {
-    /// Verified against the given configuration and node.
+    /// A genesis record was read and checked against the given configuration and node. A
+    /// mismatch is refused ([`RecoveryError::Mismatch`]), so any other verdict matched.
     Verified,
-    /// Not checked: no configuration was given.
+    /// Not checked: no configuration was given, or no genesis record was read (br-ljgh).
     Unchecked,
 }
 
@@ -97,18 +98,18 @@ impl Examination {
     }
 
     /// Where the frames read end: the durable prefix, or where the refusal was found.
+    /// `None` when no logical log was built (no genesis read, or the genesis refused), so
+    /// nothing reads as an empty log (br-ljgh).
     #[must_use]
-    pub fn durable_len(&self) -> ByteCount {
-        ByteCount::new(self.log.as_ref().map_or(0, LogicalLog::end))
+    pub fn durable_len(&self) -> Option<ByteCount> {
+        self.log.as_ref().map(|log| ByteCount::new(log.end()))
     }
 
-    /// The last index of the logical log (0 when it holds no entry, or no genesis was
-    /// read).
+    /// The last index of the logical log (0 when it holds no entry). `None` when no
+    /// logical log was built (br-ljgh).
     #[must_use]
-    pub fn last_index(&self) -> LogIndex {
-        self.log
-            .as_ref()
-            .map_or(LogIndex::ZERO, LogicalLog::last_index)
+    pub fn last_index(&self) -> Option<LogIndex> {
+        self.log.as_ref().map(LogicalLog::last_index)
     }
 
     /// The term of the last entry, if the log holds one.
@@ -140,22 +141,29 @@ pub fn examine(
     bounds: LogBounds,
 ) -> Examination {
     let journal_len = journal_len.get();
-    let checked = binding.map_or(Binding::Unchecked, |_| Binding::Verified);
+    // Recovery checks the binding as soon as it has decoded the genesis record.
+    let checked = |genesis: &Option<Genesis>| {
+        if binding.is_some() && genesis.is_some() {
+            Binding::Verified
+        } else {
+            Binding::Unchecked
+        }
+    };
     match scan(storage, journal_len, binding, bounds) {
         Ok(scanned) => Examination {
             journal_len,
+            binding: checked(&Some(scanned.genesis.clone())),
             genesis: Some(scanned.genesis),
             log: Some(scanned.log),
-            binding: checked,
             verdict: scanned.tail.map_or(Verdict::Clean, Verdict::DiscardTail),
         },
         Err(refusal) => {
             let refusal = *refusal;
             Examination {
                 journal_len,
+                binding: checked(&refusal.genesis),
                 genesis: refusal.genesis,
                 log: refusal.log,
-                binding: checked,
                 verdict: Verdict::Refuse(refusal.error),
             }
         }

@@ -1129,7 +1129,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "cli",
             filters: &["doctor_cli::"],
         },
-        min_cases: 9,
+        min_cases: 11,
     },
     CheckDef {
         id: "OBSERVATION-SCHEMA",
