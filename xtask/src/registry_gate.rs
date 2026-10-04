@@ -1,8 +1,10 @@
 //! The T0 registry gate (PLAN.md §10.13): check REGISTRY judges the verification registry
 //! (`registry/*.toml`) against the plan, the code, the API spec, the tests and the work
 //! graph. Every condition fails the check except 5 and 6, which are *reported* (listed,
-//! never failing) until W32 closes. Malformed metadata always fails, whatever a row's
-//! status: staging never exempts it.
+//! never failing) until W32 closes. W32's closure, judged exactly as the activation hook
+//! judges an item closed ([`registry::closed_items`]), is the single switch that makes them
+//! fail (§10.13, D-49). Malformed metadata always fails, whatever a row's status: staging
+//! never exempts it.
 //!
 //! 1. **Plan and registry.** `requirements.toml` lists PLAN.md §6's IDs and levels, in
 //!    order, and each status equals its derivation from the work graph and the tracker
@@ -15,10 +17,10 @@
 //!    matches at least one `#[test]`, and at least its `min_cases`, in its package's
 //!    sources (a short selection would fail its run, P10). Every catalogue check has a
 //!    row.
-//! 5. **Spec and code** (reported until W32). The spec's `ErrorCode` enum equals the
+//! 5. **Spec and code** (reported until W32 closes). The spec's `ErrorCode` enum equals the
 //!    domain `ErrorCode` codes, and every operation has a `// api: <operationId>` handler
 //!    marker under `crates/server/`.
-//! 6. **Spec and tests** (reported until W32). Every operation and error code is named by
+//! 6. **Spec and tests** (reported until W32 closes). Every operation and error code is named by
 //!    a `// api-test: <name>` marker under `conformance/`.
 //! 7. **Bug variants.** Every `bug_variant` row names, in `catches`, at least one catcher,
 //!    and each is an existing check of any kind but `bug_variant`: §10.6 designates
@@ -55,6 +57,9 @@ const CHECKS_SCHEMA: &str = "keyval.registry.checks/v1";
 const LEVELS: &[&str] = &["MUST", "SHOULD", "MAY"];
 const REQUIREMENT_STATUSES: &[&str] = &["planned", "active"];
 const REQUIREMENT_FAMILIES: &[&str] = &["DM", "F", "C", "A", "DUR", "O", "T"];
+/// The work item whose closure switches conditions 5 and 6 from reported to failing
+/// (§10.13, D-49).
+const ENFORCED_BY: &str = "W32";
 const KINDS: &[&str] = &[
     "test_group",
     "static",
@@ -164,7 +169,8 @@ pub struct Judgement {
     pub cases: usize,
     /// Failures, each naming its condition.
     pub violations: Vec<String>,
-    /// Findings of the report-mode conditions (5 and 6 until W32): listed, never failing.
+    /// Findings of the report-mode conditions (5 and 6 until W32 closes): listed, never
+    /// failing.
     pub reported: Vec<String>,
 }
 
@@ -218,14 +224,30 @@ pub fn judge(inputs: &Inputs<'_>) -> Result<Judgement, String> {
         .map_err(|err| format!("invalid {CHECKS}: {}", err.message()))?;
     let items = workgraph::parse(inputs.workgraph)?;
     let spec = Spec::parse(inputs.spec);
+    let listed: Vec<registry::Item> = items
+        .iter()
+        .map(|item| registry::Item {
+            id: item.id.clone(),
+            reqs: item.reqs.clone(),
+            accept: item.accept.clone(),
+            bead: item.bead.clone(),
+        })
+        .collect();
+    // The activation hook's own derivation, for both condition 1 and the 5/6 switch.
+    let closed = registry::closed_items(&listed, inputs.export);
+    let stage = if closed.contains(ENFORCED_BY) {
+        Stage::Enforced
+    } else {
+        Stage::Reported
+    };
     let mut verdict = Judgement::default();
     well_formed(&requirements, &checks, inputs.plan, &spec, &mut verdict);
-    plan_and_statuses(&requirements, &items, inputs, &mut verdict);
+    plan_and_statuses(&requirements, &listed, &closed, inputs.plan, &mut verdict);
     coverage(&requirements, &checks, &mut verdict);
     markers(&checks, inputs.sources, &mut verdict);
     execution(&checks, inputs, &mut verdict);
-    spec_and_code(&spec, inputs, &mut verdict);
-    spec_and_tests(&spec, inputs.sources, &mut verdict);
+    spec_and_code(&spec, inputs, stage, &mut verdict);
+    spec_and_tests(&spec, inputs.sources, stage, &mut verdict);
     bug_variants(&checks, &mut verdict);
     work_graph(&items, inputs, &mut verdict)?;
     Ok(verdict)
@@ -414,11 +436,12 @@ fn goals_and_principles(plan: &str) -> BTreeSet<String> {
 /// Condition 1: §6 rows, and statuses derived rather than typed.
 fn plan_and_statuses(
     requirements: &RequirementsFile,
-    items: &[workgraph::WorkItem],
-    inputs: &Inputs<'_>,
+    listed: &[registry::Item],
+    closed: &BTreeSet<String>,
+    plan_text: &str,
     verdict: &mut Judgement,
 ) {
-    let plan = registry::plan_requirements(inputs.plan);
+    let plan = registry::plan_requirements(plan_text);
     let rows: Vec<(String, String)> = requirements
         .requirement
         .iter()
@@ -442,18 +465,8 @@ fn plan_and_statuses(
             ours.difference(&theirs).collect::<Vec<_>>(),
         ));
     }
-    let listed: Vec<registry::Item> = items
-        .iter()
-        .map(|item| registry::Item {
-            id: item.id.clone(),
-            reqs: item.reqs.clone(),
-            accept: item.accept.clone(),
-            bead: item.bead.clone(),
-        })
-        .collect();
-    let closed = registry::closed_items(&listed, inputs.export);
     for r in &requirements.requirement {
-        let derived = registry::derived_status(&listed, &r.id, &closed);
+        let derived = registry::derived_status(listed, &r.id, closed);
         if REQUIREMENT_STATUSES.contains(&r.status.as_str()) && r.status != derived {
             verdict.violations.push(format!(
                 "condition 1: requirement {} is {} but its work items derive {derived}; a \
@@ -709,16 +722,42 @@ fn domain_codes(error_codes: &str) -> Vec<String> {
         .collect()
 }
 
-/// Condition 5, reported until W32: spec codes against domain codes, and an HTTP handler
-/// per operation.
-fn spec_and_code(spec: &Spec, inputs: &Inputs<'_>, verdict: &mut Judgement) {
+/// Whether conditions 5 and 6 fail yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// W32 is open: findings are listed, never failing.
+    Reported,
+    /// W32 has closed: findings are violations.
+    Enforced,
+}
+
+impl Stage {
+    /// Records a finding of `condition` (5 or 6) as this stage dictates.
+    fn record(self, condition: u8, finding: &str, verdict: &mut Judgement) {
+        match self {
+            Self::Reported => verdict.reported.push(format!(
+                "condition {condition} (reported until {ENFORCED_BY}): {finding}"
+            )),
+            Self::Enforced => verdict
+                .violations
+                .push(format!("condition {condition}: {finding}")),
+        }
+    }
+}
+
+/// Condition 5, reported until W32 closes: spec codes against domain codes, and an HTTP
+/// handler per operation.
+fn spec_and_code(spec: &Spec, inputs: &Inputs<'_>, stage: Stage, verdict: &mut Judgement) {
     let domain = domain_codes(inputs.error_codes);
     if domain != spec.codes {
-        verdict.reported.push(format!(
-            "condition 5 (reported until W32): the spec's ErrorCode enum {:?} differs from \
-             the domain ErrorCode {domain:?}",
-            spec.codes
-        ));
+        stage.record(
+            5,
+            &format!(
+                "the spec's ErrorCode enum {:?} differs from the domain ErrorCode {domain:?}",
+                spec.codes
+            ),
+            verdict,
+        );
     }
     let handled = named_markers(inputs.sources, SERVER, "// api: ");
     let unhandled: Vec<&String> = spec
@@ -727,26 +766,40 @@ fn spec_and_code(spec: &Spec, inputs: &Inputs<'_>, verdict: &mut Judgement) {
         .filter(|op| !handled.contains(*op))
         .collect();
     if !unhandled.is_empty() {
-        verdict.reported.push(format!(
-            "condition 5 (reported until W32): no HTTP handler (`// api: <operationId>` \
-             under {SERVER}) for {} operation(s): {unhandled:?}",
-            unhandled.len()
-        ));
+        stage.record(
+            5,
+            &format!(
+                "no HTTP handler (`// api: <operationId>` under {SERVER}) for {} \
+                 operation(s): {unhandled:?}",
+                unhandled.len()
+            ),
+            verdict,
+        );
     }
     verdict.cases += spec.codes.len() + spec.operations.len();
 }
 
-/// Condition 6, reported until W32: a conformance test per operation and error code.
-fn spec_and_tests(spec: &Spec, sources: &[(String, String)], verdict: &mut Judgement) {
+/// Condition 6, reported until W32 closes: a conformance test per operation and error
+/// code.
+fn spec_and_tests(
+    spec: &Spec,
+    sources: &[(String, String)],
+    stage: Stage,
+    verdict: &mut Judgement,
+) {
     let tested = named_markers(sources, CONFORMANCE, "// api-test: ");
     for (what, names) in [("operation", &spec.operations), ("error code", &spec.codes)] {
         let untested: Vec<&String> = names.iter().filter(|n| !tested.contains(*n)).collect();
         if !untested.is_empty() {
-            verdict.reported.push(format!(
-                "condition 6 (reported until W32): no conformance test (`// api-test: \
-                 <name>` under {CONFORMANCE}) exercises {} {what}(s): {untested:?}",
-                untested.len()
-            ));
+            stage.record(
+                6,
+                &format!(
+                    "no conformance test (`// api-test: <name>` under {CONFORMANCE}) \
+                     exercises {} {what}(s): {untested:?}",
+                    untested.len()
+                ),
+                verdict,
+            );
         }
         verdict.cases += names.len();
     }
@@ -1189,6 +1242,69 @@ impl ErrorCode {
         ]
         .concat();
         texts
+    }
+
+    /// The fixtures plus a fourth work item, W32, whose bead `b32` is `status`: the
+    /// switch for conditions 5 and 6.
+    fn with_w32(status: &str) -> Texts {
+        let mut texts = Texts::valid();
+        let w03 =
+            "| **W03** | Contract | W01, W02 | F-1…F-2, §8 | api (spec only) | it validates |\n";
+        let edge = "    W02 --> W03\n";
+        assert!(PLAN_TEXT.contains(w03) && PLAN_TEXT.contains(edge));
+        let plan = PLAN_TEXT
+            .replace(
+                w03,
+                &format!("{w03}| **W32** | Conformance | W03 | P4 | conformance | it conforms |\n"),
+            )
+            .replace(edge, &format!("{edge}    W03 --> W32\n"));
+        texts.plan = format!("{PLAN_HEAD}{plan}");
+        texts.workgraph = format!(
+            "{}\n[[item]]\nid = \"W32\"\ntitle = \"Conformance\"\ndeps = [\"W03\"]\n\
+             reqs = [\"P4\"]\narea = [\"conformance\"]\nmilestone = \"m1\"\naccept = []\n\
+             bead = \"b32\"\n",
+            workgraph_text(["b1", "b2", "b3"])
+        );
+        texts.export = [export_text("open"), bead("b32", status, &["b3"])].concat();
+        texts
+    }
+
+    #[test]
+    fn conditions_5_and_6_are_reported_while_w32_is_open_and_fail_once_it_closes() {
+        // The same spec/code and spec/test gaps in both: no handler, no conformance test.
+        let open = with_w32("open").judge();
+        assert!(
+            open.violations.is_empty()
+                && open
+                    .reported
+                    .iter()
+                    .any(|r| r.starts_with("condition 5 (reported"))
+                && open
+                    .reported
+                    .iter()
+                    .any(|r| r.starts_with("condition 6 (reported")),
+            "rule: while W32 is open, 5 and 6 are listed, never failed (§10.13); \
+             verdict={open:#?}"
+        );
+        let closed = with_w32("closed").judge();
+        assert!(
+            closed.reported.is_empty(),
+            "rule: nothing is merely reported once W32 has closed; verdict={closed:#?}"
+        );
+        for condition in ["condition 5: ", "condition 6: "] {
+            assert!(
+                closed.violations.iter().any(|v| v.starts_with(condition)),
+                "rule: W32's closure is the single switch to enforcing (§10.13, D-49): \
+                 {condition:?} fails; verdict={closed:#?}"
+            );
+        }
+        assert!(
+            closed
+                .violations
+                .iter()
+                .all(|v| v.starts_with("condition 5: ") || v.starts_with("condition 6: ")),
+            "rule: W32's closure changes only conditions 5 and 6; verdict={closed:#?}"
+        );
     }
 
     #[test]
