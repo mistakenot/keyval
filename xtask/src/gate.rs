@@ -55,10 +55,10 @@ use crate::steplog::{self, StepLog};
 use crate::workgraph;
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.gate/v4";
+pub const SCHEMA: &str = "keyval.dev.gate/v5";
 
 /// Schema identifier of a receipt file.
-pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v4";
+pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v5";
 
 /// T0 time budget: target and alert threshold (§10.10). A run is never cut off.
 const TARGET: Duration = Duration::from_mins(2);
@@ -318,7 +318,8 @@ pub struct Budget {
     pub over_alert: bool,
 }
 
-/// A gate receipt (`keyval.dev.receipt/v4`): exactly what ran, on exactly which tree.
+/// A gate receipt (`keyval.dev.receipt/v5`): exactly what ran, on exactly which tree. v5
+/// names the field of each approved demotion (xo5i).
 ///
 /// v2 adds `tools.cargo_target_dir` (br-gate-shared-target-dir-dtqu) and
 /// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g); v4 adds `planned` and `demotions`,
@@ -377,7 +378,7 @@ pub struct StepLogSummary {
     pub dropped: usize,
 }
 
-/// The `./dev gate` report (`keyval.dev.gate/v4`, which embeds a v4 receipt).
+/// The `./dev gate` report (`keyval.dev.gate/v5`, which embeds a v5 receipt).
 #[derive(Debug, Serialize)]
 pub struct GateReport {
     /// Schema identifier.
@@ -992,10 +993,9 @@ fn forward_step(ctx: &Context<'_>, state: &mut State<'_>, result: &mut StepResul
     for demotion in &approved {
         let _ = writeln!(
             log,
-            "approved: {} {} → {} (plan change {})",
+            "approved: {} {} (plan change {})",
             demotion.id,
-            demotion.from,
-            demotion.to.as_deref().unwrap_or("removed"),
+            demotion.describe(),
             demotion.plan_change.as_deref().unwrap_or("?")
         );
     }
@@ -1751,6 +1751,7 @@ pub mod tests {
     // check: DEV-GATE
     use super::*;
     use crate::check::{ClaimClass, Kind, Tier};
+    use crate::staging::Field;
     use crate::test_support::{nested_cargo, scratch_dir, workspace_root};
 
     const TREE: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -2547,6 +2548,43 @@ pub mod tests {
     }
 
     #[test]
+    fn registry_forward_only_refuses_a_lowered_min_cases_unless_a_closed_plan_change_allows_it() {
+        let parent = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 2),
+        ]);
+        let tree = registry_checks(&[
+            ("R-STATIC", "implemented", 1),
+            ("R-TESTS", "implemented", 1),
+        ]);
+        let root = registry_fixture("forward-min-cases", &tree);
+        let refused = registry_run(&root, Parent::Checks(parent.clone()), &[]);
+        let forward = step(&refused, "forward-only");
+        assert!(
+            !refused.ok
+                && forward
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| { d.contains("R-TESTS") && d.contains("min_cases 2 → 1") }),
+            "rule: lowering an implemented check's min_cases fails the gate, though every \
+             selected case still passes (§10.13, xo5i); observed={forward:#?}"
+        );
+        let allowed = registry_run(&root, Parent::Checks(parent), &["R-TESTS=br-pc"]);
+        assert!(allowed.ok, "observed={allowed:#?}");
+        assert_eq!(
+            allowed.receipt.demotions,
+            [Demotion {
+                id: "R-TESTS".to_owned(),
+                field: Field::MinCases,
+                from: "2".to_owned(),
+                to: Some("1".to_owned()),
+                plan_change: Some("br-pc".to_owned()),
+            }],
+            "rule: the approved demotion is recorded with its field and plan change"
+        );
+    }
+
+    #[test]
     fn registry_forward_only_refuses_a_removed_check_unless_a_closed_plan_change_allows_it() {
         let parent = registry_checks(&[
             ("R-STATIC", "implemented", 1),
@@ -2574,6 +2612,7 @@ pub mod tests {
             allowed.receipt.demotions,
             [Demotion {
                 id: "R-OLD".to_owned(),
+                field: Field::Status,
                 from: "implemented".to_owned(),
                 to: None,
                 plan_change: Some("br-pc".to_owned()),

@@ -182,6 +182,7 @@ mod tests {
     use crate::git::{Git, fixture};
     use crate::output::{self, ErrorKind};
     use crate::prune::{self, Action, Layout, Reason};
+    use crate::staging::Field as DemotionField;
     use crate::steplog::{self, Outcome as StepOutcome, StepLog};
     use crate::test_support::{nested_cargo, scratch_dir};
     use crate::traceability::{self, InputSource, Source as EvidenceSource};
@@ -439,6 +440,13 @@ mod tests {
             traceability::SCHEMA,
             "/$defs/evidence/properties/source/enum",
             &sources,
+            false,
+        );
+        let fields = variants!(DemotionField: Status, MinCases, Tier);
+        assert_enum(
+            gate::RECEIPT_SCHEMA,
+            "/properties/demotions/items/properties/field/enum",
+            &fields,
             false,
         );
         let inputs = variants!(InputSource: Tree, WorkingTree);

@@ -8,8 +8,10 @@
 //!   test run in the gate (`cargo test -p <package> --all-targets`), never re-run: every
 //!   case its filters select passes, none is ignored, and at least the row's `min_cases`
 //!   ran (§10.11; owner decision, 2026-10-04).
-//! - **Forward-only statuses** (D-56). A row of the parent commit's `checks.toml` that the
-//!   tree removes, or an `implemented` row it marks anything else, fails, unless
+//! - **Forward-only rows** (D-56). A row of the parent commit's `checks.toml` that the
+//!   tree removes, an `implemented` row it marks anything else, and an `implemented` row
+//!   whose `min_cases` it lowers or that it moves to a later tier (§10.6 "silent
+//!   reclassification"; br-forward-only-min-cases-tier-xo5i) fail, unless
 //!   `--allow-demotion <ID>=<bead>` names a closed bead labelled `plan-change` in the
 //!   tree's tracker export (owner decision, 2026-10-04;
 //!   br-registry-check-removal-passes-kdo9). An allowance that matches no demotion
@@ -127,43 +129,108 @@ fn work_item_for(id: &str, items: &[WorkItem]) -> Option<String> {
         .map(|item| item.id.clone())
 }
 
-/// A check whose declared status moved backwards (D-56).
+/// Which declared field of a `checks.toml` row moved backwards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Field {
+    /// The status: the row was removed, or an `implemented` row was marked otherwise.
+    Status,
+    /// An `implemented` row's `min_cases` decreased.
+    MinCases,
+    /// An `implemented` row moved to a later tier, out of the gates that ran it.
+    Tier,
+}
+
+/// A check whose declared row moved backwards (D-56).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Demotion {
     /// The check ID.
     pub id: String,
-    /// Its status in the parent commit.
+    /// What moved.
+    pub field: Field,
+    /// Its value in the parent commit.
     pub from: String,
-    /// Its status in the tree; `None` when the tree removed the row.
+    /// Its value in the tree; `None` when the tree removed the row.
     pub to: Option<String>,
     /// The closed `plan-change` bead that approved it, once approved.
     pub plan_change: Option<String>,
 }
 
-/// Compares the parent commit's `checks.toml` with the tree's: every removed row, and every
-/// `implemented` row whose status changed, is a demotion. Returns the rows compared and
-/// the demotions found. With no parent registry, every row of the tree is new.
+impl Demotion {
+    /// The move, e.g. `implemented → planned`, `min_cases 19 → 1` or `tier T0 → T1`.
+    pub fn describe(&self) -> String {
+        let to = self.to.as_deref().unwrap_or("removed");
+        match self.field {
+            Field::Status => format!("{} → {to}", self.from),
+            Field::MinCases => format!("min_cases {} → {to}", self.from),
+            Field::Tier => format!("tier {} → {to}", self.from),
+        }
+    }
+}
+
+/// Compares the parent commit's `checks.toml` with the tree's. A demotion is a removed
+/// row, an `implemented` row marked anything else, and, for a row `implemented` on both
+/// sides, a lower `min_cases` or a later tier (§10.6, §10.13;
+/// br-forward-only-min-cases-tier-xo5i). Raising `min_cases`, moving to an earlier tier
+/// and promotions are free. Returns the rows compared and the demotions found, in parent
+/// order. With no parent registry, every row of the tree is new.
 pub fn demotions(parent: Option<&str>, tree: &str) -> Result<(usize, Vec<Demotion>), String> {
     let after = rows(tree)?;
     let Some(parent) = parent else {
         return Ok((after.len(), Vec::new()));
     };
     let before = rows(parent)?;
-    let found = before
-        .iter()
-        .filter_map(|old| {
-            let new = after.iter().find(|row| row.id == old.id);
-            let backwards =
-                new.is_none_or(|new| old.status == "implemented" && new.status != old.status);
-            backwards.then(|| Demotion {
-                id: old.id.clone(),
-                from: old.status.clone(),
-                to: new.map(|row| row.status.clone()),
-                plan_change: None,
-            })
-        })
-        .collect();
+    let mut found = Vec::new();
+    for old in &before {
+        let demotion = |field: Field, from: String, to: Option<String>| Demotion {
+            id: old.id.clone(),
+            field,
+            from,
+            to,
+            plan_change: None,
+        };
+        let Some(new) = after.iter().find(|row| row.id == old.id) else {
+            found.push(demotion(Field::Status, old.status.clone(), None));
+            continue;
+        };
+        if old.status != "implemented" {
+            continue;
+        }
+        if new.status != old.status {
+            found.push(demotion(
+                Field::Status,
+                old.status.clone(),
+                Some(new.status.clone()),
+            ));
+            continue;
+        }
+        if new.min_cases < old.min_cases {
+            found.push(demotion(
+                Field::MinCases,
+                old.min_cases.to_string(),
+                Some(new.min_cases.to_string()),
+            ));
+        }
+        if later_tier(&old.tier, &new.tier) {
+            found.push(demotion(
+                Field::Tier,
+                old.tier.clone(),
+                Some(new.tier.clone()),
+            ));
+        }
+    }
     Ok((before.len(), found))
+}
+
+/// Whether `new` is a later tier than `old` (T0, T1, T2, T3): a check moved there runs less
+/// often. A tier that does not read as `T<n>` counts as later unless it is unchanged, so an
+/// unreadable tier never takes a check out of T0 unnoticed.
+fn later_tier(old: &str, new: &str) -> bool {
+    let rank = |tier: &str| tier.strip_prefix('T').and_then(|n| n.parse::<u32>().ok());
+    match (rank(old), rank(new)) {
+        (Some(before), Some(after)) => after > before,
+        _ => old != new,
+    }
 }
 
 /// `--allow-demotion <CHECK-ID>=<bead>`: the bead is the owner-approved plan change that
@@ -206,15 +273,12 @@ pub fn approve(
     let mut approved = Vec::new();
     let mut violations = Vec::new();
     for mut demotion in found {
-        let moved = demotion.to.as_deref().map_or_else(
-            || format!("{} → removed", demotion.from),
-            |to| format!("{} → {to}", demotion.from),
-        );
+        let moved = demotion.describe();
         let Some(allowance) = allowances.iter().find(|a| a.check == demotion.id) else {
             violations.push(format!(
-                "check {} moved backwards ({moved}); a declared status is forward-only, and only \
-                 an owner-approved plan change may demote it: --allow-demotion {}=<closed \
-                 plan-change bead> (D-56, §10.13)",
+                "check {} moved backwards ({moved}); a check's declared status, min_cases and \
+                 tier are forward-only, and only an owner-approved plan change may move one \
+                 back: --allow-demotion {}=<closed plan-change bead> (D-56, §10.6, §10.13)",
                 demotion.id, demotion.id
             ));
             continue;
@@ -508,6 +572,68 @@ mod tests {
         );
     }
 
+    /// A `checks.toml` row with its tier, status and `min_cases`.
+    fn row_with(id: &str, tier: &str, status: &str, min_cases: u32) -> String {
+        row(id, tier, status).replace("min_cases = 3", &format!("min_cases = {min_cases}"))
+    }
+
+    #[test]
+    fn lowering_min_cases_or_moving_to_a_later_tier_is_a_demotion() {
+        let parent = checks(&[
+            row_with("A", "T0", "implemented", 5),
+            row_with("B", "T0", "implemented", 5),
+            row_with("C", "T1", "implemented", 5),
+            row_with("D", "T0", "planned", 5),
+            row_with("E", "T0", "implemented", 5),
+            row_with("G", "T2", "implemented", 5),
+            row_with("H", "T0", "implemented", 5),
+        ]);
+        let tree = checks(&[
+            row_with("A", "T0", "implemented", 4),
+            row_with("B", "T1", "implemented", 5),
+            row_with("C", "T0", "implemented", 5),
+            row_with("D", "T0", "planned", 1),
+            row_with("E", "T0", "implemented", 9),
+            row_with("G", "nightly", "implemented", 5),
+            row_with("H", "T2", "implemented", 2),
+        ]);
+        let (cases, found) = demotions(Some(&parent), &tree).unwrap();
+        assert_eq!(cases, 7);
+        let moves: Vec<(&str, Field, String)> = found
+            .iter()
+            .map(|d| (d.id.as_str(), d.field, d.describe()))
+            .collect();
+        assert_eq!(
+            moves,
+            [
+                ("A", Field::MinCases, "min_cases 5 → 4".to_owned()),
+                ("B", Field::Tier, "tier T0 → T1".to_owned()),
+                ("G", Field::Tier, "tier T2 → nightly".to_owned()),
+                ("H", Field::MinCases, "min_cases 5 → 2".to_owned()),
+                ("H", Field::Tier, "tier T0 → T2".to_owned()),
+            ],
+            "rule: an implemented row's min_cases never drops and it never moves to a later \
+             (or unreadable) tier unnoticed; raising min_cases (E), an earlier tier (C) and a \
+             planned row's numbers (D) are free (§10.6, §10.13, xo5i)"
+        );
+        let (approved, violations) = approve(found, &[allow("H=br-pc")], EXPORT);
+        assert_eq!(
+            approved.iter().map(Demotion::describe).collect::<Vec<_>>(),
+            ["min_cases 5 → 2", "tier T0 → T2"],
+            "rule: one plan change covers every move of its check"
+        );
+        assert_eq!(
+            violations.len(),
+            3,
+            "rule: A, B and G each need an approval; violations={violations:#?}"
+        );
+        assert!(
+            violations[0].contains("min_cases 5 → 4")
+                && violations[0].contains("--allow-demotion A="),
+            "violations={violations:#?}"
+        );
+    }
+
     const EXPORT: &str = "\
 {\"id\":\"br-pc\",\"status\":\"closed\",\"labels\":[\"plan-change\",\"needs-owner\"]}
 {\"id\":\"br-open\",\"status\":\"open\",\"labels\":[\"plan-change\"]}
@@ -517,6 +643,7 @@ mod tests {
     fn demoted(id: &str) -> Demotion {
         Demotion {
             id: id.to_owned(),
+            field: Field::Status,
             from: "implemented".to_owned(),
             to: None,
             plan_change: None,

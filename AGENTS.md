@@ -374,9 +374,10 @@ output only together with its schema, and bump the version when the change break
   labelled `failed` + `needs-owner` (once, even on a re-run) and stays open, so its
   dependants stay blocked; the evidence file is committed (`Failed: <id>`).
 
-  **Check statuses are forward-only (D-56, W05.4).** A commit that removes a
-  `checks.toml` row, or marks an `implemented` one anything else, fails the gate. Only an
-  owner-approved plan change may: `--allow-demotion <CHECK-ID>=<bead>` names a closed bead
+  **Check rows are forward-only (D-56, W05.4, xo5i).** A commit that removes a
+  `checks.toml` row, marks an `implemented` one anything else, or lowers an implemented
+  row's `min_cases` or moves it to a later tier, fails the gate. Only an owner-approved
+  plan change may: `--allow-demotion <CHECK-ID>=<bead>` names a closed bead
   labelled `plan-change` in the committed tracker export. The gate records the demotion in
   its receipt and the commit gets an `Allows-Demotion:` trailer; an allowance that covers
   no demotion fails. Never pass it without the owner's decision.
@@ -414,7 +415,8 @@ output only together with its schema, and bump the version when the change break
   - `staging`: every T0 row of `checks.toml`. Each `implemented` row runs, in file order.
     Each `planned` row is listed in the receipt with the work item whose `accept` names
     it, and never fails;
-  - `forward-only`: no check status moved backwards from the parent commit (above);
+  - `forward-only`: no check row moved backwards (status, `min_cases`, tier) from the
+    parent commit (above);
   - `tests`: `cargo test -p <member> --all-targets --no-fail-fast` for each workspace
     member, then the doctests. Each cargo-test check is judged from this one run, never
     re-run: every case it selects passes, none is ignored, and at least its `min_cases`
@@ -427,7 +429,7 @@ output only together with its schema, and bump the version when the change break
   clippy, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests, UBS). The
   switch is one-way: a commit that deletes `checks.toml` is still judged by the registry
   set, and fails (0z0a). Either way it writes a
-  `keyval.dev.receipt/v4` receipt to `artifacts/receipts/` with the tree ID, build ID,
+  `keyval.dev.receipt/v5` receipt to `artifacts/receipts/` with the tree ID, build ID,
   policy hashes, per-step case counts, the planned rows and any approved demotions.
   **It judges exact trees only (P11):** in a checkout it refuses unless the working tree
   is clean, judges `HEAD^{tree}`, and compares statuses with `HEAD^`. A commit wrapper

@@ -2,7 +2,7 @@
   "rule": "a gate step either passed or failed: there is no skipped outcome (P10)",
   "error_at": "/steps/0/status",
   "instance": {
-    "schema": "keyval.dev.receipt/v4",
+    "schema": "keyval.dev.receipt/v5",
     "kind": "gate",
     "tier": "fast",
     "set": "bootstrap",
