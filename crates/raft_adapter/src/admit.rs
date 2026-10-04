@@ -18,6 +18,13 @@
 //!   term-0 vote request would be granted with term 0 and the library would `fatal!` on
 //!   sending the answer (br-e1sd). A v1 peer never sends term 0: every message carries its
 //!   sender's term, and a vote or pre-vote answer carries the request's.
+//! - **Term ceiling:** a message term of at most [`MAX_PEER_TERM`], 2^52 (br-fdal; owner
+//!   decision). A node adopts a higher term it is sent, and each election adds one to its own,
+//!   which must stay within 2^53 − 1 or the adapter's `RA-TERM-RANGE` and `RA-HARD-STATE`
+//!   invariants fire. Admitting at most 2^52 leaves 2^52 elections of headroom after any
+//!   admitted message, which an honest cluster never comes near (at one election a
+//!   millisecond, 140,000 years). Term-space exhaustion past that is a stated limit: only a
+//!   Byzantine peer could approach it, outside v1's fault model (§2.2).
 //! - **Entries:** only on `MsgAppend`. Each entry is `EntryNormal`, without a context or
 //!   `sync_log`, and holds at most one command ([`MAX_COMMAND_BYTES`]). Entries follow the
 //!   message's index without a gap. Their terms run from the message's `log_term` up to its
@@ -53,6 +60,10 @@
 use raft::eraftpb::{self, EntryType, MessageType};
 use types::{MAX_COMMAND_BYTES, MAX_SAFE_INTEGER, NodeId};
 
+/// The highest message term admitted from a peer: 2^52, half the term space, so a node can
+/// always add elections to any admitted term without leaving 2^53 − 1 (br-fdal).
+pub const MAX_PEER_TERM: u64 = 1 << 52;
+
 use crate::convert::decode_message;
 
 /// Why a peer message was refused before it reached the library. Each variant names the
@@ -84,6 +95,11 @@ pub enum Inadmissible {
     OutOfRange,
     /// A message term of 0, which only local messages carry.
     ZeroTerm,
+    /// A message term above 2^52, the ceiling on peer terms (br-fdal).
+    TermCeiling {
+        /// The message's term.
+        term: u64,
+    },
     /// An append whose previous entry has index 0 with a nonzero term, or a nonzero index
     /// with term 0, which a v1 leader never sends.
     PrevEntry {
@@ -155,6 +171,9 @@ pub fn admit(
     }
     if message.term == 0 {
         return Err(Inadmissible::ZeroTerm);
+    }
+    if message.term > MAX_PEER_TERM {
+        return Err(Inadmissible::TermCeiling { term: message.term });
     }
     if !carries_entries && !message.entries.is_empty() {
         return Err(Inadmissible::Entry { position: 0 });

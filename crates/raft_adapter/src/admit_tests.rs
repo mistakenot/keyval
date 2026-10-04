@@ -12,7 +12,7 @@ use types::{
     StepError, Term,
 };
 
-use crate::admit::{Inadmissible, admit, fits_log};
+use crate::admit::{Inadmissible, MAX_PEER_TERM, admit, fits_log};
 use crate::node::RaftNode;
 use crate::test_support::{Journal, Seeded, config, empty_log};
 
@@ -113,11 +113,12 @@ fn every_message_type_v1_exchanges_is_admitted_unchanged() {
     response.reject = true;
     response.reject_hint = MAX_SAFE_INTEGER;
     response.index = MAX_SAFE_INTEGER;
-    response.term = MAX_SAFE_INTEGER;
+    response.term = MAX_PEER_TERM;
     assert_eq!(
         judge(&response),
         Ok(response.clone()),
-        "rule: 2^53 - 1 is still in range (R-22); message={response:?}"
+        "rule: indices up to 2^53 - 1 are in range (R-22), and terms up to the 2^52 ceiling \
+         (br-fdal); message={response:?}"
     );
 }
 
@@ -629,6 +630,64 @@ fn a_forged_append_past_the_log_never_reaches_the_library() {
             (node.ready(), node.status()),
             (None, before),
             "rule: and changes nothing; case={case}"
+        );
+    }
+}
+
+#[test]
+fn peer_terms_above_the_ceiling_are_refused() {
+    for (term, expected) in [
+        (MAX_PEER_TERM, None),
+        (
+            MAX_PEER_TERM + 1,
+            Some(Inadmissible::TermCeiling {
+                term: MAX_PEER_TERM + 1,
+            }),
+        ),
+        (
+            MAX_SAFE_INTEGER,
+            Some(Inadmissible::TermCeiling {
+                term: MAX_SAFE_INTEGER,
+            }),
+        ),
+    ] {
+        let mut sent = message(MessageType::MsgHeartbeat);
+        sent.term = term;
+        assert_eq!(
+            judge(&sent).err(),
+            expected,
+            "rule: peer terms are admitted up to 2^52, so a node can always add elections \
+             (br-fdal); term={term}"
+        );
+    }
+}
+
+#[test]
+fn a_forged_term_at_the_top_can_neither_stall_nor_crash_a_node() {
+    // One forged heartbeat at 2^53 - 1 would make a node follow at a term whose next
+    // election no peer admits; a second message, a granted pre-vote, would push it to 2^53,
+    // where RA-HARD-STATE fires (br-fdal). Neither reaches the library now.
+    let mut heartbeat = message(MessageType::MsgHeartbeat);
+    heartbeat.term = MAX_SAFE_INTEGER;
+    let mut granted = message(MessageType::MsgRequestPreVoteResponse);
+    granted.term = MAX_SAFE_INTEGER;
+    granted.reject = false;
+    let journal = Journal::default();
+    let mut node = follower(&journal);
+    let before = node.status();
+    for (case, sent) in [
+        ("the stalling heartbeat", heartbeat),
+        ("the crashing pre-vote grant", granted),
+    ] {
+        assert_eq!(
+            node.step(encode(&sent)),
+            Err(StepError::Rejected),
+            "rule: {case} at term 2^53 - 1 is refused (br-fdal)"
+        );
+        assert_eq!(
+            (node.ready(), node.status()),
+            (None, before.clone()),
+            "rule: {case} changes nothing"
         );
     }
 }

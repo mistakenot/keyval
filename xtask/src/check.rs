@@ -1194,7 +1194,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   proposal, a snapshot or a configuration change from the wire never reaches \
                   the library, a follower that knows its leader never forwards a \
                   proposal, an append whose previous entry pairs index and term 0 wrongly \
-                  (br-0mio) and a heartbeat committing past this node's log (br-1jtp) are \
+                  (br-0mio), a term above the 2^52 ceiling (br-fdal; term-space exhaustion \
+                  is a stated §2.2 limit) and a heartbeat committing past this node's log \
+                  (br-1jtp) are \
                   refused, \
                   an append conflicting below the commit index is answered without a \
                   panic, and a heartbeat from another voter still reaches the library",
@@ -1206,7 +1208,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["admit_tests::", "decode_tests::"],
         },
-        min_cases: 29,
+        min_cases: 31,
     },
     CheckDef {
         id: "DIFFERENTIAL",

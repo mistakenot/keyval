@@ -375,8 +375,10 @@ fn log_index(node: NodeId, raw: u64, what: &str) -> LogIndex {
 ///
 /// # Panics
 ///
-/// `RA-TERM-RANGE` if it is 2^53 or more: admission bounds every peer's term (br-xx08), and a
-/// node's own term grows by one per election.
+/// `RA-TERM-RANGE` if it is 2^53 or more. Admission takes no peer term above 2^52
+/// ([`MAX_PEER_TERM`](crate::admit::MAX_PEER_TERM), br-fdal), and a node's own term grows by
+/// one per election, so this fires only after 2^52 elections past the highest admitted term:
+/// term-space exhaustion, a stated limit outside v1's fault model (§2.2).
 fn term(node: NodeId, raw: u64) -> Term {
     let term = Term::new(raw);
     invariant!(
