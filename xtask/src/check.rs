@@ -1364,6 +1364,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 11,
     },
+    CheckDef {
+        id: "MODEL-SPEC",
+        summary: "the reference model server, run as its own binary over real HTTP, \
+                  answers every operation with a status the spec declares (or 405/415 \
+                  with the invalid_request envelope), Content-Type: application/json, \
+                  Cache-Control: no-store and a body that validates against that \
+                  status's schema (the SPEC validator, extension keywords included): \
+                  every write and read status a single node shows, the spec's PUT and \
+                  CAS examples reproduced exactly, every request-body and parameter case \
+                  of api/fixtures/ accepted or refused as the fixtures say, and the raw \
+                  strict-JSON and RFC 3986 query rules (W30, T-7, §8.1)",
+        kind: Kind::TestGroup,
+        covers: &["T-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["model_spec::"],
+        },
+        min_cases: 6,
+    },
 ];
 
 /// Outcome of one requested check.

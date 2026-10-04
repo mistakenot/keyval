@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use crate::check::StaticOutcome;
 
 /// The spec under judgement, relative to the workspace root.
-const SPEC_PATH: &str = "api/openapi.yaml";
+pub const SPEC_PATH: &str = "api/openapi.yaml";
 /// The fixture directory, relative to the workspace root.
 const FIXTURES: &str = "api/fixtures";
 
@@ -146,7 +146,7 @@ struct PlanExample {
 /// What a fixture file's cases must do.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum Expect {
+pub enum Expect {
     Valid,
     Invalid,
 }
@@ -154,26 +154,26 @@ enum Expect {
 /// `positive.json` or `negative.json`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Fixtures {
-    schema: String,
-    expect: Expect,
-    cases: Vec<Case>,
+pub struct Fixtures {
+    pub schema: String,
+    pub expect: Expect,
+    pub cases: Vec<Case>,
 }
 
 /// One instance case.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Case {
-    name: String,
-    rule: String,
-    target: Target,
-    instance: Value,
+pub struct Case {
+    pub name: String,
+    pub rule: String,
+    pub target: Target,
+    pub instance: Value,
 }
 
 /// The schema an instance is validated against.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-enum Target {
+pub enum Target {
     Schema(String),
     Request(String),
     Response(ResponseTarget),
@@ -183,17 +183,17 @@ enum Target {
 /// A response schema: operation and status.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResponseTarget {
-    operation: String,
-    status: String,
+pub struct ResponseTarget {
+    pub operation: String,
+    pub status: String,
 }
 
 /// A parameter schema: operation and parameter name.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ParameterTarget {
-    operation: String,
-    name: String,
+pub struct ParameterTarget {
+    pub operation: String,
+    pub name: String,
 }
 
 /// `spec-mutants.json`.
@@ -297,7 +297,7 @@ pub fn check_spec(root: &Path) -> Result<StaticOutcome, String> {
 }
 
 /// Reads a YAML file holding one document as JSON.
-fn load_yaml(path: &Path) -> Result<Value, String> {
+pub fn load_yaml(path: &Path) -> Result<Value, String> {
     let text =
         fs::read_to_string(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
     let documents = Yaml::load_from_str(&text)
@@ -358,7 +358,7 @@ fn scalar_to_json(scalar: &Scalar<'_>) -> Result<Value, String> {
 }
 
 /// Reads `api/fixtures/<name>` and checks its schema identifier.
-fn load_fixture<T: DeserializeOwned>(
+pub fn load_fixture<T: DeserializeOwned>(
     root: &Path,
     name: &str,
     schema: &str,
@@ -1080,7 +1080,7 @@ fn rule_plan_examples(doc: &Value, contract: &Contract) -> Vec<String> {
 }
 
 /// The pointer of the schema a case's target names.
-fn target_pointer(doc: &Value, target: &Target) -> Result<String, String> {
+pub fn target_pointer(doc: &Value, target: &Target) -> Result<String, String> {
     let op = |id: &str| operation_pointer(doc, id).ok_or_else(|| format!("no operation {id:?}"));
     let pointer = match target {
         Target::Schema(name) => format!("/components/schemas/{}", escape(name)),
@@ -1111,7 +1111,7 @@ fn target_pointer(doc: &Value, target: &Target) -> Result<String, String> {
 
 /// A validator for the schema at `pointer` in the registered spec, with the extension
 /// keywords of README "Extension keywords".
-fn instance_validator(registry: &Registry<'_>, pointer: &str) -> Result<Validator, String> {
+pub fn instance_validator(registry: &Registry<'_>, pointer: &str) -> Result<Validator, String> {
     jsonschema::options()
         .with_draft(Draft::Draft202012)
         .with_registry(registry)
@@ -1199,7 +1199,7 @@ impl<'i> Keyword<'i> for MaxPageUtf8Bytes {
 }
 
 /// The first few validation errors, or `None` when the instance is valid.
-fn first_errors(validator: &Validator, instance: &Value) -> Option<String> {
+pub fn first_errors(validator: &Validator, instance: &Value) -> Option<String> {
     let errors: Vec<String> = validator
         .iter_errors(instance)
         .take(MAX_MESSAGES)
@@ -1209,7 +1209,7 @@ fn first_errors(validator: &Validator, instance: &Value) -> Option<String> {
 }
 
 /// Replaces every `{"$repeat": s, "times": n}` with `s` repeated `n` times.
-fn expand(value: &Value) -> Result<Value, String> {
+pub fn expand(value: &Value) -> Result<Value, String> {
     Ok(match value {
         Value::Object(object)
             if object.len() == 2
@@ -1237,13 +1237,22 @@ fn expand(value: &Value) -> Result<Value, String> {
     })
 }
 
-/// `instances`: each case of one fixture file validates (positive) or does not (negative).
-fn check_instances(spec: &Value, file: &str, fixtures: &Fixtures) -> Result<Vec<String>, String> {
-    let registry = Registry::new()
+/// The spec registered as a schema resource, so [`instance_validator`] can point into it.
+///
+/// # Errors
+///
+/// The registry's refusal, as text.
+pub fn spec_registry(spec: &Value) -> Result<Registry<'_>, String> {
+    Registry::new()
         .draft(Draft::Draft202012)
         .add(SPEC_URI, spec)
         .and_then(jsonschema::RegistryBuilder::prepare)
-        .map_err(|err| format!("the spec cannot be registered as a schema resource: {err}"))?;
+        .map_err(|err| format!("the spec cannot be registered as a schema resource: {err}"))
+}
+
+/// `instances`: each case of one fixture file validates (positive) or does not (negative).
+fn check_instances(spec: &Value, file: &str, fixtures: &Fixtures) -> Result<Vec<String>, String> {
+    let registry = spec_registry(spec)?;
     let mut names: Vec<&str> = fixtures
         .cases
         .iter()

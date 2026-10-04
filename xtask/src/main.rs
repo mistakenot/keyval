@@ -23,6 +23,8 @@ mod libtest;
 mod lint;
 mod metadata;
 #[cfg(test)]
+mod model_spec;
+#[cfg(test)]
 mod observation_schema;
 mod output;
 mod process;

@@ -354,7 +354,10 @@ deps = ["W03", "W10"]
 reqs = ["T-7"]
 area = ["model"]
 milestone = "m3"
-accept = ["./dev check MODEL-SERVER"]
+accept = [
+    "./dev check MODEL-SERVER",
+    "./dev check MODEL-SPEC",
+]
 bead = "br-w30-reference-model-server-ysk"
 
 [[item]]
