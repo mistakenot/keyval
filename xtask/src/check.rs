@@ -1210,6 +1210,49 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 9,
     },
+    CheckDef {
+        id: "RAFT-PINS",
+        summary: "the raft-rs 0.7.0 semantics the Ready loop relies on, pinned on the \
+                  library itself: a non-leader's Ready messages are all persisted messages \
+                  and a leader's all ordinary; a follower's acknowledgement waits for its \
+                  entries; a non-leader has no messages after advance_append; committed \
+                  entries are handed over once each, only up to the persisted index; \
+                  advance_append applies nothing, advance also marks applied what earlier \
+                  Readies handed over, and advance_apply_to moves only the applied index; and \
+                  the per-Ready committed bound leaves work for an immediate drain (§7.4, \
+                  W13.4)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "raft_adapter",
+            filters: &["ordering_tests::pins::"],
+        },
+        min_cases: 5,
+    },
+    CheckDef {
+        id: "RAFT-ORDERING",
+        summary: "three Ready loops under seeded hostile schedules (late and reordered \
+                  syncs, completions from crashed incarnations, a reordering, duplicating and \
+                  lossy network, inputs during a sync, crashes that lose unsynced bytes and \
+                  restart through journal recovery): no message leaves on unsynced state \
+                  (DUR-2), one node leads each term, every node and incarnation applies one \
+                  history, an idle loop has no ready work left, and after the faults heal \
+                  every node applies everything ever committed; a crashed incarnation's \
+                  completion never completes its successor, an early or repeated SyncDone \
+                  breaks its invariant, and a peer's snapshot never reaches a Ready (§7.4, \
+                  W13.4)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-2", "C-2"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "raft_adapter",
+            filters: &["ordering_tests::adversarial::"],
+        },
+        min_cases: 6,
+    },
 ];
 
 /// Outcome of one requested check.

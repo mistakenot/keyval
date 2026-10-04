@@ -104,6 +104,8 @@ mod envelope_tests;
 mod node;
 #[cfg(test)]
 mod node_tests;
+#[cfg(test)]
+mod ordering_tests;
 mod ready_loop;
 #[cfg(test)]
 mod ready_loop_tests;
