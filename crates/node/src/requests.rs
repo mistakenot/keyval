@@ -55,18 +55,18 @@ pub trait Requests {
         effects: &mut Vec<Effect>,
     );
 
-    /// The loop applied `entry`, committed at `commit`, to the state machine, which decided
-    /// `applied` (§7.4 step 5, §7.5). Entries arrive once each, in index order.
-    fn applied(
-        &mut self,
-        entry: &Entry,
-        applied: &Applied,
-        commit: LogIndex,
-        effects: &mut Vec<Effect>,
-    );
+    /// The loop applied an entry to the state machine (§7.4 step 5, §7.5). Entries arrive
+    /// once each, in index order.
+    fn applied(&mut self, applying: &mut Applying<'_>, effects: &mut Vec<Effect>);
 
-    /// `attempt`'s deadline passed (§7.8): the clock reached the tick it was set for.
+    /// `attempt`'s deadline passed (§7.8): the clock reached the tick it was set for. A
+    /// deadline is cancelled when its attempt is answered, so it fires only for an attempt
+    /// still waiting.
     fn expired(&mut self, view: &mut View<'_>, attempt: AttemptId, effects: &mut Vec<Effect>);
+
+    /// The node's lifecycle, or the library's role, term or believed leader, changed since
+    /// the last call (§7.8: leadership loss gives `unknown_outcome`).
+    fn status_changed(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>);
 
     /// The process is stopping (§7.8, §8.4).
     fn shutdown(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>);
@@ -171,5 +171,60 @@ impl<'a> View<'a> {
     #[must_use]
     pub fn deadline(&self, attempt: AttemptId) -> Option<Tick> {
         self.core.deadlines.get(attempt)
+    }
+}
+
+/// What the loop just applied, for [`Requests::applied`]: the entry, what the state machine
+/// decided, the state after it, and the deadline book.
+#[derive(Debug)]
+pub struct Applying<'a> {
+    /// This node.
+    pub(crate) node: NodeId,
+    /// The entry applied.
+    pub(crate) entry: &'a Entry,
+    /// What applying it decided.
+    pub(crate) applied: &'a Applied,
+    /// The commit index it was applied under.
+    pub(crate) commit: LogIndex,
+    /// The state machine, after the entry.
+    pub(crate) state: &'a StateMachine,
+    /// The attempt deadlines.
+    pub(crate) deadlines: &'a mut Deadlines,
+}
+
+impl Applying<'_> {
+    /// This node.
+    #[must_use]
+    pub const fn node(&self) -> NodeId {
+        self.node
+    }
+
+    /// The entry applied.
+    #[must_use]
+    pub const fn entry(&self) -> &Entry {
+        self.entry
+    }
+
+    /// What applying it decided (§7.5).
+    #[must_use]
+    pub const fn applied(&self) -> &Applied {
+        self.applied
+    }
+
+    /// The commit index it was applied under.
+    #[must_use]
+    pub const fn commit(&self) -> LogIndex {
+        self.commit
+    }
+
+    /// The state machine after the entry: its applied index is the entry's.
+    #[must_use]
+    pub const fn state(&self) -> &StateMachine {
+        self.state
+    }
+
+    /// Removes `attempt`'s deadline, returning the tick it would have fired at.
+    pub fn cancel_deadline(&mut self, attempt: AttemptId) -> Option<Tick> {
+        self.deadlines.cancel(attempt)
     }
 }

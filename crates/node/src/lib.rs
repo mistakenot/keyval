@@ -67,7 +67,11 @@ mod queue_tests;
 mod requests;
 #[cfg(test)]
 mod test_support;
+mod write_path;
+#[cfg(test)]
+mod write_path_tests;
 
 pub use controller::{Boot, Controller, Counters, Failure, StartError, TICKS_PER_TURN};
 pub use deadlines::DeadlinesFull;
-pub use requests::{Proposal, Requests, View};
+pub use requests::{Applying, Proposal, Requests, View};
+pub use write_path::WritePath;

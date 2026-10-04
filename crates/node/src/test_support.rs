@@ -18,7 +18,7 @@ use types::{
     Refusal, RequestId, Response, StorageError, SyncSeq, Term, Tick, Value,
 };
 
-use crate::{Boot, Controller, Proposal, Requests, View};
+use crate::{Applying, Boot, Controller, Proposal, Requests, View, WritePath};
 
 /// The cluster instance every test journal is initialised with.
 pub const INSTANCE: &str = "00112233445566778899aabbccddeeff";
@@ -30,10 +30,14 @@ pub const INCARNATION: Incarnation = Incarnation::new(3);
 pub const FIRST_SYNC: SyncSeq = SyncSeq::new(1);
 
 /// The committed configs these tests use.
-const CONFIGS: [(&str, &str); 2] = [
+const CONFIGS: [(&str, &str); 3] = [
     (
         "one-voter",
         include_str!("../../../config/fixtures/one-voter.toml"),
+    ),
+    (
+        "small-limits",
+        include_str!("../../../config/fixtures/small-limits.toml"),
     ),
     (
         "three-voters",
@@ -220,6 +224,10 @@ pub enum Handed {
         attempt: AttemptId,
         now: Tick,
     },
+    StatusChanged {
+        role: types::Role,
+        lifecycle: Lifecycle,
+    },
     Shutdown,
 }
 
@@ -241,6 +249,7 @@ impl Recorder {
                 Handed::Proposed { .. }
                 | Handed::Applied { .. }
                 | Handed::Expired { .. }
+                | Handed::StatusChanged { .. }
                 | Handed::Shutdown => None,
             })
             .collect()
@@ -254,6 +263,7 @@ impl Recorder {
                 Handed::Attempt { .. }
                 | Handed::Proposed { .. }
                 | Handed::Applied { .. }
+                | Handed::StatusChanged { .. }
                 | Handed::Shutdown => None,
             })
             .collect()
@@ -267,6 +277,7 @@ impl Recorder {
                 Handed::Attempt { .. }
                 | Handed::Proposed { .. }
                 | Handed::Expired { .. }
+                | Handed::StatusChanged { .. }
                 | Handed::Shutdown => None,
             })
             .collect()
@@ -326,16 +337,17 @@ impl Requests for Recorder {
         self.handed.push(Handed::Proposed { attempt, result });
     }
 
-    fn applied(
-        &mut self,
-        entry: &Entry,
-        applied: &Applied,
-        _commit: LogIndex,
-        _effects: &mut Vec<Effect>,
-    ) {
+    fn applied(&mut self, applying: &mut Applying<'_>, _effects: &mut Vec<Effect>) {
         self.handed.push(Handed::Applied {
-            index: entry.index.index(),
-            applied: applied.clone(),
+            index: applying.entry().index.index(),
+            applied: applying.applied().clone(),
+        });
+    }
+
+    fn status_changed(&mut self, view: &mut View<'_>, _effects: &mut Vec<Effect>) {
+        self.handed.push(Handed::StatusChanged {
+            role: view.status().role,
+            lifecycle: view.lifecycle(),
         });
     }
 
@@ -352,9 +364,9 @@ impl Requests for Recorder {
 }
 
 /// One node under test: its controller, its journal, and what its effects did.
-pub struct Member {
+pub struct Member<Q: Requests = Recorder> {
     pub id: NodeId,
-    pub ctl: Controller<Journal, Recorder>,
+    pub ctl: Controller<Journal, Q>,
     pub journal: Journal,
     /// Every effect, in order.
     pub effects: Vec<Effect>,
@@ -365,8 +377,39 @@ pub struct Member {
 }
 
 impl Member {
-    /// Starts `id` over `journal`, recovering it first.
+    /// Starts `id` over `journal`, recovering it first, with a recording double.
     pub fn start(config: &Config, id: NodeId, journal: Journal, seed: u64) -> Self {
+        Self::start_with(config, id, journal, seed, Recorder::default())
+    }
+
+    /// A fresh node `id`: genesis only.
+    pub fn fresh(config: &Config, id: NodeId) -> Self {
+        Self::start(config, id, genesis_journal(config, id), id.get())
+    }
+}
+
+impl Member<Writes> {
+    /// A fresh node `id` whose writes go through the real write path.
+    pub fn fresh_writes(config: &Config, id: NodeId) -> Self {
+        Self::start_with(
+            config,
+            id,
+            genesis_journal(config, id),
+            id.get(),
+            Writes::new(config, id),
+        )
+    }
+}
+
+impl<Q: Requests> Member<Q> {
+    /// Starts `id` over `journal`, recovering it first.
+    pub fn start_with(
+        config: &Config,
+        id: NodeId,
+        journal: Journal,
+        seed: u64,
+        requests: Q,
+    ) -> Self {
         let recovered = recover(config, id, &journal);
         let (ctl, effects) = Controller::start(Boot {
             config,
@@ -376,7 +419,7 @@ impl Member {
             entropy: Seeded::new(seed),
             incarnation: INCARNATION,
             first_sync: FIRST_SYNC,
-            requests: Recorder::default(),
+            requests,
         })
         .unwrap();
         let mut member = Self {
@@ -389,11 +432,6 @@ impl Member {
         };
         member.execute(effects);
         member
-    }
-
-    /// A fresh node `id`: genesis only.
-    pub fn fresh(config: &Config, id: NodeId) -> Self {
-        Self::start(config, id, genesis_journal(config, id), id.get())
     }
 
     /// Executes `effects` like a composition root: storage effects reach the journal,
@@ -478,5 +516,75 @@ impl Member {
                 | Effect::Observe(_) => None,
             })
             .collect()
+    }
+}
+
+/// The write path behind the seam, with every other operation only recorded: the
+/// request lifecycle W14.2's tests drive through the controller (the read path is W14.3's).
+#[derive(Debug)]
+pub struct Writes {
+    pub path: WritePath,
+    /// Attempts that were not writes, in order.
+    pub reads: Vec<AttemptId>,
+}
+
+impl Writes {
+    pub fn new(config: &Config, node: NodeId) -> Self {
+        Self {
+            path: WritePath::new(config, node),
+            reads: Vec::new(),
+        }
+    }
+}
+
+impl Requests for Writes {
+    fn attempt(
+        &mut self,
+        view: &mut View<'_>,
+        attempt: AttemptId,
+        op: ClientOp,
+        effects: &mut Vec<Effect>,
+    ) {
+        match op {
+            ClientOp::Write {
+                request_id,
+                mutation,
+            } => self
+                .path
+                .attempt(view, attempt, request_id, mutation, effects),
+            ClientOp::Get { .. } | ClientOp::Scan { .. } | ClientOp::Status { .. } => {
+                self.reads.push(attempt);
+            }
+        }
+    }
+
+    fn next_proposal(&mut self, view: &mut View<'_>) -> Option<Proposal> {
+        self.path.next_proposal(view)
+    }
+
+    fn proposed(
+        &mut self,
+        view: &mut View<'_>,
+        attempt: AttemptId,
+        result: Result<(), ProposeError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        self.path.proposed(view, attempt, result, effects);
+    }
+
+    fn applied(&mut self, applying: &mut Applying<'_>, effects: &mut Vec<Effect>) {
+        self.path.applied(applying, effects);
+    }
+
+    fn expired(&mut self, view: &mut View<'_>, attempt: AttemptId, effects: &mut Vec<Effect>) {
+        self.path.expired(view, attempt, effects);
+    }
+
+    fn status_changed(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>) {
+        self.path.status_changed(view, effects);
+    }
+
+    fn shutdown(&mut self, view: &mut View<'_>, effects: &mut Vec<Effect>) {
+        self.path.shutdown(view, effects);
     }
 }

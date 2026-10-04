@@ -10,12 +10,12 @@ use statemachine::{StateLimits, StateMachine};
 use types::{
     AttemptId, Config, DroppedInput, Effect, Entropy, Entry, EntryIndex, Inbound, Incarnation,
     Input, JournalRead, Lifecycle, Limit, LogEvent, LogIndex, NodeId, OutboundMessage,
-    ProposeError, Refusal, Response, Status, StorageOp, SyncSeq, Tick, invariant,
+    ProposeError, Refusal, Response, Role, Status, StorageOp, SyncSeq, Term, Tick, invariant,
 };
 
 use crate::deadlines::Deadlines;
 use crate::queue::{InboundQueue, Queued};
-use crate::requests::{Core, Proposal, Requests, View};
+use crate::requests::{Applying, Core, Proposal, Requests, View};
 
 #[cfg(test)]
 mod invariant_fixtures;
@@ -141,6 +141,22 @@ pub struct Controller<R: JournalRead, Q: Requests> {
     failure: Option<Failure>,
     /// Drops and refusals.
     counters: Counters,
+    /// What [`Requests::status_changed`] was last told about.
+    last_status: StatusKey,
+}
+
+/// What a status change is judged on: the lifecycle, and the library's role, term and
+/// believed leader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StatusKey {
+    /// The node's lifecycle.
+    lifecycle: Lifecycle,
+    /// The library's role.
+    role: Role,
+    /// The library's term.
+    term: Term,
+    /// The leader the library believes in.
+    leader: Option<NodeId>,
 }
 
 impl<R: JournalRead, Q: Requests> Controller<R, Q> {
@@ -241,8 +257,15 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
             startup_sync,
             failure: None,
             counters: Counters::default(),
+            last_status: StatusKey {
+                lifecycle: Lifecycle::Ready,
+                role: Role::Follower,
+                term: Term::ZERO,
+                leader: None,
+            },
         };
         controller.poll(&mut effects);
+        controller.last_status = controller.status_key();
         Ok((controller, effects))
     }
 
@@ -321,6 +344,7 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
     pub fn admit(&mut self, input: Input) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.admit_into(input, &mut effects);
+        self.observe_status(&mut effects);
         effects
     }
 
@@ -468,7 +492,9 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
         }
         let start = effects.len();
         let mut applier = Applier {
+            node: self.core.node,
             state: &mut self.core.state,
+            deadlines: &mut self.core.deadlines,
             requests: &mut self.requests,
         };
         let result = self.raft.sync_done(seq, incarnation, &mut applier, effects);
@@ -482,7 +508,9 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
     fn poll(&mut self, effects: &mut Vec<Effect>) {
         let start = effects.len();
         let mut applier = Applier {
+            node: self.core.node,
             state: &mut self.core.state,
+            deadlines: &mut self.core.deadlines,
             requests: &mut self.requests,
         };
         let result = self.raft.poll(&mut applier, effects);
@@ -510,7 +538,9 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
         );
         let start = effects.len();
         let mut applier = Applier {
+            node: self.core.node,
             state: &mut self.core.state,
+            deadlines: &mut self.core.deadlines,
             requests: &mut self.requests,
         };
         let result = self.raft.feed(input, &mut applier, effects);
@@ -522,6 +552,28 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
                 None
             }
         }
+    }
+
+    /// The current [`StatusKey`].
+    const fn status_key(&self) -> StatusKey {
+        let status = self.raft.status();
+        StatusKey {
+            lifecycle: self.core.lifecycle,
+            role: status.role,
+            term: status.term,
+            leader: status.leader,
+        }
+    }
+
+    /// Tells the request lifecycle if the status changed since it was last told (§7.8).
+    fn observe_status(&mut self, effects: &mut Vec<Effect>) {
+        let now = self.status_key();
+        if now == self.last_status {
+            return;
+        }
+        self.last_status = now;
+        let mut view = View::new(&mut self.core, self.raft.status());
+        self.requests.status_changed(&mut view, effects);
     }
 
     /// Whether the loop can take an input: the node is not failed and no sync is
@@ -586,7 +638,10 @@ impl<R: JournalRead, Q: Requests> Inbound for Controller<R, Q> {
     fn step(&mut self, input: Input) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.admit_into(input, &mut effects);
-        while self.turn(&mut effects) {}
+        self.observe_status(&mut effects);
+        while self.turn(&mut effects) {
+            self.observe_status(&mut effects);
+        }
         effects
     }
 }
@@ -594,8 +649,12 @@ impl<R: JournalRead, Q: Requests> Inbound for Controller<R, Q> {
 /// The loop's [`Apply`]: the state machine applies each committed entry, and the request
 /// lifecycle learns what it decided (§7.4 step 5, §7.5).
 struct Applier<'a, Q> {
+    /// This node.
+    node: NodeId,
     /// The state machine.
     state: &'a mut StateMachine,
+    /// The attempt deadlines.
+    deadlines: &'a mut Deadlines,
     /// The request lifecycle.
     requests: &'a mut Q,
 }
@@ -603,7 +662,15 @@ struct Applier<'a, Q> {
 impl<Q: Requests> Apply for Applier<'_, Q> {
     fn apply(&mut self, entry: &Entry, commit: LogIndex, effects: &mut Vec<Effect>) {
         let applied = self.state.apply(entry, commit);
-        self.requests.applied(entry, &applied, commit, effects);
+        let mut applying = Applying {
+            node: self.node,
+            entry,
+            applied: &applied,
+            commit,
+            state: &*self.state,
+            deadlines: &mut *self.deadlines,
+        };
+        self.requests.applied(&mut applying, effects);
     }
 }
 

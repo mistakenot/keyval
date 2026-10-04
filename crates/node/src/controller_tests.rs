@@ -290,6 +290,7 @@ fn matches_proposed(handed: &Handed) -> bool {
         Handed::Attempt { .. }
         | Handed::Applied { .. }
         | Handed::Expired { .. }
+        | Handed::StatusChanged { .. }
         | Handed::Shutdown => false,
     }
 }
@@ -368,6 +369,7 @@ fn a_burst_of_ticks_is_processed_eight_per_turn_between_queued_inputs() {
             Handed::Proposed { .. }
             | Handed::Applied { .. }
             | Handed::Expired { .. }
+            | Handed::StatusChanged { .. }
             | Handed::Shutdown => None,
         })
         .collect();
