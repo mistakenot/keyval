@@ -935,6 +935,25 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 32,
     },
+    CheckDef {
+        id: "STORAGE-CONTRACT",
+        summary: "the one adapter-agnostic byte-storage contract suite (a missing \
+                  journal is Missing, create never clobbers, appends read back exactly, \
+                  reads are never silently short, truncate shortens and never lengthens, \
+                  synced state survives a clean restart, the lock refuses a second \
+                  holder, and execute completes each sync with its own sequence and \
+                  incarnation and reports failures as StorageFailed) passes on the \
+                  in-memory reference and catches every broken reference (§7.2, P3)",
+        kind: Kind::TestGroup,
+        covers: &["P3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["contract_reference::", "contract_broken::"],
+        },
+        min_cases: 23,
+    },
 ];
 
 /// Outcome of one requested check.

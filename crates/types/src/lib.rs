@@ -37,7 +37,9 @@
 //!   turns an [`Input`] into ordered [`Effect`] values, and every storage effect can be
 //!   reported failed ([`StorageOp`]); the in-process ports are [`Entropy`],
 //!   [`JournalRead`] and the [`DataDir`] lock; and [`Consensus`] isolates the Raft
-//!   library, so no library type crosses it.
+//!   library, so no library type crosses it. Both byte-storage adapters implement
+//!   [`ByteStorage`], and [`execute`] turns a storage effect into its completion for
+//!   every composition root alike (W12).
 //!
 //! - **Config** (O-5, CD-3, §7.10): [`Config::parse`] reads the one static config file
 //!   with a strict in-crate reader and refuses every §7.10 inconsistency with a specific
@@ -59,6 +61,7 @@
 //! (checks LINT-TIERS and LINT-PROBES).
 
 mod bounded;
+mod byte_storage;
 mod client;
 mod config;
 mod consensus;
@@ -79,6 +82,7 @@ mod sha256;
 mod telemetry;
 
 pub use bounded::{BoundedMap, BoundedQueue, MapFull, QueueFull, QueueRefused};
+pub use byte_storage::{ByteStorage, Executed, execute};
 pub use client::{
     AttemptId, ClientOp, HistoryLimit, Refusal, Response, ScanItem, ScanPage, ScanRange,
     ScanRangeError, ServedBy,
