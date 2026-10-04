@@ -12,8 +12,8 @@ use types::{
 };
 
 use crate::{
-    FrameKind, Genesis, GenesisMismatch, JournalError, LogBounds, LogicalLog, MAX_FRAME_LEN,
-    RaftBatch, Recovered, RecoveryError, encode, recover,
+    FrameError, FrameKind, Genesis, GenesisMismatch, HEADER_LEN, JournalError, LogBounds,
+    LogicalLog, MAX_FRAME_LEN, RaftBatch, Recovered, RecoveryError, crc32c, encode, recover,
 };
 
 /// The repository's local cluster config.
@@ -163,6 +163,24 @@ fn prefix(bytes: &[u8], cut: u64) -> &[u8] {
     &bytes[..usize::try_from(cut).unwrap()]
 }
 
+/// The bytes of a frame's header that its header checksum covers (§7.6).
+const HEADER_CHECKED: usize = 20;
+
+/// `bytes` with the frame starting at `start` (of `frame_len` bytes) given `field` at
+/// header offset `at`, and both its checksums made valid again, so that only the field is
+/// wrong: an intact, deliberately written header, not crash damage.
+fn reforged(bytes: &[u8], start: u64, frame_len: u64, at: usize, field: &[u8]) -> Vec<u8> {
+    let mut bytes = bytes.to_vec();
+    let start = usize::try_from(start).unwrap();
+    let end = start + usize::try_from(frame_len).unwrap();
+    bytes[start + at..start + at + field.len()].copy_from_slice(field);
+    let header = crc32c(&bytes[start..start + HEADER_CHECKED]);
+    bytes[start + HEADER_CHECKED..start + HEADER_LEN].copy_from_slice(&header.to_le_bytes());
+    let frame = crc32c(&bytes[start..end - 8]);
+    bytes[end - 8..end - 4].copy_from_slice(&frame.to_le_bytes());
+    bytes
+}
+
 #[test]
 fn a_clean_journal_rebuilds_the_live_log() {
     let journal = Journal::new(standard());
@@ -283,6 +301,85 @@ fn only_a_blank_or_partial_genesis_permits_init() {
         !refused.permits_init(),
         "rule: TailTooLong never permits init"
     );
+}
+
+#[test]
+fn an_intact_header_with_an_impossible_field_refuses_and_is_never_truncated() {
+    let journal = Journal::new(standard());
+    let last = journal.starts[2];
+    let last_len = len(&journal.bytes) - last;
+    let too_long = u32::try_from(types::MAX_FRAME_PAYLOAD_BYTES + 1).unwrap();
+    let cases = [
+        (
+            "version 2",
+            4,
+            vec![2, 0],
+            FrameError::UnsupportedVersion { version: 2 },
+        ),
+        ("kind 3", 6, vec![3], FrameError::UnknownKind { code: 3 }),
+        (
+            "reserved 1",
+            7,
+            vec![1],
+            FrameError::NonZeroReserved { value: 1 },
+        ),
+        (
+            "an over-length payload",
+            8,
+            too_long.to_le_bytes().to_vec(),
+            FrameError::PayloadTooLong {
+                len: u64::from(too_long),
+            },
+        ),
+        ("sequence 0", 12, vec![0; 8], FrameError::ZeroSequence),
+    ];
+    for (what, at, field, error) in cases {
+        let bytes = reforged(&journal.bytes, last, last_len, at, &field);
+        let refused = journal.recover(&bytes).unwrap_err();
+        assert_eq!(
+            refused,
+            RecoveryError::ImpossibleHeader { at: last, error },
+            "rule: a synced final frame whose intact header holds {what} is damage outside \
+             the crash model, refused, never cut away as a torn tail with its hard state \
+             (DUR-9, DUR-6, br-o69w)"
+        );
+        assert!(!refused.permits_init(), "{what}");
+        let genesis_len = journal.genesis_len();
+        let first = reforged(&journal.bytes, 0, genesis_len, at, &field);
+        let refused = journal.recover(&first).unwrap_err();
+        assert_eq!(
+            refused,
+            RecoveryError::ImpossibleHeader { at: 0, error },
+            "rule: a genesis whose intact header holds {what} (say, a journal of another \
+             format version) is never offered to init (§7.7 step 0)"
+        );
+        assert!(!refused.permits_init(), "{what} at the genesis");
+    }
+}
+
+#[test]
+fn more_bytes_than_one_genesis_frame_without_a_valid_genesis_is_not_an_interrupted_init() {
+    let journal = Journal::new(Vec::new());
+    let genesis_len = journal.genesis_len();
+    let damaged = flipped(&journal.bytes, genesis_len - 12);
+    assert_eq!(
+        journal.recover(&damaged),
+        Err(RecoveryError::IncompleteGenesis),
+        "control: a full-length damaged genesis is an interrupted init"
+    );
+    let mut longer = damaged;
+    longer.push(0);
+    let refused = journal.recover(&longer).unwrap_err();
+    assert_eq!(
+        refused,
+        RecoveryError::NotAnInterruptedInit {
+            len: genesis_len + 1,
+            genesis_len
+        },
+        "rule: an interrupted init leaves at most one genesis frame of bytes; more is \
+         content, never re-initialised (§7.7 step 0)"
+    );
+    assert!(!refused.permits_init());
 }
 
 #[test]

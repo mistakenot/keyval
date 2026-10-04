@@ -44,4 +44,5 @@ The body frames:
 | `sequence-gap.bin` | F2 then F4, with no sequence 3: a sequence gap with a valid continuation, refused |
 | `tail-too-long.bin` | `clean.bin` plus one maximum frame and a byte of zeros (1,048,609 bytes): a trailing region longer than the crash model allows, refused |
 | `truncation-below-commit.bin` | `clean.bin` (commit 2) plus a sequence-4 frame replacing index 2: a truncation below the commit, refused (DUR-6) |
+| `impossible-version-final.bin` | `clean.bin` plus F4 with format version 2 and both checksums recomputed: an intact, deliberately written header this build never writes, refused (never a torn tail; DUR-9, br-o69w) |
 | `commit-regression.bin` | `clean.bin` (commit 2) plus a sequence-4 frame with no entries and hard state term 1, vote 1, commit 1: a persisted commit going back, an impossible history, refused (br-n60a, §7.6) |

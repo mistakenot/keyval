@@ -10,7 +10,10 @@
 //! 2. Frames are read in order and applied to a [`LogicalLog`], exactly as live appends
 //!    are (CD-10). The first frame that fails validation (bad magic, a checksum, an
 //!    impossible length, the wrong kind or sequence) ends the durable prefix at the last
-//!    valid frame N. A checksum-valid frame of the right sequence is refused if its batch
+//!    valid frame N. A frame whose header is intact (its header checksum holds) but holds
+//!    a field this build never writes (a version, kind, reserved byte, length or sequence
+//!    0) is not crash damage: it refuses, whether it is the genesis or a later frame
+//!    (DUR-9, br-o69w). A checksum-valid frame of the right sequence is refused if its batch
 //!    is invalid, cannot apply (an impossible index or term relationship, DUR-6), or
 //!    votes for a node outside the genesis voters.
 //! 3. The **resync scan** then searches the entire remainder, at every offset, for a
@@ -30,10 +33,13 @@
 use core::fmt;
 
 use types::{
-    ByteCount, Config, JournalRead, MAX_FRAME_PAYLOAD_BYTES, NodeId, ReadLen, StorageError,
+    ByteCount, Config, InstanceId, JournalRead, MAX_FRAME_PAYLOAD_BYTES, NodeId, ReadLen,
+    StorageError,
 };
 
-use crate::frame::{FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode, decode_header};
+use crate::frame::{
+    FrameError, FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode, decode_header,
+};
 use crate::log::{JournalError, LogBounds, LogicalLog, read_exact};
 use crate::record::{Genesis, GenesisMismatch, RaftBatch, RecordError};
 
@@ -98,6 +104,23 @@ pub enum RecoveryError {
     /// The journal holds no complete genesis frame and nothing after it: a crash
     /// interrupted `init`, which may re-run (§7.7 step 0). An ordinary start refuses.
     IncompleteGenesis,
+    /// The journal holds no valid genesis, yet more bytes than the genesis frame an
+    /// interrupted `init` can leave: content, never re-initialised (§7.7 step 0).
+    NotAnInterruptedInit {
+        /// The journal's length.
+        len: u64,
+        /// The length of a genesis frame for this configuration and node.
+        genesis_len: u64,
+    },
+    /// A frame whose header is intact (its header checksum holds) but holds a field this
+    /// build never writes. A torn append is a prefix of a frame this build wrote, so this
+    /// is damage outside the crash model, never a torn tail (DUR-9, br-o69w).
+    ImpossibleHeader {
+        /// The frame's offset.
+        at: u64,
+        /// The impossible field.
+        error: FrameError,
+    },
     /// The first frame is valid but is not the genesis at sequence 1.
     NotGenesis {
         /// Its kind.
@@ -162,7 +185,9 @@ impl RecoveryError {
     pub const fn permits_init(&self) -> bool {
         match self {
             Self::Empty | Self::IncompleteGenesis => true,
-            Self::NotGenesis { .. }
+            Self::NotAnInterruptedInit { .. }
+            | Self::ImpossibleHeader { .. }
+            | Self::NotGenesis { .. }
             | Self::GenesisRecord(_)
             | Self::Mismatch(_)
             | Self::Record { .. }
@@ -182,6 +207,17 @@ impl fmt::Display for RecoveryError {
             Self::IncompleteGenesis => f.write_str(
                 "the journal holds no complete genesis and nothing after it: only init may \
                  re-run",
+            ),
+            Self::NotAnInterruptedInit { len, genesis_len } => write!(
+                f,
+                "the journal holds no valid genesis but {len} bytes, more than the \
+                 {genesis_len}-byte genesis frame an interrupted init can leave: it is never \
+                 re-initialised"
+            ),
+            Self::ImpossibleHeader { at, error } => write!(
+                f,
+                "frame at offset {at} has an intact header (its checksum holds) with {error}: \
+                 this build never writes such a header, so it is damage, not a torn tail"
             ),
             Self::NotGenesis { kind, sequence } => write!(
                 f,
@@ -229,6 +265,8 @@ enum Slot {
     /// An intact header (its checksum holds, so its length is trustworthy, D-69) whose
     /// frame is cut short or fails its checksum.
     Torn(Header),
+    /// An intact header holding a field this build never writes ([`FrameError::header_intact`]).
+    Impossible(FrameError),
     /// No intact header.
     Damaged,
 }
@@ -249,8 +287,10 @@ fn read_slot(
         return Ok(Slot::Damaged);
     }
     let header_bytes = read_exact(storage, offset, HEADER_LEN).map_err(RecoveryError::Storage)?;
-    let Ok(header) = decode_header(&header_bytes) else {
-        return Ok(Slot::Damaged);
+    let header = match decode_header(&header_bytes) {
+        Ok(header) => header,
+        Err(error) if error.header_intact() => return Ok(Slot::Impossible(error)),
+        Err(_) => return Ok(Slot::Damaged),
     };
     if available < len_u64(header.frame_len()) {
         return Ok(Slot::Torn(header));
@@ -326,6 +366,12 @@ fn judge_remainder(
             damaged_at.saturating_add(len_u64(header.frame_len()))
         }
         Slot::Torn(header) => damaged_at.saturating_add(len_u64(header.frame_len())),
+        Slot::Impossible(error) => {
+            return Err(RecoveryError::ImpossibleHeader {
+                at: damaged_at,
+                error: *error,
+            });
+        }
         Slot::Damaged => damaged_at.saturating_add(1),
     };
     if let Some((valid_at, sequence)) = find_later_frame(storage, resume_at, journal_len, last)? {
@@ -343,6 +389,13 @@ fn judge_remainder(
         });
     }
     Ok(())
+}
+
+/// The length of the genesis frame `init` writes for `node` under `config`, if the
+/// configuration lists the node. The instance ID's bytes do not change it.
+fn genesis_frame_len(config: &Config, node: NodeId) -> Option<u64> {
+    let genesis = Genesis::new(config, node, InstanceId::from_bytes([0; 16]))?;
+    Some(len_u64(HEADER_LEN + genesis.encode().len() + TRAILER_LEN))
 }
 
 /// Recovers the journal of `journal_len` bytes for `node` under `config`, into a logical
@@ -370,6 +423,16 @@ pub fn recover(
     let first = read_slot(storage, 0, journal_len)?;
     let Slot::Valid { header, payload } = first else {
         judge_remainder(storage, 0, &first, journal_len, 0)?;
+        // An interrupted init leaves at most one genesis frame's worth of bytes: a torn
+        // prefix, perhaps filled out with zeros or garbage to the append's full length.
+        if let Some(genesis_len) = genesis_frame_len(config, node)
+            && journal_len > genesis_len
+        {
+            return Err(RecoveryError::NotAnInterruptedInit {
+                len: journal_len,
+                genesis_len,
+            });
+        }
         return Err(RecoveryError::IncompleteGenesis);
     };
     if header.kind() != FrameKind::Genesis || header.sequence() != 1 {

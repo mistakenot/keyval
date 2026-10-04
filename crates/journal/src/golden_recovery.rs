@@ -18,7 +18,7 @@ use types::{
 };
 
 use crate::{
-    FrameKind, Genesis, JournalError, LogBounds, LogicalLog, MAX_FRAME_LEN, Recovered,
+    FrameError, FrameKind, Genesis, JournalError, LogBounds, LogicalLog, MAX_FRAME_LEN, Recovered,
     RecoveryError, encode, recover,
 };
 
@@ -112,7 +112,7 @@ fn contents(log: &LogicalLog, body: &[u8]) -> (Vec<Entry>, HardState) {
 }
 
 /// The goldens, by file name.
-const GOLDENS: [(&str, &[u8]); 17] = [
+const GOLDENS: [(&str, &[u8]); 18] = [
     ("empty.bin", include_bytes!("../golden/recovery/empty.bin")),
     (
         "incomplete-genesis.bin",
@@ -170,6 +170,10 @@ const GOLDENS: [(&str, &[u8]); 17] = [
     (
         "truncation-below-commit.bin",
         include_bytes!("../golden/recovery/truncation-below-commit.bin"),
+    ),
+    (
+        "impossible-version-final.bin",
+        include_bytes!("../golden/recovery/impossible-version-final.bin"),
     ),
     (
         "commit-regression.bin",
@@ -342,6 +346,13 @@ fn every_corruption_golden_is_refused() {
             },
         ),
         (
+            "impossible-version-final.bin",
+            RecoveryError::ImpossibleHeader {
+                at: F2 + F3,
+                error: FrameError::UnsupportedVersion { version: 2 },
+            },
+        ),
+        (
             "commit-regression.bin",
             RecoveryError::Apply {
                 at: F2 + F3,
@@ -390,8 +401,13 @@ fn relative(error: RecoveryError) -> RecoveryError {
             at: at - base,
             vote,
         },
+        RecoveryError::ImpossibleHeader { at, error } => RecoveryError::ImpossibleHeader {
+            at: at - base,
+            error,
+        },
         RecoveryError::Empty
         | RecoveryError::IncompleteGenesis
+        | RecoveryError::NotAnInterruptedInit { .. }
         | RecoveryError::NotGenesis { .. }
         | RecoveryError::GenesisRecord(_)
         | RecoveryError::Mismatch(_)

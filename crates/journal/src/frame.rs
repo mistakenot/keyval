@@ -172,6 +172,8 @@ pub enum FrameError {
         /// The payload's length.
         len: u64,
     },
+    /// Sequence 0, which no frame carries: the genesis is 1 and batches follow it.
+    ZeroSequence,
     /// The frame checksum does not match the header and payload.
     Checksum {
         /// The stored checksum.
@@ -210,6 +212,7 @@ impl fmt::Display for FrameError {
                     "payload of {len} bytes exceeds {MAX_FRAME_PAYLOAD_BYTES}"
                 )
             }
+            Self::ZeroSequence => f.write_str("frame sequence 0, which no frame carries"),
             Self::Checksum { stored, computed } => write!(
                 f,
                 "frame checksum mismatch: stored {stored:#010x}, computed {computed:#010x}"
@@ -225,6 +228,28 @@ impl fmt::Display for FrameError {
 }
 
 impl std::error::Error for FrameError {}
+
+impl FrameError {
+    /// Whether the header was intact, its checksum valid, yet held a field no frame this
+    /// build writes can have. A torn append is a prefix of a frame this build wrote, so this
+    /// is never crash damage: recovery refuses it (DUR-9, br-o69w). The other errors mean
+    /// no intact header, or a frame cut short or failing its frame checksum.
+    #[must_use]
+    pub const fn header_intact(&self) -> bool {
+        match self {
+            Self::UnsupportedVersion { .. }
+            | Self::UnknownKind { .. }
+            | Self::NonZeroReserved { .. }
+            | Self::PayloadTooLong { .. }
+            | Self::ZeroSequence => true,
+            Self::Incomplete { .. }
+            | Self::BadMagic
+            | Self::HeaderChecksum { .. }
+            | Self::Checksum { .. }
+            | Self::TrailingLength { .. } => false,
+        }
+    }
+}
 
 /// The `N` bytes at `at`, if present.
 fn bytes_at<const N: usize>(bytes: &[u8], at: usize) -> Option<[u8; N]> {
@@ -304,6 +329,9 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, FrameError> {
         });
     }
     let sequence = bytes_at(header, 12).map_or(0, u64::from_le_bytes);
+    if sequence == 0 {
+        return Err(FrameError::ZeroSequence);
+    }
     Ok(Header {
         kind,
         payload_len,
