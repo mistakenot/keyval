@@ -1716,7 +1716,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                   system, logged, and each draw moves its stream on; the node's log is one JSON \
                   object per line (boot with the seed, lifecycle changes, observations, stop), \
                   behind a log_queue_records (4,096) queue whose full drops are counted and \
-                  reported in the log",
+                  reported in the log; and the node's essential threads (controller, I/O, clock, \
+                  log writer, HTTP accept) run under a watch: a panic on any of them halts the \
+                  node, which then reads failed, takes no more input, logs thread_panicked, and \
+                  stops (CD-7, A-2, br-7tjt)",
         kind: Kind::TestGroup,
         covers: &["O-3", "DUR-3", "CD-9"],
         class: ClaimClass::Invariant,
@@ -1729,9 +1732,10 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "clock::tests::",
                 "entropy::tests::",
                 "logs::tests::",
+                "watch::tests::",
             ],
         },
-        min_cases: 13,
+        min_cases: 19,
     },
     CheckDef {
         id: "SIM-CLUSTER",

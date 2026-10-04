@@ -14,11 +14,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 use types::{DroppedInput, Lifecycle, LogEvent, LogLevel, NodeId, Observation, Role};
+
+use crate::watch::Watch;
 
 /// The log's sending end: cheap to clone, never blocks.
 #[derive(Clone, Debug)]
@@ -29,8 +31,8 @@ pub struct Log {
 }
 
 impl Log {
-    /// Opens (appending to) the log file at `path` and starts its writer, with a queue of
-    /// `capacity` records.
+    /// Opens (appending to) the log file at `path` and starts its writer under `watch`, with
+    /// a queue of `capacity` records.
     ///
     /// # Errors
     ///
@@ -39,12 +41,13 @@ impl Log {
         path: &Path,
         node: NodeId,
         capacity: usize,
+        watch: &Arc<Watch>,
     ) -> io::Result<(Self, JoinHandle<io::Result<()>>)> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Self::start(file, node, capacity)
+        Self::start(file, node, capacity, watch)
     }
 
-    /// Starts a writer to `out`, with a queue of `capacity` records.
+    /// Starts a writer to `out` under `watch`, with a queue of `capacity` records.
     ///
     /// # Errors
     ///
@@ -53,14 +56,15 @@ impl Log {
         out: W,
         node: NodeId,
         capacity: usize,
+        watch: &Arc<Watch>,
     ) -> io::Result<(Self, JoinHandle<io::Result<()>>)> {
         let (queue, records) = mpsc::sync_channel(capacity);
         let dropped = Arc::new(AtomicU64::new(0));
         let writer = {
             let dropped = Arc::clone(&dropped);
-            thread::Builder::new()
-                .name("keyval-log".to_owned())
-                .spawn(move || write_records(out, node, &records, &dropped))?
+            watch.spawn("keyval-log", move || {
+                write_records(out, node, &records, &dropped)
+            })?
         };
         Ok((
             Self {
@@ -238,6 +242,8 @@ mod tests {
     use types::{Lifecycle, LogEvent, LogIndex, LogLevel, NodeId, Observation, Role, Term};
 
     use super::{Log, base, write_records};
+    use crate::inbox::Inbox;
+    use crate::watch::Watch;
 
     /// An in-memory log file, readable while the writer holds a handle to it.
     #[derive(Clone, Default)]
@@ -271,7 +277,8 @@ mod tests {
     fn events_and_observations_are_written_as_json_lines() {
         let buffer = Buffer::default();
         let node = NodeId::new(3).unwrap();
-        let (log, writer) = Log::start(buffer.clone(), node, 16).unwrap();
+        let watch = Arc::new(Watch::new(Arc::new(Inbox::new(1, 1))));
+        let (log, writer) = Log::start(buffer.clone(), node, 16, &watch).unwrap();
         log.event(LogEvent::RoleChanged {
             role: Role::Leader,
             term: Term::new(2).unwrap(),

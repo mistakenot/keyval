@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use fs_storage::FsStorage;
@@ -34,6 +34,7 @@ use crate::inbox::{Inbox, Refused};
 use crate::io::{Io, MAX_QUEUED_EFFECTS};
 use crate::logs::{Log, base, lifecycle_name};
 use crate::run::Prepared;
+use crate::watch::{Halt, Watch};
 
 /// Where the core's answers and peer messages go: supplied by the HTTP adapters (W18.3).
 /// Both are called on the controller thread, so they must hand off quickly.
@@ -113,6 +114,8 @@ pub struct Node {
     ticker: JoinHandle<()>,
     io: JoinHandle<FsStorage>,
     log_writer: JoinHandle<std::io::Result<()>>,
+    /// The watch over the node's threads: a panic on one halts the node (br-7tjt).
+    watch: Arc<Watch>,
 }
 
 /// Starts `node` of `config` from its prepared data directory.
@@ -132,8 +135,20 @@ pub fn start(
     let entropy = BootEntropy::new(seed);
     let incarnation = Incarnation::new(seed);
     let capacity = |limit| usize::try_from(config.limit(limit)).unwrap_or(usize::MAX);
-    let (log, log_writer) = Log::open(&options.log_file, node, capacity(Limit::LogQueueRecords))
-        .map_err(system("the log file"))?;
+    let inbox = Arc::new(Inbox::new(
+        capacity(Limit::ControllerQueueInputs),
+        MAX_QUEUED_EFFECTS + 1,
+    ));
+    // Every essential thread runs under the watch: a panic on one halts the node (br-7tjt).
+    let watch = Arc::new(Watch::new(Arc::clone(&inbox)));
+    let (log, log_writer) = Log::open(
+        &options.log_file,
+        node,
+        capacity(Limit::LogQueueRecords),
+        &watch,
+    )
+    .map_err(system("the log file"))?;
+    watch.log_to(log.clone());
     let mut boot = base(LogLevel::Info, "boot");
     boot.insert("entropy_seed".to_owned(), json!(seed));
     boot.insert("incarnation".to_owned(), json!(incarnation.get()));
@@ -158,12 +173,14 @@ pub fn start(
         requests: RequestLifecycle::new(config, node),
     })
     .map_err(StartRefusal::Core)?;
-    let inbox = Arc::new(Inbox::new(
-        capacity(Limit::ControllerQueueInputs),
-        MAX_QUEUED_EFFECTS + 1,
-    ));
-    let (io, io_thread) = Io::spawn(storage, incarnation, Arc::clone(&inbox), log.clone())
-        .map_err(system("the I/O thread"))?;
+    let (io, io_thread) = Io::spawn(
+        storage,
+        incarnation,
+        Arc::clone(&inbox),
+        log.clone(),
+        &watch,
+    )
+    .map_err(system("the I/O thread"))?;
     let durable_last = controller.status().last;
     let snapshot = Arc::new(Mutex::new(snapshot_of(
         node,
@@ -188,13 +205,12 @@ pub fn start(
     task.publish();
     let controller_thread = {
         let inbox = Arc::clone(&inbox);
-        thread::Builder::new()
-            .name("keyval-controller".to_owned())
-            .spawn(move || task.run(&inbox))
+        watch
+            .spawn("keyval-controller", move || task.run(&inbox))
             .map_err(system("the controller thread"))?
     };
     let tick = Duration::from_millis(config.tick_ms());
-    let ticker = clock::spawn(Arc::clone(&inbox), tick).map_err(system("the ticker"))?;
+    let ticker = clock::spawn(Arc::clone(&inbox), tick, &watch).map_err(system("the ticker"))?;
     Ok(Node {
         id: node,
         seed,
@@ -206,6 +222,7 @@ pub fn start(
         ticker,
         io: io_thread,
         log_writer,
+        watch,
     })
 }
 
@@ -393,13 +410,52 @@ impl Node {
         self.log.record(record);
     }
 
-    /// The node as the controller last published it.
+    /// The node as the controller last published it; `failed` once the node halted, even if
+    /// the controller published after the halt (A-2, br-7tjt).
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
-        self.snapshot
+        let mut snapshot = self
+            .snapshot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .clone();
+        if self.watch.halted().is_some() {
+            snapshot.lifecycle = Lifecycle::Failed;
+        }
+        snapshot
+    }
+
+    /// Why the node halted, if a watched thread panicked (br-7tjt).
+    #[must_use]
+    pub fn halted(&self) -> Option<Halt> {
+        self.watch.halted()
+    }
+
+    /// Waits until a watched thread panics and the node halts; the process then exits
+    /// rather than serve half-alive (CD-7, br-7tjt).
+    #[must_use]
+    pub fn wait_halted(&self) -> Halt {
+        self.watch.wait()
+    }
+
+    /// Starts the thread `name` running `body` under the node's watch, as the HTTP accept
+    /// thread is: a panic on it halts the node.
+    ///
+    /// # Errors
+    ///
+    /// The operating system's error if the thread cannot be started.
+    pub fn spawn_watched<T, F>(&self, name: &str, body: F) -> std::io::Result<JoinHandle<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        self.watch.spawn(name, body)
+    }
+
+    /// The node's watch, for tests that halt it from outside.
+    #[cfg(test)]
+    pub(crate) fn watch(&self) -> &Watch {
+        &self.watch
     }
 
     /// Stops the node: the core answers what waits (§7.8 shutdown), the controller
@@ -408,7 +464,7 @@ impl Node {
     ///
     /// # Errors
     ///
-    /// The name of a thread that panicked, or the log writer's error.
+    /// The halt and the name of each thread that panicked, or the log writer's error.
     #[must_use = "a thread that panicked is reported here"]
     pub fn shutdown(self) -> Result<Snapshot, String> {
         self.inbox.complete(Input::Shutdown);
@@ -423,11 +479,16 @@ impl Node {
         if self.io.join().is_err() {
             failed.push("io".to_owned());
         }
-        let snapshot = self
+        let mut snapshot = self
             .snapshot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
+        if let Some(halt) = self.watch.halted() {
+            snapshot.lifecycle = Lifecycle::Failed;
+            failed.insert(0, format!("{} panicked: {}", halt.thread, halt.message));
+        }
+        self.watch.close_log();
         drop(self.log);
         match self.log_writer.join() {
             Ok(Ok(())) => {}

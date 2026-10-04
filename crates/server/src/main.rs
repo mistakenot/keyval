@@ -174,7 +174,8 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
         record.insert("warning".to_owned(), json!(warning));
         running.log(record);
     }
-    let serving = match serve(listener, Arc::new(running), responders, &config) {
+    let running = Arc::new(running);
+    let serving = match serve(listener, Arc::clone(&running), responders, &config) {
         Ok(serving) => serving,
         Err(err) => {
             let message = format!("cannot start serving: {err}");
@@ -190,13 +191,15 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
         data_dir.display(),
         log_file.display()
     );
-    match serving.wait() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(why) => {
-            eprintln!("keyval-server: {why}");
-            ExitCode::from(1)
-        }
-    }
+    // The process lives as long as the node: a panic on any of its threads (the HTTP accept
+    // thread included) halts it, and the process then exits rather than serve half-alive
+    // (CD-7, br-7tjt). The halt is in the node's log too.
+    let halt = running.wait_halted();
+    eprintln!(
+        "keyval-server: node {node} halted: the {} thread panicked: {}",
+        halt.thread, halt.message
+    );
+    ExitCode::from(1)
 }
 
 fn main() -> ExitCode {

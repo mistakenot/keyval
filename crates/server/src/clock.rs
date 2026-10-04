@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+
+use crate::watch::Watch;
 use std::time::{Duration, Instant};
 
 use crate::inbox::Inbox;
@@ -19,30 +21,35 @@ pub fn ticks_in(elapsed: Duration, tick: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos() / tick).unwrap_or(u64::MAX)
 }
 
-/// Starts the ticker: from now on, every `tick` the ticks elapsed since `start` and not yet
-/// handed over go to `inbox`, until it is closed.
+/// Starts the ticker under `watch`.
+///
+/// From now on, every `tick` the ticks elapsed since `start` and not yet handed over go to
+/// `inbox`, until it is closed. A panic on it halts the node, rather than silently stopping
+/// every election and deadline (br-7tjt).
 ///
 /// # Errors
 ///
 /// The operating system's error if the thread cannot be started.
-pub fn spawn(inbox: Arc<Inbox>, tick: Duration) -> std::io::Result<JoinHandle<()>> {
+pub fn spawn(
+    inbox: Arc<Inbox>,
+    tick: Duration,
+    watch: &Arc<Watch>,
+) -> std::io::Result<JoinHandle<()>> {
     let start = Instant::now();
-    thread::Builder::new()
-        .name("keyval-clock".to_owned())
-        .spawn(move || {
-            let mut delivered: u64 = 0;
-            while !inbox.is_closed() {
-                let next = delivered.saturating_add(1);
-                let at = start + tick.saturating_mul(u32::try_from(next).unwrap_or(u32::MAX));
-                let now = Instant::now();
-                if at > now {
-                    thread::sleep(at - now);
-                }
-                let elapsed = ticks_in(start.elapsed(), tick);
-                inbox.tick(elapsed.saturating_sub(delivered));
-                delivered = delivered.max(elapsed);
+    watch.spawn("keyval-clock", move || {
+        let mut delivered: u64 = 0;
+        while !inbox.is_closed() {
+            let next = delivered.saturating_add(1);
+            let at = start + tick.saturating_mul(u32::try_from(next).unwrap_or(u32::MAX));
+            let now = Instant::now();
+            if at > now {
+                thread::sleep(at - now);
             }
-        })
+            let elapsed = ticks_in(start.elapsed(), tick);
+            inbox.tick(elapsed.saturating_sub(delivered));
+            delivered = delivered.max(elapsed);
+        }
+    })
 }
 
 #[cfg(test)]
@@ -52,6 +59,7 @@ mod tests {
 
     use super::{spawn, ticks_in};
     use crate::inbox::Inbox;
+    use crate::watch::Watch;
 
     #[test]
     fn whole_ticks_count_and_a_pause_comes_back_as_one_batch() {
@@ -74,7 +82,8 @@ mod tests {
         let inbox = Arc::new(Inbox::new(4, 2));
         let tick = Duration::from_millis(2);
         let started = Instant::now();
-        let ticker = spawn(Arc::clone(&inbox), tick).unwrap();
+        let watch = Arc::new(Watch::new(Arc::clone(&inbox)));
+        let ticker = spawn(Arc::clone(&inbox), tick, &watch).unwrap();
         std::thread::sleep(Duration::from_millis(100));
         inbox.close();
         ticker.join().unwrap();

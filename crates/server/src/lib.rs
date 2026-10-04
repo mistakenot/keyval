@@ -33,3 +33,4 @@ pub mod query;
 pub mod run;
 pub mod runtime;
 pub mod serve;
+pub mod watch;

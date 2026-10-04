@@ -144,11 +144,13 @@ pub fn serve(
         connections: AtomicUsize::new(0),
         stop: AtomicBool::new(false),
     });
+    // Under the node's watch: a dead accept thread halts the node rather than leave it
+    // serving no one (br-7tjt).
     let accept = {
-        let shared = Arc::clone(&shared);
-        thread::Builder::new()
-            .name("keyval-accept".to_owned())
-            .spawn(move || accept_loop(&listener, &shared))?
+        let accepting = Arc::clone(&shared);
+        shared
+            .node
+            .spawn_watched("keyval-accept", move || accept_loop(&listener, &accepting))?
     };
     Ok(Serving {
         address,

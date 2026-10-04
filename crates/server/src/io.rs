@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 
 use fs_storage::FsStorage;
 use serde_json::json;
@@ -18,6 +18,7 @@ use types::{Effect, Executed, Incarnation, LogLevel, execute, invariant};
 
 use crate::inbox::Inbox;
 use crate::logs::{Log, base};
+use crate::watch::Watch;
 
 /// The storage effects one Ready can leave outstanding, and more: a create or truncate, an
 /// append, and their syncs.
@@ -30,7 +31,9 @@ pub struct Io {
 }
 
 impl Io {
-    /// Starts the I/O thread over `storage`, for completions of `incarnation`.
+    /// Starts the I/O thread over `storage`, for completions of `incarnation`, under
+    /// `watch`: a panic on it halts the node, so a waiting Ready never goes silently
+    /// unresolved (§7.12, br-7tjt).
     ///
     /// # Errors
     ///
@@ -40,42 +43,41 @@ impl Io {
         incarnation: Incarnation,
         inbox: Arc<Inbox>,
         log: Log,
+        watch: &Arc<Watch>,
     ) -> std::io::Result<(Self, JoinHandle<FsStorage>)> {
         let (queue, effects) = mpsc::sync_channel::<Effect>(MAX_QUEUED_EFFECTS);
-        let thread = thread::Builder::new()
-            .name("keyval-io".to_owned())
-            .spawn(move || {
-                for effect in effects {
-                    match execute(&mut storage, &effect, incarnation) {
-                        Executed::Done => {}
-                        Executed::Completion(input) => {
-                            if let types::Input::StorageFailed { op, .. } = &input {
-                                let mut record = base(LogLevel::Error, "storage_failed");
-                                record.insert("op".to_owned(), json!(format!("{op:?}")));
-                                record.insert(
-                                    "cause".to_owned(),
-                                    json!(storage.last_failure().map(|failure| format!(
-                                        "{} {}: {}",
-                                        failure.op,
-                                        failure.path.display(),
-                                        failure.cause
-                                    ))),
-                                );
-                                log.record(record);
-                            }
-                            inbox.complete(input);
-                        }
-                        Executed::NotStorage => {
-                            invariant!(
-                                false,
-                                "IO-STORAGE-ONLY",
-                                "the I/O thread was handed a non-storage effect: {effect:?}"
+        let thread = watch.spawn("keyval-io", move || {
+            for effect in effects {
+                match execute(&mut storage, &effect, incarnation) {
+                    Executed::Done => {}
+                    Executed::Completion(input) => {
+                        if let types::Input::StorageFailed { op, .. } = &input {
+                            let mut record = base(LogLevel::Error, "storage_failed");
+                            record.insert("op".to_owned(), json!(format!("{op:?}")));
+                            record.insert(
+                                "cause".to_owned(),
+                                json!(storage.last_failure().map(|failure| format!(
+                                    "{} {}: {}",
+                                    failure.op,
+                                    failure.path.display(),
+                                    failure.cause
+                                ))),
                             );
+                            log.record(record);
                         }
+                        inbox.complete(input);
+                    }
+                    Executed::NotStorage => {
+                        invariant!(
+                            false,
+                            "IO-STORAGE-ONLY",
+                            "the I/O thread was handed a non-storage effect: {effect:?}"
+                        );
                     }
                 }
-                storage
-            })?;
+            }
+            storage
+        })?;
         Ok((Self { queue }, thread))
     }
 
