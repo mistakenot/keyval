@@ -122,6 +122,65 @@ fn inputs_leave_in_arrival_order_and_peers_wait_for_the_library() {
 }
 
 #[test]
+fn draining_peers_takes_every_envelope_and_keeps_the_client_attempts() {
+    let mut queue = InboundQueue::new(node(), 8);
+    assert_eq!(
+        queue.drain_peers(),
+        0,
+        "rule: an empty peer lane drains nothing"
+    );
+    queue.offer_peer(peer(), vec![1]).unwrap();
+    queue.offer_client(AttemptId::new(1), get()).unwrap();
+    assert_eq!(
+        (queue.drain_peers(), queue.len()),
+        (1, 1),
+        "rule: draining takes the one peer envelope and leaves the client attempt (DM-7)"
+    );
+    for n in 0..3u8 {
+        queue.offer_peer(peer(), vec![n]).unwrap();
+    }
+    queue.offer_client(AttemptId::new(2), get()).unwrap();
+    assert_eq!(
+        (
+            queue.drain_peers(),
+            queue.len(),
+            queue.next(false),
+            queue.next(false)
+        ),
+        (
+            3,
+            2,
+            Some(Queued::Client {
+                attempt: AttemptId::new(1),
+                op: get()
+            }),
+            Some(Queued::Client {
+                attempt: AttemptId::new(2),
+                op: get()
+            })
+        ),
+        "rule: draining takes every peer envelope; the client attempts stay queued, in arrival \
+         order (§7.11)"
+    );
+    let mut full = InboundQueue::new(node(), 2);
+    full.offer_peer(peer(), vec![1]).unwrap();
+    full.offer_peer(peer(), vec![2]).unwrap();
+    let refused = full.offer_client(AttemptId::new(3), get()).is_err();
+    let drained = full.drain_peers();
+    assert_eq!(
+        (
+            refused,
+            drained,
+            full.offer_client(AttemptId::new(3), get()).is_ok(),
+            full.len()
+        ),
+        (true, 2, true, 1),
+        "rule: at the bound of 2 a client attempt is refused; once the peers are drained, \
+         their places take it (§7.11)"
+    );
+}
+
+#[test]
 fn a_write_is_queued_like_any_attempt() {
     let mut queue = InboundQueue::new(node(), 1);
     queue

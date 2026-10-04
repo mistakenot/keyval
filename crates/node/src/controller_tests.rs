@@ -144,6 +144,105 @@ fn a_torn_tail_is_truncated_and_synced_before_the_first_append() {
     );
 }
 
+/// A failed sync of the lone node's outstanding Ready.
+fn fail_the_sync(member: &mut Member) -> (Vec<Effect>, StorageOp) {
+    let op = StorageOp::Sync(member.ctl.outstanding_sync().unwrap());
+    let effects = member.step(Input::StorageFailed {
+        op,
+        incarnation: INCARNATION,
+    });
+    (effects, op)
+}
+
+#[test]
+fn peers_queued_when_the_node_fails_during_a_sync_are_dropped_and_counted_at_once() {
+    let mut member = syncing_lone();
+    let stranger = NodeId::new(2).unwrap();
+    for n in 0..3u8 {
+        member.step(Input::Peer {
+            from: stranger,
+            bytes: vec![n],
+        });
+    }
+    assert_eq!(
+        member.ctl.queued(),
+        3,
+        "fixture: three envelopes wait for the outstanding sync"
+    );
+    let (effects, op) = fail_the_sync(&mut member);
+    let mut expected = vec![Effect::Log(LogEvent::LifecycleChanged {
+        from: Lifecycle::Ready,
+        to: Lifecycle::Failed,
+    })];
+    expected.extend(std::iter::repeat_n(dropped_peer(), 3));
+    assert_eq!(
+        (
+            effects,
+            member.ctl.queued(),
+            member.ctl.counters().peers_failed,
+            member.ctl.failure().cloned()
+        ),
+        (expected, 0, 3, Some(Failure::Storage(op))),
+        "rule: when the node fails, the envelopes already queued are dropped, counted and \
+         logged at once; its sync never completes, so they would wait forever (DM-7, CD-9)"
+    );
+    for _ in 0..10 {
+        member.step(Input::Tick);
+    }
+    assert_eq!(
+        (
+            member.ctl.queued(),
+            member.ctl.counters().peers_failed,
+            member.ctl.envelope_drops().total()
+        ),
+        (0, 3, 0),
+        "rule: nothing is left waiting, and no envelope is opened or counted twice"
+    );
+}
+
+#[test]
+fn a_queue_full_of_peers_at_a_failure_frees_its_places_for_client_attempts() {
+    let mut member = syncing_lone();
+    let bound = 1_024;
+    let stranger = NodeId::new(2).unwrap();
+    for n in 0..bound {
+        member.step(Input::Peer {
+            from: stranger,
+            bytes: vec![u8::try_from(n % 251).unwrap()],
+        });
+    }
+    assert_eq!(member.ctl.queued(), bound, "fixture: the queue is full");
+    fail_the_sync(&mut member);
+    let attempt = AttemptId::new(77);
+    let effects = member.step(Input::Client {
+        attempt,
+        op: get("k"),
+    });
+    assert_eq!(
+        (
+            effects,
+            member.ctl.requests().attempts(),
+            member.ctl.requests().handed.last().cloned(),
+            member.ctl.counters().clients_queue_full,
+            member.ctl.counters().peers_failed
+        ),
+        (
+            Vec::new(),
+            vec![attempt],
+            Some(Handed::Attempt {
+                attempt,
+                now: member.ctl.now(),
+                lifecycle: Lifecycle::Failed
+            }),
+            0,
+            u64::try_from(bound).unwrap()
+        ),
+        "rule: a failed node's client attempt reaches the request lifecycle, as Failed (whose \
+         policy answers recovering, A-2), instead of 429 busy from places held by envelopes \
+         the node will never open (DM-7, §7.11)"
+    );
+}
+
 #[test]
 fn at_the_queue_bound_peers_are_dropped_and_clients_get_busy_but_completions_and_ticks_get_in() {
     let mut member = syncing_lone();

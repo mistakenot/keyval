@@ -88,7 +88,8 @@ pub struct Counters {
     pub clients_queue_full: u64,
     /// Peer messages refused after their envelope opened ([`StepRefusal`]).
     pub peers_refused: u64,
-    /// Peer envelopes dropped because the node is failed (DM-7).
+    /// Peer envelopes dropped because the node is failed (DM-7): at admission, or
+    /// already queued when it failed.
     pub peers_failed: u64,
     /// Completions from another incarnation, ignored (§7.2).
     pub stale_completions: u64,
@@ -119,7 +120,8 @@ pub struct Counters {
 ///   here ([`PeerCodec::open`]), and every message the loop sends is sealed before it
 ///   leaves the core (§8.2).
 /// - **Failure (DM-7, §7.11):** a loop error or a failed storage effect moves the node to
-///   `failed`. It stops feeding the library, and peer envelopes are dropped and counted;
+///   `failed`. It stops feeding the library; the peer envelopes already queued are dropped
+///   and counted at once, and later ones at admission;
 ///   ticks and client attempts still reach [`Requests`], which answers `recovering`.
 ///
 /// Invariant: the lifecycle only moves forward; the loop is fed only while it is idle.
@@ -472,12 +474,19 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
     }
 
     /// Opens a peer envelope and steps its message (§8.2).
+    ///
+    /// # Panics
+    ///
+    /// `NODE-FAILED-PEERS` if the node is failed: a failed node drops the envelopes queued
+    /// when it fails and every later one at admission, so none can reach here (br-dkov).
     fn peer(&mut self, from: NodeId, envelope: &[u8], effects: &mut Vec<Effect>) {
-        if self.core.lifecycle == Lifecycle::Failed {
-            self.counters.peers_failed = self.counters.peers_failed.saturating_add(1);
-            log_dropped_peer(effects);
-            return;
-        }
+        invariant!(
+            self.core.lifecycle != Lifecycle::Failed,
+            "NODE-FAILED-PEERS",
+            "node {}: a peer envelope from node {from} reached a failed node, which drops \
+             queued envelopes when it fails and later ones at admission",
+            self.core.node
+        );
         let Ok(message) = self.codec.open(from, envelope) else {
             // Counted by the codec, under its reason.
             log_dropped_peer(effects);
@@ -639,6 +648,11 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
     }
 
     /// Moves the node to `failed` (DM-7, §7.11), keeping the first cause.
+    ///
+    /// The peer envelopes queued until now are dropped, counted and logged at once. A failed
+    /// node never feeds the library again, and a sync it was waiting for never completes,
+    /// so they would otherwise wait for the incarnation's lifetime, holding queue places
+    /// its client attempts need to reach the request lifecycle (`recovering`, A-2; br-dkov).
     fn fail(&mut self, failure: Failure, effects: &mut Vec<Effect>) {
         if self.core.lifecycle == Lifecycle::Failed {
             return;
@@ -649,6 +663,14 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
         }));
         self.core.lifecycle = Lifecycle::Failed;
         self.failure = Some(failure);
+        let stranded = self.queue.drain_peers();
+        self.counters.peers_failed = self
+            .counters
+            .peers_failed
+            .saturating_add(u64::try_from(stranded).unwrap_or(u64::MAX));
+        for _ in 0..stranded {
+            log_dropped_peer(effects);
+        }
     }
 }
 

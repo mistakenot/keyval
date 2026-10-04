@@ -1416,23 +1416,24 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "NODE-CONTROLLER",
-        summary: "the node controller's mechanism (§7.4, §7.7, §7.10–§7.12, W14.1): start \
-                  replays exactly the committed entries and is Ready, truncating and syncing a \
-                  torn tail first and feeding the library nothing (ticks owed, peers waiting, \
-                  attempts still handed over) until that sync completes, and refuses a committed \
-                  entry it cannot read back; the inbound queue takes 1,024 client attempts and \
-                  peer envelopes, then drops and counts peers and answers clients busy, while \
-                  ticks merge into a count and completions always get in; inputs leave in arrival \
-                  order, and while a sync is outstanding client attempts are handed over, peer \
-                  envelopes wait and proposals wait for the library; deadlines fire on ticks even \
-                  then, and a burst of overdue ticks is processed at most 8 per turn between \
-                  queued inputs; a completion from another incarnation is ignored and counted; a \
-                  failed storage effect fails the node, which drops peers and feeds the library \
-                  nothing; three voters elect and commit with every message sealed and opened by \
-                  the controllers and nothing dropped; under one write per sync cycle a leader \
-                  still takes its followers' responses (a queued peer envelope goes before a \
-                  waiting proposal, br-m7x7), keeps leading and commits; the same inputs give the \
-                  same effects; and each NODE-* invariant fires on corrupt state",
+        summary: "the node controller's mechanism (§7.4, §7.7, §7.10–§7.12, W14.1): start replays \
+                  exactly the committed entries and is Ready, truncating and syncing a torn tail \
+                  first and feeding the library nothing (ticks owed, peers waiting, attempts still \
+                  handed over) until that sync completes, and refuses a committed entry it cannot \
+                  read back; the inbound queue takes 1,024 client attempts and peer envelopes, \
+                  then drops and counts peers and answers clients busy, while ticks merge into a \
+                  count and completions always get in; inputs leave in arrival order, and while a \
+                  sync is outstanding client attempts are handed over, peer envelopes wait and \
+                  proposals wait for the library; deadlines fire on ticks even then, and a burst \
+                  of overdue ticks is processed at most 8 per turn between queued inputs; a \
+                  completion from another incarnation is ignored and counted; a failed storage \
+                  effect fails the node, which drops and counts peers, those already queued at \
+                  once so their places go to client attempts, and feeds the library nothing; three \
+                  voters elect and commit with every message sealed and opened by the controllers \
+                  and nothing dropped; under one write per sync cycle a leader still takes its \
+                  followers' responses (a queued peer envelope goes before a waiting proposal, \
+                  br-m7x7), keeps leading and commits; the same inputs give the same effects; and \
+                  each NODE-* invariant fires on corrupt state",
         kind: Kind::TestGroup,
         covers: &["CD-9", "CD-7", "T-3", "P3"],
         class: ClaimClass::Invariant,
@@ -1446,7 +1447,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "invariant_fixtures::",
             ],
         },
-        min_cases: 28,
+        min_cases: 32,
     },
     CheckDef {
         id: "NODE-WRITE-PATH",

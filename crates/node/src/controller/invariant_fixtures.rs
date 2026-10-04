@@ -1,7 +1,7 @@
 //! Corrupt-state fixtures for the controller's invariants (CD-7): each one fires.
 
 use raft_adapter::{Fed, RaftInput};
-use types::{Effect, NodeId, Tick};
+use types::{Effect, Lifecycle, NodeId, Tick};
 
 use super::{proposed, stepped};
 use crate::test_support::{Member, config};
@@ -34,6 +34,20 @@ fn feeding_while_a_sync_is_outstanding_fires_node_feed_idle() {
     member.tick_until_syncing(100);
     let mut effects = Vec::new();
     member.ctl.feed(RaftInput::Tick, &mut effects);
+}
+
+#[test]
+#[should_panic(
+    expected = "invariant NODE-FAILED-PEERS violated: node 1: a peer envelope from node 2 \
+                reached a failed node"
+)]
+fn a_peer_envelope_reaching_a_failed_node_fires_node_failed_peers() {
+    let mut member = lone();
+    member.ctl.core.lifecycle = Lifecycle::Failed;
+    let mut effects = Vec::new();
+    member
+        .ctl
+        .peer(NodeId::new(2).unwrap(), &[1, 2, 3], &mut effects);
 }
 
 #[test]

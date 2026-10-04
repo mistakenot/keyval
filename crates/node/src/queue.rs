@@ -154,6 +154,15 @@ impl InboundQueue {
         }
     }
 
+    /// Takes every queued peer envelope, leaving the client attempts queued, and returns
+    /// how many there were: a failed node drops them (DM-7, §7.11).
+    pub fn drain_peers(&mut self) -> usize {
+        let drained = self.peers.len();
+        self.peers.clear();
+        self.check_bound();
+        drained
+    }
+
     /// The next arrival number. One is taken per queued input, so it cannot reach
     /// `u64::MAX` in any run.
     const fn arrival(&mut self) -> u64 {
