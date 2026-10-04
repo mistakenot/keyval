@@ -20,6 +20,12 @@
 //! W18.3 (HTTP). Until then `keyval-server run` stops after a successful preflight and
 //! says so; it never presents itself as serving (P6).
 
+pub mod clock;
+pub mod entropy;
+pub mod inbox;
 pub mod init;
+pub mod io;
+pub mod logs;
 pub mod output;
 pub mod run;
+pub mod runtime;

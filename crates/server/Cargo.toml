@@ -14,6 +14,7 @@ path = "src/main.rs"
 types = { workspace = true }
 journal = { workspace = true }
 fs_storage = { workspace = true }
+node = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
