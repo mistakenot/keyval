@@ -13,7 +13,11 @@ use types::{
 
 use crate::convert::decode_message;
 use crate::node::{ConstructError, RaftNode};
-use crate::ready_loop_tests::{Cluster, Member, assert_synced_obligations, start_campaign};
+use crate::ready_loop::{RaftInput, ReadyLoop};
+use crate::ready_loop_tests::{
+    Cluster, FIRST_SYNC, INCARNATION, Member, assert_synced_obligations, durable_state,
+    member_over, start_campaign,
+};
 use crate::test_support::{
     BOUNDS, CONFIGS, Journal, Seeded, config, empty_log, journal_with_genesis,
 };
@@ -632,6 +636,160 @@ fn every_public_read_answers_while_a_frame_without_entries_syncs() {
     assert_reads_answer_during_sync(cluster.get(voter), "voter");
     cluster.settle();
     assert_synced_obligations(&cluster);
+}
+
+/// A node of `config` restarted over a fresh copy of `bytes` and `log`, its journal and
+/// logical log, built at `replayed`: its state machine replayed the entries through it first
+/// (§7.7 steps 5 and 6).
+fn restarted_at(
+    config: &Config,
+    id: NodeId,
+    bytes: &[u8],
+    log: &LogicalLog,
+    replayed: LogIndex,
+) -> Member {
+    let journal = Journal::default();
+    journal.push(bytes);
+    let mut member = member_over(config, id, 8, log.clone(), journal.clone());
+    let node = RaftNode::new(
+        &config.consensus(id).unwrap(),
+        config.voters(),
+        log.clone(),
+        journal,
+        Seeded::new(8),
+        replayed,
+    )
+    .unwrap();
+    member.lp = ReadyLoop::new(node, INCARNATION, FIRST_SYNC);
+    member
+}
+
+/// The indices of the entries handed to `member`'s applier, in order.
+fn applied_indices(member: &Member) -> Vec<u64> {
+    member
+        .recorder
+        .applied
+        .iter()
+        .map(|(entry, _)| entry.index.get())
+        .collect()
+}
+
+/// Settles `cluster` like [`Cluster::settle`], but drops every append that carries no
+/// entries. A follower then learns each commit index together with the next entries, in a
+/// frame that persists it; learnt alone, the commit index is never worth a frame (§7.4 step 3).
+fn settle_persisting_commits(cluster: &mut Cluster) {
+    for _ in 0..100_000 {
+        let deliverable = (0..cluster.network.len())
+            .find(|&at| !cluster.syncs.contains_key(&cluster.network[at].1));
+        if let Some(at) = deliverable {
+            let message = decode_message(&cluster.network[at].2).unwrap();
+            if message.get_msg_type() == MessageType::MsgAppend && message.entries.is_empty() {
+                cluster.network.remove(at);
+            } else {
+                cluster.deliver(at);
+            }
+        } else if let Some(&node) = cluster.syncs.keys().next() {
+            cluster.complete_sync(node);
+        } else {
+            return;
+        }
+    }
+    panic!("the cluster did not settle");
+}
+
+/// The cluster's leader, if it has one.
+fn leader_of(cluster: &Cluster) -> Option<NodeId> {
+    cluster
+        .ids()
+        .into_iter()
+        .find(|&id| cluster.get(id).lp.status().role == Role::Leader)
+}
+
+#[test]
+fn a_cluster_restarted_at_its_replayed_indices_hands_over_only_the_entries_after_them() {
+    let config = config("three-voters");
+    let mut first = Cluster::new(&config, 4);
+    start_campaign(&mut first);
+    first.settle();
+    let leader = leader_of(&first).unwrap();
+    for n in 0..5 {
+        first.feed(leader, RaftInput::Propose(format!("c{n}").into_bytes()));
+        settle_persisting_commits(&mut first);
+    }
+    assert!(
+        first.syncs.is_empty(),
+        "fixture: every frame synced, so each logical log is what recovery reads back (§7.7 \
+         step 4; a_restart_through_recovery_resumes_the_persisted_term_vote_commit_and_log)"
+    );
+    // Each node restarts at its own replayed index: the first that persisted a commit index
+    // replays all of it (as §7.7 step 5 does), the next only half of it, and a node that
+    // persisted none replays nothing.
+    let mut second = Cluster::new(&config, 5);
+    let mut starts = Vec::new();
+    for id in first.ids() {
+        let bytes = first.get(id).journal.bytes();
+        let log = first.get(id).lp.node().log().clone();
+        let persisted = log.hard_state().commit.get();
+        let partial = starts.iter().any(|&(_, _, persisted)| persisted > 0);
+        let replayed = LogIndex::new(if partial { persisted / 2 } else { persisted }).unwrap();
+        second
+            .members
+            .insert(id, restarted_at(&config, id, &bytes, &log, replayed));
+        second.durable.insert(id, durable_state(&bytes));
+        starts.push((id, replayed, persisted));
+    }
+    assert!(
+        starts
+            .iter()
+            .any(|&(_, replayed, persisted)| persisted >= 3 && replayed.get() == persisted)
+            && starts.iter().any(|&(_, replayed, persisted)| {
+                replayed.get() >= 1 && replayed.get() < persisted
+            }),
+        "fixture: one node restarts having replayed all of several persisted committed entries, \
+         and one part of them; {starts:?}"
+    );
+    for &(id, replayed, persisted) in &starts {
+        let member = second.members.get_mut(&id).unwrap();
+        assert_eq!(
+            (member.lp.applied(), member.lp.node().applied_index()),
+            (replayed, replayed),
+            "rule: the loop and the library start from the replayed index (§7.7 step 6); \
+             node={id}"
+        );
+        member.poll().unwrap();
+        assert_eq!(
+            applied_indices(member),
+            (replayed.get() + 1..=persisted).collect::<Vec<_>>(),
+            "rule: at start-up the loop hands over exactly the persisted committed entries past \
+             the replayed index (§7.7 step 7); node={id} replayed={replayed}"
+        );
+    }
+    start_campaign(&mut second);
+    second.settle();
+    let leader = leader_of(&second).unwrap();
+    second.feed(leader, RaftInput::Propose(b"after the restart".to_vec()));
+    second.settle();
+    for &(id, replayed, persisted) in &starts {
+        let member = second.get(id);
+        let commit = member.lp.status().commit;
+        assert!(
+            commit.get() > persisted,
+            "fixture: the new term commits past the restart; node={id} commit={commit}"
+        );
+        assert_eq!(
+            applied_indices(member),
+            (replayed.get() + 1..=commit.get()).collect::<Vec<_>>(),
+            "rule: nothing at or below the replayed index is handed over again, and every entry \
+             after it once, in index order (§7.4 step 5, C-4); node={id} replayed={replayed}"
+        );
+        assert_eq!(
+            (member.lp.applied(), member.lp.node().applied_index()),
+            (commit, commit),
+            "rule: applied progress ends at the commit, and the library is told (§7.4 step 7); \
+             node={id}"
+        );
+    }
+    assert_synced_obligations(&second);
 }
 
 /// Whether `result` is the journal's hard-stop refusal.

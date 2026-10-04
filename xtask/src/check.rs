@@ -962,7 +962,8 @@ pub const CATALOGUE: &[CheckDef] = &[
                   hard state and messages convert losslessly and unknown protobuf fields are \
                   refused (H-3), the journal serves the library's log reads, a Ready writes one \
                   frame exactly when it must sync, every public read answers while a frame \
-                  syncs, and a restart resumes from the recovered hard state (§7.3, §7.4, CD-1, \
+                  syncs, and a restart resumes from the recovered hard state and hands over \
+                  only the committed entries past its replayed index (§7.3, §7.4, §7.7, CD-1, \
                   P4)",
         kind: Kind::TestGroup,
         covers: &["CD-1", "P4", "O-5"],
@@ -979,7 +980,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "node::invariant_fixtures::",
             ],
         },
-        min_cases: 34,
+        min_cases: 35,
     },
     CheckDef {
         id: "STORAGE-CONTRACT-SIM",
