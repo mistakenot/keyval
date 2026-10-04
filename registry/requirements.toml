@@ -303,7 +303,7 @@ title = "Robot mode: --json output with versioned schemas"
 [[requirement]]
 id = "O-7"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "keyval doctor verifies a data directory offline"
 
 [[requirement]]
