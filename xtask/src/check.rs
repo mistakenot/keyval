@@ -1341,6 +1341,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 29,
     },
+    CheckDef {
+        id: "SIM-NET",
+        summary: "the simulated network (§9.1, §10.2, W16.1): delivery follows each copy's own \
+                  seeded delay, never send order; loss follows its probability on peer links \
+                  and client paths; a duplicate is an independent copy; a symmetric partition \
+                  cuts every link across it both ways and an asymmetric cut one way, \
+                  catching traffic in flight too; each directed link queue drops and counts \
+                  past its message or byte bound and never grows; client paths use their own \
+                  profile and are never partitioned; copies in flight are bounded; the same \
+                  seed gives the same fates; and real sealed peer envelopes cross unchanged \
+                  and open at the destination",
+        kind: Kind::TestGroup,
+        covers: &["T-3", "P3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["net_tests::"],
+        },
+        min_cases: 11,
+    },
 ];
 
 /// Outcome of one requested check.

@@ -860,6 +860,7 @@ name = "sim"
 version = "0.1.0"
 dependencies = [
  "model",
+ "raft_adapter",
  "statemachine",
  "types",
 ]

@@ -210,7 +210,7 @@ deps = ["W13", "W15"]
 reqs = ["§9.1"]
 area = ["sim"]
 milestone = "m1"
-accept = []
+accept = ["./dev check SIM-NET"]
 bead = "br-w16-sim-network-dxn"
 
 [[item]]

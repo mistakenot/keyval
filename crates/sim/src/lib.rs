@@ -14,15 +14,20 @@
 //!   the trace records for what changed.
 //! - [`disk`]: the simulated disk, volatile and durable images per node with the crash
 //!   model (DUR-7, DUR-9); its handle is the simulation's byte-storage adapter.
+//! - [`net`]: the simulated network: seeded per-message delay, loss and duplication on
+//!   peer links and client paths, a directed link matrix for partitions, and bounded link
+//!   queues, carrying the same sealed peer envelopes as production (§9.1, W16).
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
-//! The simulated network (W16) and the composition of the cores (W17),
-//! build on these.
+//! The composition of the cores (W17) builds on these.
 
 pub mod disk;
 pub mod entropy;
 pub mod god_view;
+pub mod net;
+#[cfg(test)]
+mod net_tests;
 pub mod replay;
 pub mod scheduler;
 pub mod trace;
@@ -30,6 +35,10 @@ pub mod trace;
 pub use disk::{Crash, DiskHandle, Fill, SimDisk};
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};
+pub use net::{
+    Arrival, Delivery, DropReason, LinkMatrix, LinkProfile, NetConfig, NetCounts, Network,
+    PacketId, Ppm, QueueBound, Sent,
+};
 pub use replay::{
     Divergence, MachineryRun, PROCESS_TIMEOUT, ReplayError, Report, RunError, fresh_processes,
     machinery, trace_path,

@@ -12,6 +12,7 @@ statemachine = { workspace = true }
 
 [dev-dependencies]
 model = { workspace = true }
+raft_adapter = { workspace = true }
 
 [lints]
 workspace = true
