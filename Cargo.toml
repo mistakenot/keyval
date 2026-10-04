@@ -13,6 +13,7 @@ members = [
     "crates/model",
     "crates/node",
     "crates/raft_adapter",
+    "crates/server",
     "crates/sim",
     "crates/statemachine",
     "crates/types",

@@ -1,0 +1,25 @@
+[package]
+name = "server"
+version = "0.1.0"
+description = "keyval-server, the production composition root (PLAN.md Appendix A, §8.7, W18): `init` initialises a node's data directory (§7.7 step 0) and `run` refuses a missing or uninitialised one (D-52); W18.2 wires the node to serve"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keyval-server"
+path = "src/main.rs"
+
+[dependencies]
+types = { workspace = true }
+journal = { workspace = true }
+fs_storage = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+jsonschema = { workspace = true }
+
+[lints]
+workspace = true

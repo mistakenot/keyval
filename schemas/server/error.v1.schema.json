@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/server/error.v1.schema.json",
+  "title": "keyval.server.error/v1",
+  "description": "The envelope `keyval-server` prints on stdout in --json mode when init or run refuses (crates/server/src/output.rs; PLAN.md §7.7, D-52, DUR-8, O-6). --json is detected before the arguments are parsed, so even a usage error comes in the format asked for. Exit status 2 for usage, config and unknown_node; 1 for every refusal because of the data directory, and for not_serving.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "command", "code", "message", "data_dir"],
+  "properties": {
+    "schema": { "const": "keyval.server.error/v1" },
+    "command": { "enum": ["init", "run"] },
+    "code": {
+      "description": "usage: invalid arguments; config: the config file cannot be read or is invalid; unknown_node: the node is not a voter of the configuration; data_dir: the data directory cannot be created or opened; missing_data_dir (run): the directory does not exist and is never created; uninitialised (run): no journal, an empty one, or an incomplete genesis; already_initialised (init): the journal holds a valid genesis; not_initialisable (init): the journal holds more than an interrupted init leaves; locked: another process holds the lock; genesis_mismatch (run): the genesis binds another node or configuration; damaged (run): the journal cannot be recovered; storage: a storage call failed; not_serving (run): the directory passed the preflight but this build does not serve yet (W18.2).",
+      "enum": [
+        "usage",
+        "config",
+        "unknown_node",
+        "data_dir",
+        "missing_data_dir",
+        "uninitialised",
+        "already_initialised",
+        "not_initialisable",
+        "locked",
+        "genesis_mismatch",
+        "damaged",
+        "storage",
+        "not_serving"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1 },
+    "data_dir": {
+      "description": "The data directory, once known; null for errors before the configuration names it.",
+      "type": ["string", "null"]
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/server/init.v1.schema.json",
+  "title": "keyval.server.init/v1",
+  "description": "The report `keyval-server init --json` prints on stdout once it has initialised a node's data directory (crates/server/src/output.rs; PLAN.md §7.7 step 0, DUR-8, O-6): the binding its genesis frame records. Exit status 0. Any refusal prints keyval.server.error/v1 instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "data_dir", "directory", "replaced", "node", "cluster_id", "instance_id", "voters", "journal_bytes"],
+  "properties": {
+    "schema": { "const": "keyval.server.init/v1" },
+    "data_dir": {
+      "description": "The data directory, resolved against the config file's directory.",
+      "type": "string",
+      "minLength": 1
+    },
+    "directory": {
+      "description": "created: this init created the directory; existing: it was already there, as an interrupted init leaves it.",
+      "enum": ["created", "existing"]
+    },
+    "replaced": {
+      "description": "What an interrupted init had left in the journal, which this one replaced: an empty journal or an incomplete genesis frame; null for a new journal.",
+      "enum": ["empty_journal", "incomplete_genesis", null]
+    },
+    "node": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "cluster_id": {
+      "description": "The configured cluster name: display only (D-63).",
+      "type": "string",
+      "minLength": 1
+    },
+    "instance_id": {
+      "description": "The cluster instance ID the genesis carries: 32 lowercase hex digits (D-63).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "voters": {
+      "description": "The voter set the genesis binds, in configuration order.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+    },
+    "journal_bytes": {
+      "description": "The journal's length afterwards: exactly the genesis frame.",
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

@@ -1586,6 +1586,34 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 14,
     },
+    CheckDef {
+        id: "SERVER-INIT",
+        summary: "keyval-server init and the start's preflight (§7.7 step 0 and steps 1–4, D-52, \
+                  DUR-7, DUR-8, O-6, W18.1): init creates the data directory beside the config \
+                  file, takes the lock, creates journal.log and syncs the directory before \
+                  appending the genesis frame and syncing it, through the byte-storage port in \
+                  that order, binding the directory to the instance ID, node, voters and \
+                  semantic configuration; it completes an interrupted init over the directory \
+                  alone, an empty journal or a partial genesis (truncated away), and never \
+                  re-initialises a valid genesis, a genesis for another configuration or other \
+                  content, leaving each unchanged; a held lock or an unknown node writes \
+                  nothing, and a failed sync stops init at that step; run refuses a missing data \
+                  directory without creating it, no journal, an empty journal or an incomplete \
+                  genesis, a held lock, another voter set or other semantic limits, and a \
+                  damaged journal, modifying nothing; an initialised directory passes the \
+                  preflight holding the lock, and run then says it does not serve yet (W18.2); \
+                  the binary exits 0, 1 for a refusal and 2 for usage or configuration, its \
+                  --json output conforming to keyval.server.init/v1 and keyval.server.error/v1",
+        kind: Kind::TestGroup,
+        covers: &["DUR-7", "DUR-8", "O-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &["init_tests::", "run_tests::", "cli_tests::"],
+        },
+        min_cases: 15,
+    },
 ];
 
 /// Outcome of one requested check.
