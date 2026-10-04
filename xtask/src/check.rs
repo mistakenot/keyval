@@ -686,7 +686,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["entropy::", "scheduler::"],
         },
-        min_cases: 15,
+        min_cases: 18,
     },
     CheckDef {
         id: "SIM-TRACE",
@@ -702,7 +702,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["trace::", "god_view::"],
         },
-        min_cases: 20,
+        min_cases: 24,
     },
     CheckDef {
         id: "K-14",

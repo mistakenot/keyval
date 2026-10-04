@@ -438,7 +438,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SIM-SCHEDULER"
-min_cases = 15
+min_cases = 18
 status = "implemented"
 
 [[check]]
@@ -450,7 +450,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SIM-TRACE"
-min_cases = 20
+min_cases = 24
 status = "implemented"
 
 [[check]]
