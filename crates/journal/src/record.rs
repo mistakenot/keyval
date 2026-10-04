@@ -192,6 +192,56 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// How a journal's genesis conflicts with the configuration it is started under
+/// (§7.7 step 2, DUR-8). The start is refused, and nothing is modified.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenesisMismatch {
+    /// The data directory belongs to another node.
+    Node {
+        /// The node the genesis binds.
+        bound: NodeId,
+        /// The node being started.
+        starting: NodeId,
+    },
+    /// The configured voter set differs from the bound one.
+    Voters {
+        /// The bound voter set.
+        bound: Vec<NodeId>,
+        /// The configured voter set.
+        configured: Vec<NodeId>,
+    },
+    /// The configuration's semantic fingerprint differs from the bound one.
+    Fingerprint {
+        /// The bound fingerprint.
+        bound: SemanticFingerprint,
+        /// The configuration's fingerprint.
+        configured: SemanticFingerprint,
+    },
+}
+
+impl fmt::Display for GenesisMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Node { bound, starting } => write!(
+                f,
+                "the data directory belongs to node {bound}, not node {starting} (DUR-8)"
+            ),
+            Self::Voters { bound, configured } => write!(
+                f,
+                "the configured voters {configured:?} differ from the bound voters {bound:?} \
+                 (DUR-8)"
+            ),
+            Self::Fingerprint { bound, configured } => write!(
+                f,
+                "the semantic configuration changed: fingerprint {configured}, bound \
+                 {bound} (DUR-8)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GenesisMismatch {}
+
 /// The genesis record: the first frame of every journal, binding the data directory to
 /// its cluster instance, node, voter set and semantic configuration (DUR-8, §7.7 step 0).
 ///
@@ -291,6 +341,38 @@ impl Genesis {
     #[must_use]
     pub const fn fingerprint(&self) -> SemanticFingerprint {
         self.fingerprint
+    }
+
+    /// Checks that this genesis binds `node` under `config` (§7.7 step 2): the same
+    /// node ID, voter set and semantic-config fingerprint. The display cluster ID is not
+    /// compared; the instance ID is what identifies the cluster (D-63).
+    ///
+    /// # Errors
+    ///
+    /// The first [`GenesisMismatch`]: node, then voters, then fingerprint. Checking
+    /// changes nothing.
+    pub fn verify(&self, config: &Config, node: NodeId) -> Result<(), GenesisMismatch> {
+        if self.node_id != node {
+            return Err(GenesisMismatch::Node {
+                bound: self.node_id,
+                starting: node,
+            });
+        }
+        let configured: Vec<NodeId> = config.voters().collect();
+        if configured != self.voters {
+            return Err(GenesisMismatch::Voters {
+                bound: self.voters.clone(),
+                configured,
+            });
+        }
+        let fingerprint = config.semantic_fingerprint();
+        if fingerprint != self.fingerprint {
+            return Err(GenesisMismatch::Fingerprint {
+                bound: self.fingerprint,
+                configured: fingerprint,
+            });
+        }
+        Ok(())
     }
 
     /// The canonical payload.

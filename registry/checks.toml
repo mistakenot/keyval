@@ -500,3 +500,15 @@ tier = "T0"
 run = "./dev check JOURNAL-FRAMES"
 min_cases = 14
 status = "implemented"
+
+[[check]]
+id = "JOURNAL-LOG"
+summary = "the logical log appends, truncates logically (never at or below the persisted commit), indexes and caches entries without the cache ever changing a result; genesis verification refuses a conflicting start (DUR-8, CD-10)"
+kind = "test_group"
+covers = ["DUR-8", "CD-9", "CD-10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check JOURNAL-LOG"
+min_cases = 8
+status = "implemented"

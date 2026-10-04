@@ -30,13 +30,22 @@
 //!   byte-for-byte by the golden vectors in `golden/` (DUR-5).
 //!
 //! As a deterministic crate it does no I/O: bytes reach it, and leave it, through the
-//! byte-storage port (§7.2). Genesis binding, logical truncation, the offset index, the
-//! entry cache (W11.2) and the fail-closed recovery scan (W11.3) build on this codec.
+//! byte-storage port (§7.2).
+//! - [`Genesis::verify`] refuses a start under a conflicting node, voter set or semantic
+//!   configuration, modifying nothing (DUR-8, §7.7 step 2).
+//! - [`LogicalLog`] gives the frames their meaning: append, logical truncation (never at
+//!   or below the persisted commit), the offset index, the persisted hard state, and a
+//!   bounded entry cache whose eviction never changes results.
+//!
+//! The fail-closed recovery scan (W11.3) replays frames through [`LogicalLog::apply`].
 
 mod crc32c;
 mod frame;
 #[cfg(test)]
 mod golden;
+mod log;
+#[cfg(test)]
+mod log_tests;
 mod record;
 
 pub use crc32c::{crc32c, update as crc32c_update};
@@ -44,4 +53,5 @@ pub use frame::{
     FORMAT_VERSION, Frame, FrameError, FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode,
     decode_header, encode,
 };
-pub use record::{Genesis, RaftBatch, RecordError};
+pub use log::{JournalError, LogicalLog};
+pub use record::{Genesis, GenesisMismatch, RaftBatch, RecordError};

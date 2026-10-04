@@ -763,6 +763,21 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 14,
     },
+    CheckDef {
+        id: "JOURNAL-LOG",
+        summary: "the logical log appends, truncates logically (never at or below the persisted \
+                  commit), indexes and caches entries without the cache ever changing a \
+                  result; genesis verification refuses a conflicting start (DUR-8, CD-10)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-8", "CD-9", "CD-10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "journal",
+            filters: &["log_tests::"],
+        },
+        min_cases: 8,
+    },
 ];
 
 /// Outcome of one requested check.
