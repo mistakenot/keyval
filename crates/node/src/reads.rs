@@ -4,8 +4,9 @@
 //! node's published view: the state machine as of its applied index. The controller applies
 //! one whole committed entry at a time and never inside a turn's read, so a read sees exactly
 //! the prefix `[1..applied_index]` it reports, never a partial application (C-3). The answer
-//! copies what it reports (one value, at most 64 KiB, or one stored result) before any later
-//! entry can change the view.
+//! copies what it reports (one value, at most 64 KiB; one stored result; or one SCAN page, at
+//! most 128 items and 1 MiB of decoded key+value bytes) before any later entry can change the
+//! view, so a page comes from one applied prefix (C-8).
 //!
 //! Every answer carries `served_by` (this node and its applied index). There is no leader
 //! round trip and no quorum, so any `Ready` node answers, even while a sync is outstanding.
@@ -13,14 +14,11 @@
 //! back (C-4). A node that is not `Ready` answers `recovering`, and a stopping one
 //! `unavailable`: it never serves an empty or partial state (A-2).
 //!
-//! A SCAN page is W28's: until it implements the page rule, none reaches the read path.
+//! A SCAN page is the state machine's page of the range (§8.5), by §7.11's exact rule (W28).
 
-use types::{AttemptId, Effect, Key, NodeId, Refusal, RequestId, Response, ServedBy, invariant};
+use types::{AttemptId, Effect, Key, NodeId, Refusal, RequestId, Response, ScanRange, ServedBy};
 
 use crate::requests::View;
-
-#[cfg(test)]
-mod invariant_fixtures;
 
 /// The read path of one node. It keeps no state: every answer comes from the view.
 #[derive(Clone, Copy, Debug)]
@@ -77,21 +75,21 @@ impl ReadPath {
         effects.push(Effect::Respond { attempt, response });
     }
 
-    /// A SCAN page, which no node serves before W28 implements the page rule.
-    ///
-    /// # Panics
-    ///
-    /// `NODE-READ-NO-SCAN` always: no composition root submits a SCAN before W28.
-    pub fn scan(&self, attempt: AttemptId) {
-        let served = false;
-        invariant!(
-            served,
-            "NODE-READ-NO-SCAN",
-            "node {}: attempt {} is a SCAN, which no node serves before W28 implements its \
-             page rule",
-            self.node,
-            attempt.get()
-        );
+    /// A SCAN page (F-4, §8.5): the range's page of the applied prefix, by the state
+    /// machine's page rule (§7.11), with `served_by`. It is read and copied in this turn, so
+    /// the whole page comes from the one prefix it reports (C-8).
+    pub fn scan(
+        &self,
+        view: &View<'_>,
+        attempt: AttemptId,
+        range: &ScanRange,
+        effects: &mut Vec<Effect>,
+    ) {
+        let response = match self.served_by(view) {
+            Err(refusal) => Response::Refused(refusal),
+            Ok(served_by) => Response::Page(view.state().scan(range, served_by)),
+        };
+        effects.push(Effect::Respond { attempt, response });
     }
 
     /// Who answers, and from which prefix: this node at its applied index, if it may serve

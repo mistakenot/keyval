@@ -1,15 +1,17 @@
 //! W14.3's tests of the read path and the request lifecycle (PLAN.md §7.9, F-2, F-9, A-2,
 //! C-3, C-4), through the controller: GET and the status lookup from the applied prefix,
 //! reads during a sync, follower reads, refusals when not ready, the published view
-//! observed once per applied entry, and writes routed to the write path.
+//! observed once per applied entry, and writes routed to the write path. W28.2 adds SCAN
+//! pages (F-4, C-8): served from the applied prefix with `served_by`, continued with
+//! `after`, never showing an unsynced entry, refused like GET, and served by followers.
 #![cfg(test)]
 
 // check: NODE-READ-PATH
 
 use types::{
     AttemptId, ClientOp, Config, Decision, Effect, EntryIndex, HardState, Input, Lifecycle,
-    LogIndex, NodeId, NotReadyLifecycle, Observation, Refusal, Response, Role, ServedBy, StorageOp,
-    Term, TerminalResult, Version,
+    LogIndex, NodeId, NotReadyLifecycle, Observation, PageSize, Refusal, Response, Role, ScanItem,
+    ScanPage, ScanRange, ServedBy, StorageOp, Term, TerminalResult, Version,
 };
 
 use crate::RequestLifecycle;
@@ -33,6 +35,47 @@ fn leader() -> (Config, Member<RequestLifecycle>) {
 
 fn get(k: &str) -> ClientOp {
     ClientOp::Get { key: key(k) }
+}
+
+/// A SCAN range over optional raw bounds, with `limit` items a page.
+fn range(start: Option<&str>, end: Option<&str>, after: Option<&str>, limit: u64) -> ScanRange {
+    ScanRange::new(
+        start.map(key),
+        end.map(key),
+        after.map(key),
+        PageSize::new(limit).unwrap(),
+    )
+    .unwrap()
+}
+
+fn scan(range: &ScanRange) -> ClientOp {
+    ClientOp::Scan {
+        range: range.clone(),
+    }
+}
+
+/// The page a SCAN of `range` should answer: `items` as `(key, value, version)`, the
+/// continuation, and who served it.
+fn page_of(
+    range: &ScanRange,
+    items: &[(&str, &str, LogIndex)],
+    continuation: Option<&str>,
+    served_by: ServedBy,
+) -> Response {
+    let items = items
+        .iter()
+        .map(|&(k, v, index)| ScanItem {
+            key: key(k),
+            value: value(v),
+            version: Version::at(index).unwrap(),
+        })
+        .collect();
+    Response::Page(ScanPage::new(
+        range,
+        items,
+        continuation.map(key),
+        served_by,
+    ))
 }
 
 /// Steps client attempt `n` and returns only its response.
@@ -146,6 +189,88 @@ fn a_read_during_an_outstanding_sync_shows_only_the_applied_prefix() {
 }
 
 #[test]
+fn a_scan_answers_a_page_of_the_applied_prefix_with_served_by_and_continues_after_it() {
+    let (_, mut member) = leader();
+    let a = commit_put(&mut member, 1, "a", "1");
+    let b = commit_put(&mut member, 2, "b", "2");
+    let c = commit_put(&mut member, 3, "c", "3");
+    commit_put(&mut member, 4, "d", "4");
+    let served_by = served(&member);
+    let first = range(Some("a"), Some("d"), None, 2);
+    let next = range(Some("a"), Some("d"), Some("b"), 2);
+    assert_eq!(
+        (
+            ask(&mut member, 1, scan(&first)),
+            ask(&mut member, 2, scan(&next))
+        ),
+        (
+            Some(page_of(
+                &first,
+                &[("a", "1", a), ("b", "2", b)],
+                Some("b"),
+                served_by,
+            )),
+            Some(page_of(&next, &[("c", "3", c)], None, served_by)),
+        ),
+        "rule: SCAN answers the page of [start, end) with values and versions, has_more and \
+         next_after, and served_by naming this node and its applied index, in one turn; the \
+         next page continues after next_after (F-4, §8.5, §7.9)"
+    );
+}
+
+#[test]
+fn a_scan_during_an_outstanding_sync_shows_only_the_applied_prefix() {
+    let (_, mut member) = leader();
+    let a = commit_put(&mut member, 1, "a", "old");
+    let before = served(&member);
+    member.step(Input::Client {
+        attempt: AttemptId::new(50),
+        op: put(2, "b", "new"),
+    });
+    assert!(
+        member.ctl.outstanding_sync().is_some(),
+        "fixture: the second write's entry is appended and waits for its sync"
+    );
+    let all = range(None, None, None, 128);
+    assert_eq!(
+        ask(&mut member, 51, scan(&all)),
+        Some(page_of(&all, &[("a", "old", a)], None, before)),
+        "rule: a page is answered while a sync is outstanding, wholly from the applied prefix \
+         it reports: never the unsynced, uncommitted entry (C-3, C-8, §7.4 step 3)"
+    );
+    while member.complete_sync() {}
+    let after = ask(&mut member, 52, scan(&all));
+    let Some(Response::Page(page)) = &after else {
+        panic!("rule: SCAN answers a page; got {after:?}");
+    };
+    let keys: Vec<&str> = page.items().iter().map(|item| item.key.as_str()).collect();
+    assert!(
+        keys == ["a", "b"] && page.served_by().applied > before.applied,
+        "rule: once the entry applied, pages show it at a later prefix; got {after:?}"
+    );
+}
+
+#[test]
+fn a_scan_of_an_empty_range_is_an_empty_page_with_no_continuation() {
+    let (_, mut member) = leader();
+    commit_put(&mut member, 1, "k", "v");
+    let served_by = served(&member);
+    let cases = [
+        range(Some("x"), Some("x"), None, 32),
+        range(None, Some("k"), None, 32),
+        range(None, None, Some("k"), 32),
+    ];
+    for (n, empty) in (1..).zip(&cases) {
+        assert_eq!(
+            ask(&mut member, n, scan(empty)),
+            Some(page_of(empty, &[], None, served_by)),
+            "rule: a range with no key is an empty page with has_more false (§8.5); \
+             range={empty:?}"
+        );
+    }
+}
+
+#[test]
 fn the_status_lookup_answers_known_or_unknown_from_the_history() {
     let (_, mut member) = leader();
     let index = commit_put(&mut member, 7, "k", "v");
@@ -209,14 +334,18 @@ fn a_node_that_is_not_ready_answers_recovering_and_a_stopping_one_unavailable() 
                 }
             ),
             ask(&mut stopping, 3, get("k")),
+            ask(&mut failed, 4, scan(&range(None, None, None, 32))),
+            ask(&mut stopping, 5, scan(&range(None, None, None, 32))),
         ),
         (
             recovering.clone(),
+            recovering.clone(),
+            Some(Response::Refused(Refusal::Unavailable)),
             recovering,
             Some(Response::Refused(Refusal::Unavailable)),
         ),
-        "rule: a node that is not Ready answers reads recovering, never an empty or partial \
-         state (A-2, §7.9); a stopping node answers unavailable"
+        "rule: a node that is not Ready answers reads, SCAN included, recovering, never an \
+         empty or partial state (A-2, §7.9); a stopping node answers unavailable"
     );
 }
 
@@ -417,6 +546,20 @@ fn a_follower_serves_reads_from_its_own_applied_prefix() {
                 }),
         "rule: a follower answers a GET locally from its own applied prefix, with no leader \
          round trip (A-2, §7.9); got {answer:?}"
+    );
+    let all = range(None, None, None, 32);
+    let index = members[follower]
+        .ctl
+        .state()
+        .history()
+        .get(&request(1))
+        .unwrap()
+        .first_index()
+        .index();
+    assert_eq!(
+        ask(&mut members[follower], 3, scan(&all)),
+        Some(page_of(&all, &[("k", "v", index)], None, served_by)),
+        "rule: a follower answers a SCAN page locally from its own applied prefix, too"
     );
     assert_eq!(
         members[follower].ctl.lifecycle(),

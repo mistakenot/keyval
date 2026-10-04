@@ -1238,6 +1238,28 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 16,
     },
     CheckDef {
+        id: "DIFFERENTIAL-SCAN",
+        summary: "the differential test extended to SCAN (T-7, F-4, §8.5, §7.11, W28.2): on seeded \
+                  logs of PUTs (many of them 60 to 65 KB), DELETEs and empty entries over 44 keys, \
+                  every SCAN (bounds on and between keys, an optional after, limits including the \
+                  invalid 0 and 129, and start > end) gets the same refusal or the same page from \
+                  the state machine as from the reference model, items with values and versions, \
+                  has_more and next_after, and continued traversals agree page by page; a designed \
+                  log puts the 1 MiB byte cap at N - 1, N and N + 1; the logs reach every way a \
+                  page ends; and six broken variants (a page one short, a lost has_more, a wrong \
+                  next_after, a stale view, a version off by one, a limit one too loose) are each \
+                  caught by a SCAN comparison",
+        kind: Kind::TestGroup,
+        covers: &["T-7", "F-4"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["differential_scan::"],
+        },
+        min_cases: 9,
+    },
+    CheckDef {
         id: "RAFT-PINS",
         summary: "the raft-rs 0.7.0 semantics the Ready loop relies on, pinned on the \
                   library itself: a non-leader's Ready messages are all persisted messages \
@@ -1494,26 +1516,28 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "NODE-READ-PATH",
-        summary: "the read path and the request lifecycle (§7.9, F-2, F-9, A-2, C-3, C-4, \
-                  W14.3): a GET answers the value and version, or not_found, from the applied \
-                  prefix in one turn with served_by (node, applied index); a read during an \
-                  outstanding sync shows only the applied prefix, never the unsynced entry; the \
-                  status lookup answers the stored result if applied, unknown otherwise, \
-                  proposing nothing; a node that is not Ready answers recovering and a stopping \
-                  one unavailable; every applied entry, the election no-op included, is observed \
-                  once in index order before what it answers, and a restarted node observes its \
+        summary: "the read path and the request lifecycle (§7.9, F-2, F-4, F-9, A-2, C-3, C-4, \
+                  C-8, W14.3, W28.2): a GET answers the value and version, or not_found, from the \
+                  applied prefix in one turn with served_by (node, applied index); a read during \
+                  an outstanding sync shows only the applied prefix, never the unsynced entry; the \
+                  status lookup answers the stored result if applied, unknown otherwise, proposing \
+                  nothing; a node that is not Ready answers recovering and a stopping one \
+                  unavailable; every applied entry, the election no-op included, is observed once \
+                  in index order before what it answers, and a restarted node observes its \
                   replayed prefix; reported prefixes never go back within an incarnation; a \
-                  follower serves reads from its own applied prefix; NODE-READ-NO-SCAN fires on \
-                  a SCAN before W28",
+                  follower serves reads from its own applied prefix; and a SCAN page is answered \
+                  in one turn from the applied prefix it reports, with served_by, continues after \
+                  next_after, never shows an unsynced entry, is refused like a GET when the node \
+                  is not Ready or is stopping, and is served by followers too",
         kind: Kind::TestGroup,
-        covers: &["A-2", "C-3", "C-4", "F-2", "F-9"],
+        covers: &["A-2", "C-3", "C-4", "C-8", "F-2", "F-4", "F-9"],
         class: ClaimClass::Invariant,
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "node",
-            filters: &["lifecycle_tests::", "reads::invariant_fixtures::"],
+            filters: &["lifecycle_tests::"],
         },
-        min_cases: 9,
+        min_cases: 11,
     },
     CheckDef {
         id: "NODE-ATTEMPT-TABLE",

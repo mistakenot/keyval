@@ -47,7 +47,7 @@ impl Requests for RequestLifecycle {
     /// # Panics
     ///
     /// The write path's and the read path's invariants, such as `NODE-WRITE-PUT-ONLY` for
-    /// a DELETE or compare-and-swap before W27 and `NODE-READ-NO-SCAN` for a SCAN before W28.
+    /// a DELETE or compare-and-swap before W27.
     fn attempt(
         &mut self,
         view: &mut View<'_>,
@@ -66,7 +66,7 @@ impl Requests for RequestLifecycle {
             ClientOp::Status { request_id } => {
                 self.reads.status(view, attempt, &request_id, effects);
             }
-            ClientOp::Scan { .. } => self.reads.scan(attempt),
+            ClientOp::Scan { range } => self.reads.scan(view, attempt, &range, effects),
         }
     }
 
