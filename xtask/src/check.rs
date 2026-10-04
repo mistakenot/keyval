@@ -1212,15 +1212,16 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "DIFFERENTIAL",
-        summary: "the state machine matches the reference model on 400 seeded random logs of \
-                  PUTs, empty entries and GETs under tight DM-6 quotas: every apply result \
-                  with its echoed request ID (first execution, replay, conflict, key, byte and \
-                  both-limit refusal), every GET through its read path, the applied index and \
-                  live counters after every step, and the final map in iteration order and the \
-                  request history agree; the logs reach every outcome and boundary; and six \
-                  deliberately broken state machines (a key or byte quota one too loose, a \
-                  version off by one, a replay reported as an execution, history under wrong \
-                  request IDs, a stale GET) are each caught and shrunk (T-7, §10.14)",
+        summary: "the state machine matches the reference model on 400 seeded random logs of PUTs, empty \
+                  entries and GETs under DM-6 quotas, generated with the model so refused PUTs are replayed \
+                  after making room: every apply result with its echoed request ID, every GET through its \
+                  read path, the applied index, live counters and committed command bytes (the model \
+                  decides which entries count, the codec their length; DM-7) after every step, and the \
+                  final map in iteration order and the request history agree; the logs reach every outcome \
+                  and boundary, a byte refusal one byte over the quota included, each at or above a floor; \
+                  and thirteen test-local mutants around the real state machine are each caught by their \
+                  own comparison (apply, GET, counters, map, stored results, unknown IDs) and shrunk (T-7, \
+                  §10.14)",
         kind: Kind::TestGroup,
         covers: &["T-7"],
         class: ClaimClass::SimulationEvidenced,
@@ -1229,7 +1230,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["differential::"],
         },
-        min_cases: 9,
+        min_cases: 16,
     },
     CheckDef {
         id: "RAFT-PINS",
