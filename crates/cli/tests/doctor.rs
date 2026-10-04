@@ -25,6 +25,9 @@ const LOCAL: &str = include_str!("../../../config/local.toml");
 /// The report's JSON Schema.
 const SCHEMA: &str = include_str!("../../../schemas/cli/doctor.v1.schema.json");
 
+/// The error envelope's JSON Schema (br-tdy6).
+const ERROR_SCHEMA: &str = include_str!("../../../schemas/cli/error.v1.schema.json");
+
 /// A fresh path for a data directory under cargo's per-target scratch directory.
 fn scratch(name: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -718,6 +721,86 @@ mod doctor_cli {
                 .as_array()
                 .is_some_and(|values| values.contains(&Value::Null)),
             "rule: lock is null when the directory cannot be opened"
+        );
+    }
+
+    #[test]
+    fn usage_and_config_errors_under_json_print_the_error_envelope() {
+        use cli::output::ErrorKind;
+        let schema: Value = serde_json::from_str(ERROR_SCHEMA).unwrap();
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .build(&schema)
+            .unwrap();
+        let local = local_config_path();
+        let local = local.to_str().unwrap();
+        let missing = scratch("no-such-config");
+        let missing = missing.to_str().unwrap();
+        let cases: [(&str, Vec<&str>, &str); 4] = [
+            ("a missing argument", vec!["doctor"], "usage"),
+            (
+                "--config without --node",
+                vec!["doctor", "dir", "--config", local],
+                "usage",
+            ),
+            (
+                "an unreadable config",
+                vec!["doctor", "dir", "--config", missing, "--node", "1"],
+                "config",
+            ),
+            (
+                "--node 0",
+                vec!["doctor", "dir", "--config", local, "--node", "0"],
+                "usage",
+            ),
+        ];
+        for (case, args, kind) in cases {
+            let mut with_json = args.clone();
+            with_json.push("--json");
+            let output = keyval(&with_json);
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+                panic!(
+                    "rule: under --json even an error is one JSON document on stdout (O-6); \
+                     case={case}; {err}; stdout={}",
+                    String::from_utf8_lossy(&output.stdout)
+                )
+            });
+            let errors: Vec<String> = validator
+                .iter_errors(&report)
+                .map(|e| e.to_string())
+                .collect();
+            assert_eq!(
+                (
+                    errors,
+                    report["error"]["kind"].as_str(),
+                    output.status.code()
+                ),
+                (Vec::<String>::new(), Some(kind), Some(2)),
+                "rule: a {kind} error is a keyval.cli.error/v1 envelope, exit 2 (O-6, §11.13); \
+                 case={case} report={report}"
+            );
+            let plain = keyval(&args);
+            assert_eq!(
+                (
+                    plain.stdout.is_empty(),
+                    plain.stderr.is_empty(),
+                    plain.status.code()
+                ),
+                (true, false, Some(2)),
+                "rule: without --json the error stays text on stderr, exit 2; case={case}"
+            );
+        }
+        let listed: BTreeSet<String> = schema
+            .pointer("/properties/error/properties/kind/enum")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(Value::to_string)
+            .collect();
+        assert_eq!(
+            listed,
+            every!(ErrorKind: Usage, Config),
+            "rule: the error schema's kinds are exactly what the CLI serialises (O-6)"
         );
     }
 

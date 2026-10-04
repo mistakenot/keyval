@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/error.v1.schema.json",
+  "title": "keyval.cli.error/v1",
+  "description": "The envelope a keyval command prints on stdout in --json mode when it cannot produce its normal report: invalid arguments, or a configuration it cannot read (crates/cli/src/output.rs; O-6, §8.7). --json is detected before the arguments are parsed, so even a usage error comes in the format the caller asked for. Exit status 2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "error"],
+  "properties": {
+    "schema": { "const": "keyval.cli.error/v1" },
+    "ok": { "const": false },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {
+          "description": "usage: invalid arguments, nothing ran; config: the --config file cannot be read or parsed.",
+          "enum": ["usage", "config"]
+        },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
