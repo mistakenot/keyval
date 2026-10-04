@@ -32,6 +32,12 @@ pub trait Tracker {
     fn mark_failed(&self, id: &str, comment: &str) -> Result<(), String>;
     /// Exports the tracker database to `.beads/issues.jsonl` (`br sync --flush-only`).
     fn flush(&self) -> Result<(), String>;
+    /// Puts the bead back to `status` after a closure or failure record that was not
+    /// committed (br-niaf).
+    fn reopen(&self, id: &str, status: &str) -> Result<(), String>;
+    /// Removes the `failed` and `needs-owner` labels a failure record that was not
+    /// committed added (br-niaf).
+    fn unmark_failed(&self, id: &str) -> Result<(), String>;
 }
 
 /// The real tracker: `br` run in the workspace root.
@@ -132,6 +138,28 @@ impl Tracker for LiveTracker {
 
     fn flush(&self) -> Result<(), String> {
         self.br(&["sync", "--flush-only"]).map(drop)
+    }
+
+    fn reopen(&self, id: &str, status: &str) -> Result<(), String> {
+        let reason = "./dev commit rolled back a closure it could not commit (br-niaf)";
+        if self.bead(id)?.status == "closed" {
+            self.br(&["reopen", id, "--reason", reason, "--json"])?;
+        }
+        self.br(&["update", id, "--status", status, "--json"])
+            .map(drop)
+    }
+
+    fn unmark_failed(&self, id: &str) -> Result<(), String> {
+        self.br(&[
+            "update",
+            id,
+            "--remove-label",
+            "failed",
+            "--remove-label",
+            "needs-owner",
+            "--json",
+        ])
+        .map(drop)
     }
 }
 

@@ -488,6 +488,18 @@ pub mod tests {
                 .extend(["failed".to_owned(), "needs-owner".to_owned()]);
             Ok(())
         }
+        fn reopen(&self, id: &str, status: &str) -> Result<(), String> {
+            let mut beads = self.beads.borrow_mut();
+            let bead = beads.iter_mut().find(|b| b.id == id).ok_or("no bead")?;
+            status.clone_into(&mut bead.status);
+            Ok(())
+        }
+        fn unmark_failed(&self, id: &str) -> Result<(), String> {
+            let mut beads = self.beads.borrow_mut();
+            let bead = beads.iter_mut().find(|b| b.id == id).ok_or("no bead")?;
+            bead.labels.retain(|l| l != "failed" && l != "needs-owner");
+            Ok(())
+        }
         fn flush(&self) -> Result<(), String> {
             *self.flushed.borrow_mut() += 1;
             let Some(path) = self.export.borrow().clone() else {

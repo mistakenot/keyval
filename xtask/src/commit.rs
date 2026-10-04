@@ -136,6 +136,10 @@ pub trait Prepare {
     fn paths(&self, git: &Git) -> Result<Vec<String>, String>;
     /// Makes the change those paths carry.
     fn apply(&self, git: &Git) -> Result<(), String>;
+    /// Undoes what [`Prepare::apply`] changed, because the commit was not made: the gate
+    /// failed, or a later check refused (br-niaf). A change left in place would be carried,
+    /// and judged again, by every later commit. Returns what it undid.
+    fn revert(&self, git: &Git) -> Result<Vec<String>, String>;
 }
 
 /// What the agent asked to commit.
@@ -366,10 +370,16 @@ fn commit(
     if let Some(prepare) = prepare
         && let Err(why) = prepare.apply(git)
     {
-        return report.refuse(why);
+        let mut report = report.refuse(why);
+        roll_back(prepare, git, &mut report);
+        return report;
     }
     if let Err(why) = bead_ready(request, ports) {
-        return report.refuse(why);
+        let mut report = report.refuse(why);
+        if let Some(prepare) = prepare {
+            roll_back(prepare, git, &mut report);
+        }
+        return report;
     }
     if let Err(why) = git.stage(&paths) {
         // `git add` stages nothing when it fails, but give the index back regardless.
@@ -384,8 +394,28 @@ fn commit(
                 "the index could not be given back ({why}); unstage {paths:?} by hand"
             )),
         }
+        if let Some(prepare) = prepare {
+            roll_back(prepare, git, &mut report);
+        }
     }
     report
+}
+
+/// Undoes a prepared change after a commit that was not made, still under the commit
+/// lock, so no other commit sees it (br-niaf), and notes the outcome.
+fn roll_back(prepare: &dyn Prepare, git: &Git, report: &mut CommitReport) {
+    match prepare.revert(git) {
+        Ok(undone) if undone.is_empty() => {}
+        Ok(undone) => report.note(&format!(
+            "nothing was committed, so the prepared changes were rolled back: {}",
+            undone.join("; ")
+        )),
+        Err(why) => report.note(&format!(
+            "nothing was committed, and the prepared changes could not be rolled back \
+             ({why}): restore the tracker and registry/requirements.toml by hand before any \
+             other closure"
+        )),
+    }
 }
 
 /// Gives the index back after a commit that was not made. If it still holds exactly the

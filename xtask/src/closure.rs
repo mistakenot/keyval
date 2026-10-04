@@ -17,10 +17,17 @@
 //! (br-item-closure-identity-unverified-xp14). A bead that is no work item's recorded bead
 //! activates nothing by its own closure; it only brings statuses in line with the export.
 //!
-//! Re-running the command finishes an interrupted closure: the recomputation is derived
-//! from HEAD again, so a flip the interrupted run wrote is committed, never dropped. If HEAD
-//! already records the closure (another closure's commit carried this bead's export),
-//! there is nothing left to commit and the command succeeds.
+//! A closure or failure record that is not committed (its gate failed, or a later check
+//! refused) rolls back what the tracker step changed, still under the commit lock: the
+//! bead's status, the failure labels, and `registry/requirements.toml`. Otherwise every
+//! later closure would recompute from the uncommitted state and fail the same way
+//! (br-niaf). A failure record's comment stays on the bead; the report says so.
+//!
+//! Re-running the command finishes an interrupted closure, one whose process stopped
+//! between the tracker change and the commit: the recomputation is derived from HEAD
+//! again, so a flip the interrupted run wrote is committed, never dropped. If HEAD already
+//! records the closure (another closure's commit carried this bead's export), there is
+//! nothing left to commit and the command succeeds.
 //!
 //! **Failed** (a failed spike, §11.4, D-70). Record the failure-evidence report, label
 //! the bead `failed` + `needs-owner`, and leave it **open**, so its dependants stay
@@ -159,6 +166,8 @@ pub fn run(
         statuses: RefCell::new(StatusChange::default()),
         paths: RefCell::new(None),
         applied: Cell::new(false),
+        undo: RefCell::new(Undo::default()),
+        reverted: Cell::new(false),
     };
     let wrapped = commit::Request {
         kind,
@@ -188,7 +197,10 @@ pub fn run(
                 .detail
                 .as_deref()
                 .unwrap_or("see the commit report"),
-            if step.applied.get() {
+            if step.reverted.get() {
+                "The tracker and registry changes were rolled back (see the commit report's \
+                 notes); fix the cause, then run the same command again"
+            } else if step.applied.get() {
                 "The tracker change stands; re-run the same command to finish it"
             } else {
                 "The tracker was not changed"
@@ -254,6 +266,19 @@ struct StatusChange {
     text: Option<String>,
 }
 
+/// What [`Prepare::apply`] changed, so [`Prepare::revert`] can undo exactly that.
+#[derive(Default)]
+struct Undo {
+    /// The bead's status before `apply` closed it or recorded its failure, if it did.
+    status: Option<String>,
+    /// Whether `apply` added the `failed` and `needs-owner` labels.
+    labels: bool,
+    /// Whether `apply` flushed the tracker export.
+    flushed: bool,
+    /// `registry/requirements.toml` before `apply` rewrote it, if it did.
+    requirements: Option<String>,
+}
+
 /// The tracker side of a closure or failure record, run under the commit lock.
 struct TrackerStep<'a> {
     tracker: &'a dyn Tracker,
@@ -265,6 +290,10 @@ struct TrackerStep<'a> {
     paths: RefCell<Option<Vec<String>>>,
     /// Whether [`Prepare::apply`] began changing the tracker.
     applied: Cell<bool>,
+    /// What [`Prepare::apply`] changed.
+    undo: RefCell<Undo>,
+    /// Whether [`Prepare::revert`] undid something.
+    reverted: Cell<bool>,
 }
 
 impl Prepare for TrackerStep<'_> {
@@ -298,6 +327,7 @@ impl Prepare for TrackerStep<'_> {
         match &self.action {
             Action::Close { reason } => {
                 if bead.status != "closed" {
+                    self.undo.borrow_mut().status = Some(bead.status);
                     self.tracker.close(self.bead, reason)?;
                 }
             }
@@ -313,6 +343,11 @@ impl Prepare for TrackerStep<'_> {
                     .iter()
                     .all(|label| bead.labels.iter().any(|l| l == label));
                 if !marked {
+                    {
+                        let mut undo = self.undo.borrow_mut();
+                        undo.status = Some(bead.status);
+                        undo.labels = true;
+                    }
                     self.tracker.mark_failed(
                         self.bead,
                         &format!(
@@ -325,12 +360,43 @@ impl Prepare for TrackerStep<'_> {
                 }
             }
         }
+        self.undo.borrow_mut().flushed = true;
         self.tracker.flush()?;
         if let Some(text) = &self.statuses.borrow().text {
             let path = git.root().join(registry::REQUIREMENTS);
+            let before =
+                fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+            self.undo.borrow_mut().requirements = Some(before);
             fs::write(&path, text).map_err(|err| format!("{}: {err}", path.display()))?;
         }
         Ok(())
+    }
+
+    fn revert(&self, git: &Git) -> Result<Vec<String>, String> {
+        let undo = std::mem::take(&mut *self.undo.borrow_mut());
+        let mut undone = Vec::new();
+        if undo.labels {
+            self.tracker.unmark_failed(self.bead)?;
+            undone.push(format!(
+                "removed the failed and needs-owner labels from {}; the failure comment stays",
+                self.bead
+            ));
+        }
+        if let Some(status) = &undo.status {
+            self.tracker.reopen(self.bead, status)?;
+            undone.push(format!("{} is {status} again", self.bead));
+        }
+        if undo.flushed && !undone.is_empty() {
+            self.tracker.flush()?;
+            undone.push("the tracker export was flushed again".to_owned());
+        }
+        if let Some(text) = &undo.requirements {
+            let path = git.root().join(registry::REQUIREMENTS);
+            fs::write(&path, text).map_err(|err| format!("{}: {err}", path.display()))?;
+            undone.push(format!("{} is as it was", registry::REQUIREMENTS));
+        }
+        self.reverted.set(!undone.is_empty());
+        Ok(undone)
     }
 }
 
@@ -938,23 +1004,31 @@ status = \"planned\"
         );
     }
 
+    /// The state a closure leaves when its process stops between the tracker change and the
+    /// commit: the tracker step ran, and nothing was committed or rolled back.
+    fn interrupt(w: &World, bead: &str, action: Action) {
+        let step = TrackerStep {
+            tracker: &w.tracker,
+            bead,
+            action,
+            statuses: RefCell::new(StatusChange::default()),
+            paths: RefCell::new(None),
+            applied: Cell::new(false),
+            undo: RefCell::new(Undo::default()),
+            reverted: Cell::new(false),
+        };
+        step.paths(&w.git).unwrap();
+        step.apply(&w.git).unwrap();
+    }
+
     #[test]
     fn an_interrupted_closure_commits_its_activation_flip_on_the_rerun() {
         let w = world("close-interrupted");
         w.tracker.close("br-w01", "closed earlier").unwrap();
         let w49 = w.work("br-w49", "w49.rs");
         w.accept("br-w49", &w49);
-        let mut failing = FakePorts::new(&w.tracker);
-        failing.passed = false;
-        let interrupted = w.close_with("br-w49", &failing);
-        assert!(
-            !interrupted.ok
-                && interrupted
-                    .detail
-                    .as_deref()
-                    .is_some_and(|d| d.contains("The tracker change stands")),
-            "interrupted={interrupted:#?}"
-        );
+        let reason = "interrupted".to_owned();
+        interrupt(&w, "br-w49", Action::Close { reason });
         assert_eq!(
             w.requirement_status(),
             "active",
@@ -1084,12 +1158,80 @@ status = \"planned\"
     }
 
     #[test]
-    fn a_rerun_failure_record_marks_the_bead_once() {
-        let w = world("close-failed-rerun");
+    fn a_closure_whose_gate_fails_rolls_its_tracker_and_registry_changes_back() {
+        let w = world("close-rolled-back");
+        w.tracker.close("br-w01", "closed earlier").unwrap();
+        let w49 = w.work("br-w49", "w49.rs");
+        w.accept("br-w49", &w49);
+        let before = fs::read_to_string(w.git.root().join(registry::REQUIREMENTS)).unwrap();
+        let mut failing = FakePorts::new(&w.tracker);
+        failing.passed = false;
+        let failed = w.close_with("br-w49", &failing);
+        assert!(
+            !failed.ok
+                && failed
+                    .detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("rolled back")),
+            "failed={failed:#?}"
+        );
+        assert_eq!(
+            w.tracker.status("br-w49"),
+            "in_progress",
+            "rule: a closure that was not committed leaves the bead as it was (br-niaf)"
+        );
+        assert_eq!(
+            fs::read_to_string(w.git.root().join(registry::REQUIREMENTS)).unwrap(),
+            before,
+            "rule: the activation flip it wrote is undone"
+        );
+        let notes = failed
+            .commit
+            .as_ref()
+            .and_then(|c| c.detail.clone())
+            .unwrap_or_default();
+        assert!(notes.contains("rolled back"), "notes={notes}");
+
+        let w01_3 = w.work("br-w01-3", "probe.rs");
+        w.accept("br-w01-3", &w01_3);
+        let next = w.close("br-w01-3");
+        assert!(
+            next.ok && next.activated.is_empty(),
+            "rule: the next closure recomputes from the restored tracker and inherits no flip; \
+             next={next:#?}"
+        );
+        assert_eq!(w.requirement_status(), "planned");
+        let retried = w.close("br-w49");
+        assert!(
+            retried.ok && retried.activated == ["O-8"],
+            "rule: once the cause is fixed, the same closure goes through; retried={retried:#?}"
+        );
+    }
+
+    #[test]
+    fn a_failure_record_whose_gate_fails_removes_its_labels_again() {
+        let w = world("close-failed-rolled-back");
         fixture::write(w.git.root(), "reports/f.md", "# failed\n");
         let mut failing = FakePorts::new(&w.tracker);
         failing.passed = false;
         assert!(!w.fail_with("br-w01", "reports/f.md", &failing).ok);
+        let bead = w.tracker.bead("br-w01").unwrap();
+        assert_eq!(
+            (
+                bead.status.as_str(),
+                bead.labels.contains(&"failed".to_owned())
+            ),
+            ("in_progress", false),
+            "rule: an uncommitted failure record takes its labels back (br-niaf); bead={bead:?}"
+        );
+    }
+
+    #[test]
+    fn a_rerun_failure_record_marks_the_bead_once() {
+        let w = world("close-failed-rerun");
+        fixture::write(w.git.root(), "reports/f.md", "# failed\n");
+        let evidence = "reports/f.md".to_owned();
+        interrupt(&w, "br-w01", Action::Fail { evidence });
         let rerun = w.fail_with("br-w01", "reports/f.md", &FakePorts::new(&w.tracker));
         assert!(rerun.ok, "rerun={rerun:#?}");
         let labels = w.tracker.bead("br-w01").unwrap().labels;

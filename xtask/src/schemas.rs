@@ -785,6 +785,12 @@ mod tests {
         fn flush(&self) -> Result<(), String> {
             Err("read-only stand-in".to_owned())
         }
+        fn reopen(&self, _id: &str, _status: &str) -> Result<(), String> {
+            Err("read-only stand-in".to_owned())
+        }
+        fn unmark_failed(&self, _id: &str) -> Result<(), String> {
+            Err("read-only stand-in".to_owned())
+        }
     }
 
     /// A selector runner that records its arguments and reports `ok`.

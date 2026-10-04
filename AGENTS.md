@@ -368,7 +368,10 @@ output only together with its schema, and bump the version when the change break
   - it commits `.beads/` plus any `registry/requirements.toml` flips as one closure
     commit (`Closes: <id>`). `--json` prints `keyval.dev.close/v2` (`activated`,
     `demoted`). Re-running it finishes an interrupted closure, and succeeds
-    with nothing to commit if HEAD already records the closure.
+    with nothing to commit if HEAD already records the closure. If its gate fails, or a
+    later check refuses, it rolls back what it changed under the same lock (the bead's
+    status, its failure labels and any `requirements.toml` flip), so no later closure
+    inherits them (br-niaf).
 
   `--close <id> --failed --evidence <PATH>` records a failed spike. The bead is
   labelled `failed` + `needs-owner` (once, even on a re-run) and stays open, so its
