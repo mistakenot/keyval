@@ -9,10 +9,14 @@
 //!   for a client. Host data (PIDs, wall-clock times, paths, memory addresses) has no
 //!   field, so it cannot enter; protocol decisions are never left out.
 //! - Diagnostics are free text that may carry host data, so they stay out of the
-//!   canonical bytes. They are counted, and dropped past the bound.
-//! - Required observations are bounded per step by the structured-log queue (4,096
-//!   records, §5 limits). Overflowing the bound fails closed: the observation is refused
-//!   and the run is incomplete (P10). Oracle evidence is never silently dropped.
+//!   canonical bytes. A run keeps at most the structured-log queue's bound of them, each
+//!   cut to [`DIAGNOSTIC_TEXT_BYTES`]; past the bound they are dropped. Both counts are
+//!   deterministic, so a nonzero count closes the trace as a metric
+//!   (`diagnostics.dropped`, `diagnostics.truncated`; CD-9, O-3).
+//! - Required observations are bounded per step by the same queue (4,096 records, §7.11,
+//!   registered as `types::Limit::LogQueueRecords`). Overflowing the bound fails closed:
+//!   the observation is refused and the run is incomplete (P10). Oracle evidence is never
+//!   silently dropped.
 //! - The hash (64-bit FNV-1a over the canonical bytes) only speeds up a mismatch check.
 //!   [`compare`] always checks every line, metrics included, and reports the first
 //!   difference; callers keep both traces.
@@ -21,7 +25,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use types::{LogIndex, NodeId, RequestId, Role, Term};
+use types::{Limit, LogIndex, NodeId, RequestId, Role, Term};
 
 use crate::scheduler::{Event, EventSeq, NodeIncarnation};
 
@@ -300,27 +304,38 @@ impl fmt::Display for Record {
     }
 }
 
-/// The bound on required observations, and on diagnostics, per step (§5 limits: the
-/// structured-log queue).
+/// The structured-log queue's bound (§7.11): required observations per step, and
+/// diagnostics kept per run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ObservationBound(usize);
+pub struct ObservationBound(u64);
 
 impl ObservationBound {
-    /// The structured-log queue's bound: 4,096 records.
-    pub const DEFAULT: Self = Self(4_096);
+    /// The registered bound, [`Limit::LogQueueRecords`]: a fixed 4,096 records, read from
+    /// the limits registry rather than restated here (CD-9).
+    pub const DEFAULT: Self = Self(Limit::LogQueueRecords.maximum());
 
-    /// A bound of `records` per step.
+    /// A bound of `records`.
     #[must_use]
-    pub const fn new(records: usize) -> Self {
+    pub const fn new(records: u64) -> Self {
         Self(records)
     }
 
-    /// Records per step.
+    /// The number of records.
     #[must_use]
-    pub const fn get(self) -> usize {
+    pub const fn get(self) -> u64 {
         self.0
     }
 }
+
+/// The most bytes of one diagnostic's text a trace keeps, a bound this type owns (CD-9).
+/// Longer text is cut at a character boundary, and the cut is counted.
+pub const DIAGNOSTIC_TEXT_BYTES: usize = 1024;
+
+/// The metric a nonzero count of dropped diagnostics closes the trace with.
+const DROPPED_METRIC: &str = "diagnostics.dropped";
+
+/// The metric a nonzero count of truncated diagnostics closes the trace with.
+const TRUNCATED_METRIC: &str = "diagnostics.truncated";
 
 /// A required observation the step had no room for. The run is incomplete (P10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,15 +375,16 @@ pub struct Trace {
     metrics: BTreeMap<Name, u64>,
     bound: ObservationBound,
     step: Option<EventSeq>,
-    recorded_in_step: usize,
-    diagnosed_in_step: usize,
+    recorded_in_step: u64,
     diagnostics: Vec<String>,
     dropped_diagnostics: u64,
+    truncated_diagnostics: u64,
     incomplete: bool,
 }
 
 impl Trace {
-    /// An empty trace with `bound` per step.
+    /// An empty trace: `bound` required observations per step, and `bound` diagnostics
+    /// kept per run.
     #[must_use]
     pub const fn new(bound: ObservationBound) -> Self {
         Self {
@@ -377,19 +393,19 @@ impl Trace {
             bound,
             step: None,
             recorded_in_step: 0,
-            diagnosed_in_step: 0,
             diagnostics: Vec::new(),
             dropped_diagnostics: 0,
+            truncated_diagnostics: 0,
             incomplete: false,
         }
     }
 
     /// Starts the step of a dispatched event: its sequence, virtual time, causal parent,
-    /// node incarnation and `kind`. The bounds start again.
+    /// node incarnation and `kind`. The per-step bound on required observations starts
+    /// again; the diagnostics bound is per run.
     pub fn event<E>(&mut self, event: &Event<E>, kind: &Name) {
         self.step = Some(event.seq);
         self.recorded_in_step = 0;
-        self.diagnosed_in_step = 0;
         let parent = event
             .parent
             .map_or_else(|| "-".to_owned(), |parent| parent.get().to_string());
@@ -423,15 +439,21 @@ impl Trace {
         Ok(())
     }
 
-    /// Notes diagnostic text. It never enters the canonical bytes; past the step's bound
-    /// it is dropped and counted.
+    /// Notes diagnostic text, which never enters the canonical bytes.
+    ///
+    /// A run keeps at most the bound's worth of diagnostics, each cut to
+    /// [`DIAGNOSTIC_TEXT_BYTES`] at a character boundary. Past the bound a diagnostic is
+    /// dropped. Both are counted (CD-9, O-3).
     pub fn diagnostic(&mut self, text: &str) {
-        if self.diagnosed_in_step >= self.bound.get() {
+        if u64::try_from(self.diagnostics.len()).unwrap_or(u64::MAX) >= self.bound.get() {
             self.dropped_diagnostics += 1;
             return;
         }
-        self.diagnosed_in_step += 1;
-        self.diagnostics.push(text.to_owned());
+        let kept = prefix_within(text, DIAGNOSTIC_TEXT_BYTES);
+        if kept.len() < text.len() {
+            self.truncated_diagnostics += 1;
+        }
+        self.diagnostics.push(kept.to_owned());
     }
 
     /// Sets a deterministic metric; metrics close the trace in name order.
@@ -458,13 +480,27 @@ impl Trace {
         self.dropped_diagnostics
     }
 
+    /// Diagnostics whose text was cut to [`DIAGNOSTIC_TEXT_BYTES`].
+    #[must_use]
+    pub const fn truncated_diagnostics(&self) -> u64 {
+        self.truncated_diagnostics
+    }
+
     /// The canonical bytes: every line, then the metrics, each ending in a newline. An
     /// incomplete trace ends with [`INCOMPLETE_MARKER`], so incompleteness is part of the
     /// bytes that are compared, not only of this value (P10).
     #[must_use]
     pub fn canonical(&self) -> String {
-        let metrics = self
-            .metrics
+        let mut metrics = self.metrics.clone();
+        for (metric, count) in [
+            (DROPPED_METRIC, self.dropped_diagnostics),
+            (TRUNCATED_METRIC, self.truncated_diagnostics),
+        ] {
+            if let Some(name) = Name::new(metric).filter(|_| count > 0) {
+                metrics.insert(name, count);
+            }
+        }
+        let metrics = metrics
             .iter()
             .map(|(name, value)| format!("M {} {value}", name.as_str()));
         let marker = self.incomplete.then(|| INCOMPLETE_MARKER.to_owned());
@@ -485,6 +521,16 @@ impl Trace {
     pub fn hash(&self) -> TraceHash {
         TraceHash::of(&self.canonical())
     }
+}
+
+/// The longest prefix of `text` that is at most `bytes` long and ends on a character
+/// boundary.
+fn prefix_within(text: &str, bytes: usize) -> &str {
+    let mut end = bytes.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.get(..end).unwrap_or_default()
 }
 
 /// A trace's 64-bit FNV-1a hash: a fast mismatch test, never proof of equality.
@@ -847,7 +893,76 @@ mod tests {
             "R - commit n1/1 1\nR - commit n1/1 2\nX incomplete\n",
             "rule: the refused record is absent and the bytes end with the incomplete marker"
         );
-        assert_eq!(ObservationBound::DEFAULT.get(), 4_096, "rule: §5 limits");
+        assert_eq!(
+            types::Limit::LogQueueRecords.source(),
+            types::LimitSource::Fixed(ObservationBound::DEFAULT.get()),
+            "rule: the bound is the registered structured-log queue (§7.11, CD-9)"
+        );
+    }
+
+    #[test]
+    fn retained_diagnostics_are_bounded_per_run_and_the_drops_are_reported() {
+        let mut scheduler = Scheduler::new(
+            MasterSeed::new(4).stream(Subsystem::Scheduler),
+            EventBudget::DEFAULT,
+        );
+        let mut trace = Trace::new(ObservationBound::new(3));
+        let mut step = |trace: &mut Trace, micros| {
+            scheduler
+                .schedule(VirtualTime::from_micros(micros), None, ())
+                .unwrap();
+            let Step::Event(event) = scheduler.step() else {
+                panic!("expected an event");
+            };
+            trace.event(&event, &name("tick"));
+        };
+        step(&mut trace, 1);
+        trace.diagnostic("one");
+        trace.diagnostic("two");
+        assert_eq!(trace.diagnostics().len(), 2, "rule: N-1 are kept");
+        step(&mut trace, 2);
+        trace.diagnostic("three");
+        assert_eq!(trace.diagnostics().len(), 3, "rule: N are kept");
+        trace.diagnostic("four");
+        step(&mut trace, 3);
+        trace.diagnostic("five");
+        assert_eq!(
+            (trace.diagnostics(), trace.dropped_diagnostics()),
+            (["one", "two", "three"].map(str::to_owned).as_slice(), 2),
+            "rule: N+1 and later are dropped and counted; a new step does not reset the \
+             bound, which is per run (CD-9)"
+        );
+        assert!(
+            trace.is_complete(),
+            "rule: dropping diagnostics never fails a run"
+        );
+        assert!(
+            trace.canonical().ends_with("M diagnostics.dropped 2\n"),
+            "rule: the drop count is reported, as a deterministic metric; canonical={:?}",
+            trace.canonical()
+        );
+    }
+
+    #[test]
+    fn oversized_diagnostic_text_is_cut_at_a_character_boundary_and_counted() {
+        let mut trace = trace_of(&[]);
+        let exact = "a".repeat(DIAGNOSTIC_TEXT_BYTES);
+        trace.diagnostic(&exact);
+        // A two-byte character straddles the limit, so the cut falls before it.
+        let straddling = format!("{}\u{e9}tail", "b".repeat(DIAGNOSTIC_TEXT_BYTES - 1));
+        trace.diagnostic(&straddling);
+        assert_eq!(
+            trace.diagnostics(),
+            [exact, "b".repeat(DIAGNOSTIC_TEXT_BYTES - 1)],
+            "rule: text up to the limit is kept whole; longer text is cut at a character \
+             boundary (CD-9)"
+        );
+        assert_eq!(trace.truncated_diagnostics(), 1);
+        assert!(
+            trace.canonical().ends_with("M diagnostics.truncated 1\n"),
+            "rule: the cut is counted and reported; canonical={:?}",
+            trace.canonical()
+        );
     }
 
     #[test]

@@ -9,20 +9,20 @@
 //! An event's causal parent is the event whose handling scheduled it: the one dispatched
 //! last. The run's initial events have none.
 //!
-//! A run has an event budget (1,000,000 per scenario manifest, §5 limits). Exhausting it
-//! with events still pending makes the run incomplete, which fails (P10); an incomplete
-//! run is never reported as a pass.
+//! A run has an event budget: 1,000,000 per scenario manifest by default, the registered
+//! `types::Limit::SimEventsPerRun` (§7.11). Exhausting it with events still pending makes
+//! the run incomplete, which fails (P10); an incomplete run is never reported as a pass.
 //!
 //! The same budget bounds the pending queue (CD-9): it never holds more events than the
-//! run may dispatch. Scheduling past that bound is a typed refusal, and the run is
+//! run may dispatch. The queue is a `types::BoundedMap` of that size. Scheduling past the
+//! bound is a typed refusal, checked before any randomness is drawn, and the run is
 //! incomplete from then on, so a fan-out bug ends in `Incomplete` instead of exhausting
 //! memory.
 
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use types::{Incarnation, NodeId};
+use types::{BoundedMap, Incarnation, Limit, NodeId};
 
 use crate::entropy::SplitMix64;
 
@@ -92,8 +92,9 @@ pub struct Event<E> {
 pub struct EventBudget(u64);
 
 impl EventBudget {
-    /// The budget per scenario manifest: 1,000,000 events.
-    pub const DEFAULT: Self = Self(1_000_000);
+    /// The registered budget, [`Limit::SimEventsPerRun`]: a fixed 1,000,000 events per
+    /// scenario manifest, read from the limits registry rather than restated here (CD-9).
+    pub const DEFAULT: Self = Self(Limit::SimEventsPerRun.maximum());
 
     /// A budget of `events` events.
     #[must_use]
@@ -195,7 +196,8 @@ struct Pending<E> {
 /// The single-threaded discrete-event scheduler.
 #[derive(Debug)]
 pub struct Scheduler<E> {
-    queue: BTreeMap<Order, Pending<E>>,
+    /// The pending events, at most the event budget's worth (CD-9).
+    queue: BoundedMap<Order, Pending<E>>,
     ties: SplitMix64,
     budget: EventBudget,
     now: VirtualTime,
@@ -209,9 +211,9 @@ impl<E> Scheduler<E> {
     /// An empty scheduler at virtual time zero. Its tie priorities come from `ties`, the
     /// run's [`Subsystem::Scheduler`](crate::Subsystem::Scheduler) stream.
     #[must_use]
-    pub const fn new(ties: SplitMix64, budget: EventBudget) -> Self {
+    pub fn new(ties: SplitMix64, budget: EventBudget) -> Self {
         Self {
-            queue: BTreeMap::new(),
+            queue: BoundedMap::new(usize::try_from(budget.get()).unwrap_or(usize::MAX)),
             ties,
             budget,
             now: VirtualTime::ZERO,
@@ -259,7 +261,7 @@ impl<E> Scheduler<E> {
         if at < self.now {
             return Err(ScheduleError::InThePast { now: self.now, at });
         }
-        if u64::try_from(self.queue.len()).unwrap_or(u64::MAX) >= self.budget.get() {
+        if self.queue.len() >= self.queue.max_entries() {
             self.refused = true;
             return Err(ScheduleError::QueueFull { bound: self.budget });
         }
@@ -275,7 +277,11 @@ impl<E> Scheduler<E> {
             node,
             payload,
         };
-        self.queue.insert(order, pending);
+        // The bound was checked above, before the tie was drawn, so this always fits.
+        if self.queue.insert(order, pending).is_err() {
+            self.refused = true;
+            return Err(ScheduleError::QueueFull { bound: self.budget });
+        }
         Ok(seq)
     }
 
@@ -303,7 +309,10 @@ impl<E> Scheduler<E> {
                 reason: Shortfall::BudgetExhausted,
             };
         }
-        let Some((order, pending)) = self.queue.pop_first() else {
+        let next = self.queue.iter().next().map(|(order, _)| *order);
+        let Some((order, pending)) =
+            next.and_then(|order| self.queue.remove(&order).map(|pending| (order, pending)))
+        else {
             return Step::Complete {
                 events: self.dispatched,
             };
@@ -579,8 +588,44 @@ mod tests {
     }
 
     #[test]
-    fn the_default_budget_is_one_million_events() {
-        assert_eq!(EventBudget::DEFAULT.get(), 1_000_000, "rule: §5 limits");
+    fn the_default_budget_is_the_registered_one() {
+        assert_eq!(
+            Limit::SimEventsPerRun.source(),
+            types::LimitSource::Fixed(EventBudget::DEFAULT.get()),
+            "rule: the budget is the registered limit (§7.11, CD-9), not a restated literal"
+        );
+    }
+
+    #[test]
+    fn a_refused_schedule_draws_no_tie_and_takes_no_sequence() {
+        let mut refused = scheduler(13, EventBudget::new(4));
+        let mut clean = scheduler(13, EventBudget::new(4));
+        for s in [&mut refused, &mut clean] {
+            s.schedule(at(10), None, 0).unwrap();
+            assert!(matches!(s.step(), Step::Event(_)));
+        }
+        assert!(matches!(
+            refused.schedule(at(5), None, 1),
+            Err(ScheduleError::InThePast { .. })
+        ));
+        assert_eq!(
+            (&refused.ties, refused.next_seq),
+            (&clean.ties, clean.next_seq),
+            "rule: a refusal in the past draws no randomness and takes no sequence number"
+        );
+        let mut full = scheduler(14, EventBudget::new(1));
+        let mut room = scheduler(14, EventBudget::new(1));
+        full.schedule(at(1), None, 0).unwrap();
+        room.schedule(at(1), None, 0).unwrap();
+        assert!(matches!(
+            full.schedule(at(2), None, 1),
+            Err(ScheduleError::QueueFull { .. })
+        ));
+        assert_eq!(
+            (&full.ties, full.next_seq),
+            (&room.ties, room.next_seq),
+            "rule: a queue-full refusal draws no randomness and takes no sequence number"
+        );
     }
 
     #[test]
