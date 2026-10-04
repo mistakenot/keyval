@@ -1,5 +1,7 @@
 //! [`RaftNode`]: the Consensus port over the vendored `RawNode` (PLAN.md §7.2, §7.3, §7.4).
 
+use std::cell::Ref;
+
 use journal::{JournalError, LogicalLog, RaftBatch};
 use raft::{RawNode, StateRole};
 use types::{
@@ -52,6 +54,8 @@ struct Outstanding {
 pub struct RaftNode<R: JournalRead> {
     /// This node.
     node: NodeId,
+    /// The configured voters, sorted, without duplicates: the static membership (§7.7 step 6).
+    voters: Vec<NodeId>,
     /// The library.
     raw: RawNode<JournalStorage<R>>,
     /// The outstanding Ready, if any.
@@ -88,7 +92,10 @@ impl<R: JournalRead> RaftNode<R> {
         if applied > commit {
             return Err(ConstructError::AppliedPastCommit { applied, commit });
         }
-        let storage = JournalStorage::new(settings.node_id(), log, reader, voters);
+        let mut voters: Vec<NodeId> = voters.into_iter().collect();
+        voters.sort_unstable();
+        voters.dedup();
+        let storage = JournalStorage::new(settings.node_id(), log, reader, voters.iter().copied());
         // An explicit logger with a discarding drain: no background thread, no output (§7.3).
         let logger = slog::Logger::root(slog::Discard, slog::o!());
         let raw = RawNode::new(
@@ -102,6 +109,7 @@ impl<R: JournalRead> RaftNode<R> {
         })?;
         Ok(Self {
             node: settings.node_id(),
+            voters,
             raw,
             outstanding: None,
         })
@@ -112,8 +120,21 @@ impl<R: JournalRead> RaftNode<R> {
         self.node
     }
 
-    /// The library's storage view: the logical log.
-    pub fn storage(&self) -> &JournalStorage<R> {
+    /// The configured voters, sorted, without duplicates.
+    pub fn voters(&self) -> &[NodeId] {
+        &self.voters
+    }
+
+    /// The journal's logical log, read-only: the offset index, the persisted hard state and
+    /// the entry cache. Only the loop writes it, through [`persist`](Self::persist).
+    pub fn log(&self) -> Ref<'_, LogicalLog> {
+        self.raw.store().log()
+    }
+
+    /// The library's storage view, for this crate's tests. It never leaves the crate: no
+    /// library type crosses the port (CD-1).
+    #[cfg(test)]
+    pub(crate) fn storage(&self) -> &JournalStorage<R> {
         self.raw.store()
     }
 

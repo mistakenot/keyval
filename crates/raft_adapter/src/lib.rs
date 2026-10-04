@@ -23,14 +23,14 @@
 //! entropy-patched `RawNode` (W02). No library type crosses the port (CD-1): entries, hard
 //! state and status are core types, and messages travel as encoded bytes.
 //!
-//! - **Configuration** ([`library_config`]): the validated consensus settings map onto the
+//! - **Configuration** (`library_config`): the validated consensus settings map onto the
 //!   library's `Config`. Pre-vote and check-quorum are on, and every §7.11 bound is set,
 //!   including `max_committed_size_per_ready`, which the library leaves unlimited by default.
 //!   Every config the parser accepts constructs a `RawNode` (D-78), and a test builds one for
 //!   every committed fixture config.
-//! - **Entropy** ([`EntropySource`]): the core's entropy port is the patched library's
+//! - **Entropy** (`EntropySource`): the core's entropy port is the patched library's
 //!   mandatory entropy source, so randomised election timeouts are seeded (P4).
-//! - **Storage** ([`JournalStorage`]): the library reads its log through the journal's
+//! - **Storage** (`JournalStorage`): the library reads its log through the journal's
 //!   logical log, meaning its offset index and entry cache (§7.4 step 4). Its
 //!   `initial_state` is the recovered hard state plus the static voter set, because
 //!   membership never comes from the log in v1 (§7.7 step 6).
@@ -46,6 +46,39 @@
 //!   the node moves to `failed` (§7.11).
 //!
 //! W13.3 adds the peer-envelope codec around the messages the loop sends.
+//!
+//! **The port is the boundary (CD-1).** The library's configuration, entropy and storage
+//! adapters stay inside this crate, and so does mutable access to the log; nothing public
+//! names a `raft`, `raft-proto` or `protobuf` type. These examples pin it. The public API
+//! reads the log through a core type:
+//!
+//! ```
+//! fn last<R: types::JournalRead>(node: &raft_adapter::RaftNode<R>) -> types::LogIndex {
+//!     node.log().last_index()
+//! }
+//! ```
+//!
+//! The library's adapters are not exported:
+//!
+//! ```compile_fail,E0432
+//! use raft_adapter::JournalStorage;
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use raft_adapter::EntropySource;
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use raft_adapter::library_config;
+//! ```
+//!
+//! The storage view, with its mutable log, is not reachable through a node:
+//!
+//! ```compile_fail,E0624
+//! fn view<R: types::JournalRead>(node: &raft_adapter::RaftNode<R>) {
+//!     let _ = node.storage();
+//! }
+//! ```
 
 mod config;
 mod convert;
@@ -60,8 +93,6 @@ mod storage;
 #[cfg(test)]
 mod test_support;
 
-pub use config::library_config;
-pub use entropy::EntropySource;
 pub use node::{ConstructError, RaftNode};
 pub use ready_loop::{Apply, Fed, LoopError, RaftInput, ReadyLoop, Synced};
-pub use storage::{JournalStorage, ReadFailure};
+pub use storage::ReadFailure;
