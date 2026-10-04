@@ -522,7 +522,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check JOURNAL-LOG"
-min_cases = 8
+min_cases = 12
 status = "implemented"
 
 [[check]]
@@ -563,14 +563,14 @@ status = "implemented"
 
 [[check]]
 id = "JOURNAL-RECOVERY"
-summary = "recovery verifies the genesis, replays the frames into the live log, discards only a torn tail (at most one maximum frame, with no valid later frame anywhere after it, skipping an intact header's payload) and refuses corruption, impossible index relationships, a genesis mismatch and a blank start (DUR-6, DUR-8, DUR-9, D-60, D-69)"
+summary = "recovery verifies the genesis, replays the frames into the live log, discards only a torn tail (at most one maximum frame, with no valid later frame anywhere after it, skipping an intact header's payload) and refuses corruption, impossible index or term relationships, a genesis mismatch and a blank start; every recovery golden journal recovers exactly as pinned (DUR-5, DUR-6, DUR-8, DUR-9, D-60, D-69)"
 kind = "test_group"
-covers = ["DUR-6", "DUR-8", "DUR-9", "CD-10"]
+covers = ["DUR-5", "DUR-6", "DUR-8", "DUR-9", "CD-10"]
 api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check JOURNAL-RECOVERY"
-min_cases = 10
+min_cases = 18
 status = "implemented"
 
 [[check]]

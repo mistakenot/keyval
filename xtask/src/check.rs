@@ -797,7 +797,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "journal",
             filters: &["log_tests::"],
         },
-        min_cases: 8,
+        min_cases: 12,
     },
     CheckDef {
         id: "COMMAND-CODEC",
@@ -853,17 +853,18 @@ pub const CATALOGUE: &[CheckDef] = &[
         summary: "recovery verifies the genesis, replays the frames into the live log, \
                   discards only a torn tail (at most one maximum frame, with no valid \
                   later frame anywhere after it, skipping an intact header's payload) \
-                  and refuses corruption, impossible index relationships, a genesis \
-                  mismatch and a blank start (DUR-6, DUR-8, DUR-9, D-60, D-69)",
+                  and refuses corruption, impossible index or term relationships, a \
+                  genesis mismatch and a blank start; every recovery golden journal \
+                  recovers exactly as pinned (DUR-5, DUR-6, DUR-8, DUR-9, D-60, D-69)",
         kind: Kind::TestGroup,
-        covers: &["DUR-6", "DUR-8", "DUR-9", "CD-10"],
+        covers: &["DUR-5", "DUR-6", "DUR-8", "DUR-9", "CD-10"],
         class: ClaimClass::Invariant,
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "journal",
-            filters: &["recovery_tests::"],
+            filters: &["recovery_tests::", "golden_recovery::"],
         },
-        min_cases: 10,
+        min_cases: 18,
     },
     CheckDef {
         id: "CAPACITY",

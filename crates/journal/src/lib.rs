@@ -45,6 +45,8 @@ mod crc32c;
 mod frame;
 #[cfg(test)]
 mod golden;
+#[cfg(test)]
+mod golden_recovery;
 mod log;
 #[cfg(test)]
 mod log_tests;
