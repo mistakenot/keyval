@@ -13,6 +13,7 @@ statemachine = { workspace = true }
 [dev-dependencies]
 model = { workspace = true }
 raft_adapter = { workspace = true }
+journal = { workspace = true }
 
 [lints]
 workspace = true

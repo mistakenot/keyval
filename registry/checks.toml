@@ -899,15 +899,15 @@ status = "implemented"
 
 [[check]]
 id = "SIM-NET-SCENARIOS"
-summary = "planned for W16.2: the simulated network's scenario tests: loss, delay, reorder, duplication, symmetric and asymmetric partitions and queue overflow each exercised; a stale packet delivered to a node after it restarted, handled as an ordinary stale protocol message; a client response lost after a committed application (§9.1, §12.2 W16)"
+summary = "five real Ready loops exchange real sealed peer envelopes over the simulated network, driven by the scheduler, under each §9.1 network fault: loss, delay and reordering, duplication, a 3/2 partition with the old leader in the minority, a leader that can send but not receive, link-queue overflow, restarts with packets in flight (stale packets reach the new incarnation as ordinary stale messages) and client responses lost after a committed application; every run keeps one leader per term and one applied history, sends nothing on unsynced state, and commits every command once the faults heal (W16.2)"
 kind = "test_group"
-covers = ["T-3", "P3"]
+covers = ["C-2", "P3"]
 api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check SIM-NET-SCENARIOS"
-min_cases = 1
-status = "planned"
+min_cases = 8
+status = "implemented"
 
 [[check]]
 id = "MODEL-SPEC"

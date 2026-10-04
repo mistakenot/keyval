@@ -1369,6 +1369,27 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 11,
     },
     CheckDef {
+        id: "SIM-NET-SCENARIOS",
+        summary: "five real Ready loops exchange real sealed peer envelopes over the simulated \
+                  network, driven by the scheduler, under each §9.1 network fault: loss, delay \
+                  and reordering, duplication, a 3/2 partition with the old leader in the \
+                  minority, a leader that can send but not receive, link-queue overflow, \
+                  restarts with packets in flight (stale packets reach the new incarnation as \
+                  ordinary stale messages) and client responses lost after a committed \
+                  application; every run keeps one leader per term and one applied history, \
+                  sends nothing on unsynced state, and commits every command once the faults \
+                  heal (W16.2)",
+        kind: Kind::TestGroup,
+        covers: &["C-2", "P3"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["scenarios::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
         id: "MODEL-SPEC",
         summary: "the reference model server, run as its own binary over real HTTP, \
                   answers every operation with a status the spec declares (or 405/415 \
