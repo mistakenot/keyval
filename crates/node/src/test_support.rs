@@ -18,7 +18,7 @@ use types::{
     Refusal, RequestId, Response, StorageError, SyncSeq, Term, Tick, Value,
 };
 
-use crate::{Applying, Boot, Controller, Proposal, Requests, View, WritePath};
+use crate::{Applying, Boot, Controller, Proposal, RequestLifecycle, Requests, View, WritePath};
 
 /// The cluster instance every test journal is initialised with.
 pub const INSTANCE: &str = "00112233445566778899aabbccddeeff";
@@ -385,6 +385,19 @@ impl Member {
     /// A fresh node `id`: genesis only.
     pub fn fresh(config: &Config, id: NodeId) -> Self {
         Self::start(config, id, genesis_journal(config, id), id.get())
+    }
+}
+
+impl Member<RequestLifecycle> {
+    /// A fresh node `id` with the node's real request lifecycle.
+    pub fn fresh_lifecycle(config: &Config, id: NodeId) -> Self {
+        Self::start_with(
+            config,
+            id,
+            genesis_journal(config, id),
+            id.get(),
+            RequestLifecycle::new(config, id),
+        )
     }
 }
 

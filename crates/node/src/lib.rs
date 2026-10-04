@@ -48,10 +48,11 @@
 //! - **Failure** (DM-7, §7.11): a loop error or a failed storage effect moves the node to
 //!   `failed`. It stops feeding the library and drops peer envelopes, counted.
 //!
-//! The request lifecycle is the policy behind [`Requests`]: the F-7 decision order, the
-//! attempt state machine and the read path (W14.2, W14.3). The controller hands it client
-//! attempts, applied entries, expired deadlines and the shutdown, and proposes the commands
-//! it asks for, one per turn.
+//! The request lifecycle is the policy behind [`Requests`]. [`RequestLifecycle`], the one the
+//! roots use, routes writes to the [`WritePath`] (the F-7 decision order and the attempt
+//! state machine, W14.2) and reads to the [`ReadPath`] (W14.3). The controller hands it client
+//! attempts, applied entries, expired deadlines, status changes and the shutdown, and
+//! proposes the commands it asks for, one per turn.
 //!
 //! No queue, map or counter here grows without a registered bound (CD-9): the queue is
 //! bounded by `controller_queue_inputs`, the deadline book by `pending_attempts`, and the
@@ -61,9 +62,13 @@ mod controller;
 #[cfg(test)]
 mod controller_tests;
 mod deadlines;
+mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
 mod queue;
 #[cfg(test)]
 mod queue_tests;
+mod reads;
 mod requests;
 #[cfg(test)]
 mod test_support;
@@ -73,5 +78,7 @@ mod write_path_tests;
 
 pub use controller::{Boot, Controller, Counters, Failure, StartError, TICKS_PER_TURN};
 pub use deadlines::DeadlinesFull;
+pub use lifecycle::RequestLifecycle;
+pub use reads::ReadPath;
 pub use requests::{Applying, Proposal, Requests, View};
 pub use write_path::WritePath;

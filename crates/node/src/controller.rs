@@ -9,7 +9,7 @@ use raft_adapter::{
 use statemachine::{StateLimits, StateMachine};
 use types::{
     AttemptId, Config, DroppedInput, Effect, Entropy, Entry, EntryIndex, Inbound, Incarnation,
-    Input, JournalRead, Lifecycle, Limit, LogEvent, LogIndex, NodeId, OutboundMessage,
+    Input, JournalRead, Lifecycle, Limit, LogEvent, LogIndex, NodeId, Observation, OutboundMessage,
     ProposeError, Refusal, Response, Role, Status, StorageOp, SyncSeq, Term, Tick, invariant,
 };
 
@@ -213,6 +213,10 @@ impl<R: JournalRead, Q: Requests> Controller<R, Q> {
                 .entry(index, &reader)
                 .map_err(|error| StartError::Replay { index: raw, error })?;
             state.apply(&entry, commit);
+        }
+        if commit > LogIndex::ZERO {
+            // The published view starts at the replayed prefix (C-3, C-4).
+            effects.push(Effect::Observe(Observation::Applied { index: commit }));
         }
         let raft = RaftNode::new(&settings, config.voters(), log, reader, entropy, commit)
             .map_err(StartError::Construct)?;

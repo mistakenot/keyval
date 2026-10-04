@@ -1472,6 +1472,29 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 29,
     },
+    CheckDef {
+        id: "NODE-READ-PATH",
+        summary: "the read path and the request lifecycle (§7.9, F-2, F-9, A-2, C-3, C-4, \
+                  W14.3): a GET answers the value and version, or not_found, from the applied \
+                  prefix in one turn with served_by (node, applied index); a read during an \
+                  outstanding sync shows only the applied prefix, never the unsynced entry; the \
+                  status lookup answers the stored result if applied, unknown otherwise, \
+                  proposing nothing; a node that is not Ready answers recovering and a stopping \
+                  one unavailable; every applied entry, the election no-op included, is observed \
+                  once in index order before what it answers, and a restarted node observes its \
+                  replayed prefix; reported prefixes never go back within an incarnation; a \
+                  follower serves reads from its own applied prefix; NODE-READ-NO-SCAN fires on \
+                  a SCAN before W28",
+        kind: Kind::TestGroup,
+        covers: &["A-2", "C-3", "C-4", "F-2", "F-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "node",
+            filters: &["lifecycle_tests::", "reads::invariant_fixtures::"],
+        },
+        min_cases: 9,
+    },
 ];
 
 /// Outcome of one requested check.
