@@ -797,9 +797,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         tier: Tier::T0,
         selector: Selector::CargoTest {
             package: "journal",
-            filters: &["log_tests::"],
+            filters: &["log_tests::", "log::invariant_fixtures::"],
         },
-        min_cases: 13,
+        min_cases: 18,
     },
     CheckDef {
         id: "COMMAND-CODEC",
@@ -866,7 +866,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "journal",
             filters: &["recovery_tests::", "golden_recovery::"],
         },
-        min_cases: 18,
+        min_cases: 20,
     },
     CheckDef {
         id: "CAPACITY",

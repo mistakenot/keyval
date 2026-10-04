@@ -60,6 +60,6 @@ pub use frame::{
     FORMAT_VERSION, Frame, FrameError, FrameKind, HEADER_LEN, Header, MAGIC, TRAILER_LEN, decode,
     decode_header, encode,
 };
-pub use log::{JournalError, LogBounds, LogicalLog};
+pub use log::{JournalError, LogBounds, LogicalLog, MIN_ENTRY_RECORD_BYTES};
 pub use record::{Genesis, GenesisMismatch, RaftBatch, RecordError};
 pub use recovery::{MAX_FRAME_LEN, Recovered, RecoveryError, recover};

@@ -250,6 +250,15 @@ impl fmt::Display for JournalError {
 
 impl std::error::Error for JournalError {}
 
+/// The fewest journal bytes one entry of the logical log occupies.
+///
+/// That is its record in a Raft-batch payload with no command data: index (8), term (8),
+/// payload kind (1) and data length (4) (`record.rs`). Every entry the offset index
+/// holds was written in some frame of a journal that never passes `max_journal_bytes`
+/// (DM-7), so the index holds at most `max_journal_bytes / MIN_ENTRY_RECORD_BYTES` entries
+/// ([`LogBounds::max_index_entries`], CD-9; br-rszf).
+pub const MIN_ENTRY_RECORD_BYTES: u64 = 21;
+
 /// Where one entry of the logical log lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Position {
@@ -299,6 +308,14 @@ impl EntryCache {
             };
             self.bytes = self.bytes.saturating_sub(Self::weight(&evicted));
         }
+        types::invariant!(
+            self.bytes <= self.limit,
+            "JOURNAL-CACHE-BOUND",
+            "the entry cache holds {} bytes, past its {}-byte bound, after caching entry {}",
+            self.bytes,
+            self.limit,
+            self.entries.keys().next_back().copied().unwrap_or_default()
+        );
     }
 
     /// Drops every entry at or after `index`.
@@ -352,6 +369,13 @@ impl LogBounds {
     #[must_use]
     pub const fn max_journal_bytes(self) -> ByteCount {
         self.max_journal_bytes
+    }
+
+    /// The offset index's bound: the most entries a logical log within these bounds can
+    /// hold, since each occupies at least [`MIN_ENTRY_RECORD_BYTES`] of the journal (CD-9).
+    #[must_use]
+    pub const fn max_index_entries(self) -> u64 {
+        self.max_journal_bytes.get() / MIN_ENTRY_RECORD_BYTES
     }
 }
 
@@ -513,6 +537,14 @@ impl LogicalLog {
         let frame_len = u64::try_from(header.frame_len()).unwrap_or(u64::MAX);
         self.end = offset.saturating_add(frame_len);
         self.next_sequence = sequence.saturating_add(1);
+        self.check_invariants(offset);
+        Ok(())
+    }
+
+    /// Asserts the logical log's invariants after the frame at `offset` changed it (CD-7):
+    /// no entry's term above the persisted term, the persisted commit within the log, and
+    /// the offset index within its bound (br-rszf).
+    fn check_invariants(&self, offset: u64) {
         types::invariant!(
             self.positions
                 .last()
@@ -521,7 +553,22 @@ impl LogicalLog {
             "the last entry's term exceeds the persisted term {} after the frame at {offset}",
             self.hard_state.term.get()
         );
-        Ok(())
+        let last = u64::try_from(self.positions.len()).unwrap_or(u64::MAX);
+        types::invariant!(
+            self.hard_state.commit.get() <= last,
+            "JOURNAL-COMMIT-WITHIN-LOG",
+            "the persisted commit {} is beyond the last index {last} after the frame at \
+             {offset}",
+            self.hard_state.commit.get()
+        );
+        types::invariant!(
+            last <= self.max_journal_bytes / MIN_ENTRY_RECORD_BYTES,
+            "JOURNAL-INDEX-BOUND",
+            "the offset index holds {last} entries, past the {} a {}-byte journal can hold, \
+             after the frame at {offset}",
+            self.max_journal_bytes / MIN_ENTRY_RECORD_BYTES,
+            self.max_journal_bytes
+        );
     }
 
     /// Refuses a hard state that would lower the persisted term or commit, or change the
@@ -709,4 +756,89 @@ fn read_frame(storage: &impl JournalRead, offset: u64) -> Result<Vec<u8>, Journa
         return Err(JournalError::NotRaftBatch { offset });
     }
     Ok(frame.payload().to_vec())
+}
+
+/// Corrupted-state fixtures: each invariant of the logical log fires on the state it
+/// forbids (CD-7, br-rszf). The state is corrupted directly, because no sequence of valid
+/// appends reaches it.
+#[cfg(test)]
+mod invariant_fixtures {
+    use types::{ByteCount, Entry, EntryIndex, EntryPayload, HardState, LogIndex, NodeId, Term};
+
+    use super::{LogBounds, LogicalLog, MIN_ENTRY_RECORD_BYTES};
+    use crate::{FrameKind, RaftBatch, decode_header, encode};
+
+    fn log() -> LogicalLog {
+        let voters: Vec<NodeId> = (1..=5).map(|id| NodeId::new(id).unwrap()).collect();
+        let bounds = LogBounds::new(ByteCount::new(1 << 20), ByteCount::new(1 << 40));
+        LogicalLog::after_genesis(100, &voters, bounds)
+    }
+
+    /// Applies one frame holding entry 1 of term 1 and no hard state.
+    fn apply_first_entry(log: &mut LogicalLog) {
+        let entry = Entry {
+            index: EntryIndex::new(1).unwrap(),
+            term: Term::new(1).unwrap(),
+            payload: EntryPayload::Command(vec![7; 10]),
+        };
+        let batch = RaftBatch::new(vec![entry], None).unwrap();
+        let frame = encode(FrameKind::RaftBatch, log.next_sequence(), &batch.encode()).unwrap();
+        let _ = log.apply(log.end(), decode_header(&frame).unwrap(), batch);
+    }
+
+    /// The in-force term 1, so entry 1 of term 1 is a possible append.
+    fn in_term_one(log: &mut LogicalLog, commit: u64) {
+        log.hard_state = HardState {
+            term: Term::new(1).unwrap(),
+            vote: None,
+            commit: LogIndex::new(commit).unwrap(),
+        };
+    }
+
+    #[test]
+    fn the_minimum_entry_record_is_the_encoded_size_of_an_empty_entry() {
+        let entry = Entry {
+            index: EntryIndex::new(1).unwrap(),
+            term: Term::new(1).unwrap(),
+            payload: EntryPayload::Empty,
+        };
+        let batch = RaftBatch::new(vec![entry], None).unwrap();
+        // the entry count (4) and the hard-state flag (1) frame the one entry record
+        assert_eq!(
+            u64::try_from(batch.encode().len()).unwrap() - 5,
+            MIN_ENTRY_RECORD_BYTES,
+            "rule: the offset index bound rests on the real encoding (CD-9)"
+        );
+        let bounds = LogBounds::new(ByteCount::new(1), ByteCount::new(4 << 30));
+        assert_eq!(bounds.max_index_entries(), (4 << 30) / 21);
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant JOURNAL-COMMIT-WITHIN-LOG violated")]
+    fn a_commit_beyond_the_log_fires_its_invariant() {
+        // No frame can reach this state: apply refuses every batch that would leave the
+        // commit beyond the log (TruncatesCommitted, CommitBeyondLog), so the corrupted
+        // state is checked directly.
+        let mut log = log();
+        in_term_one(&mut log, 5);
+        log.check_invariants(log.end());
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant JOURNAL-INDEX-BOUND violated")]
+    fn an_index_past_its_bound_fires_its_invariant() {
+        let mut log = log();
+        in_term_one(&mut log, 0);
+        log.max_journal_bytes = MIN_ENTRY_RECORD_BYTES - 1;
+        apply_first_entry(&mut log);
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant JOURNAL-CACHE-BOUND violated")]
+    fn a_cache_past_its_bound_fires_its_invariant() {
+        let mut log = log();
+        in_term_one(&mut log, 0);
+        log.cache.bytes = log.cache.limit + 100;
+        apply_first_entry(&mut log);
+    }
 }

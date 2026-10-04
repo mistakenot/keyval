@@ -522,7 +522,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check JOURNAL-LOG"
-min_cases = 13
+min_cases = 18
 status = "implemented"
 
 [[check]]
@@ -570,7 +570,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check JOURNAL-RECOVERY"
-min_cases = 18
+min_cases = 20
 status = "implemented"
 
 [[check]]
