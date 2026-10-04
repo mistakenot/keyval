@@ -109,6 +109,11 @@ impl History {
         self.records.is_empty()
     }
 
+    /// Every recorded request ID and its record, in request-ID order.
+    pub fn iter(&self) -> impl Iterator<Item = (&RequestId, &Record)> {
+        self.records.iter()
+    }
+
     /// Records `request_id`'s first execution, returning any record it already had; the
     /// caller asserts there was none.
     pub(crate) fn insert(&mut self, request_id: RequestId, record: Record) -> Option<Record> {

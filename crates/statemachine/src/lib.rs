@@ -36,6 +36,9 @@
 //!   replay of the stored result; another command under the same ID is a conflict (C-6).
 //!   Digests are SHA-256 over the canonical bytes ([`CommandDigest`], D-75), and conflict
 //!   detection rests on its collision resistance, a stated Assumption (§10.15).
+//! - **[`StateDigest`]**: [`StateMachine::digest`], SHA-256 over a canonical encoding of the
+//!   map and the request history: the applied state that convergence (K-7) and the god
+//!   view (T-5) compare. The applied index is not part of it.
 //!
 //! Versions are execution indices (DM-3): a PUT at entry *i* gives its key version *i*,
 //! so versions strictly increase per key and have gaps.
@@ -53,6 +56,7 @@
 mod apply;
 mod capacity;
 pub mod codec;
+mod digest;
 mod history;
 
 #[cfg(test)]
@@ -61,4 +65,5 @@ mod properties;
 pub use apply::{Applied, StateMachine, Stored};
 pub use capacity::StateLimits;
 pub use codec::Command;
+pub use digest::StateDigest;
 pub use history::{CommandDigest, History, Record};

@@ -743,6 +743,7 @@ dependencies = [
 name = "sim"
 version = "0.1.0"
 dependencies = [
+ "statemachine",
  "types",
 ]
 

@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 types = { workspace = true }
+statemachine = { workspace = true }
 
 [lints]
 workspace = true
