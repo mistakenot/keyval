@@ -359,7 +359,7 @@ title = "Bug variants exist only in test builds"
 [[requirement]]
 id = "T-7"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "An independent reference model defines expected semantics"
 
 [[requirement]]
