@@ -10,7 +10,7 @@ use types::{
     invariant,
 };
 
-use crate::admit::admit;
+use crate::admit::{admit, fits_log};
 use crate::config::library_config;
 use crate::convert::{entries_from_library, hard_state_from_library, outbound};
 use crate::entropy::EntropySource;
@@ -365,6 +365,7 @@ impl<R: JournalRead> Consensus for RaftNode<R> {
     fn step(&mut self, message: Vec<u8>) -> Result<(), StepError> {
         self.check_no_ready("a peer message");
         let message = admit(&message, self.node, &self.voters).map_err(|_| StepError::Rejected)?;
+        fits_log(&message, self.raw.raft.raft_log.last_index()).map_err(|_| StepError::Rejected)?;
         self.raw.step(message).map_err(|_| StepError::Rejected)
     }
 

@@ -1185,7 +1185,9 @@ pub const CATALOGUE: &[CheckDef] = &[
                   unknown fields at every depth; a vote request from a non-voter, a \
                   proposal, a snapshot or a configuration change from the wire never reaches \
                   the library, a follower that knows its leader never forwards a \
-                  proposal, and a heartbeat from another voter still reaches the library",
+                  proposal, a heartbeat committing past this node's log is refused (br-1jtp), \
+                  an append conflicting below the commit index is answered without a \
+                  panic, and a heartbeat from another voter still reaches the library",
         kind: Kind::TestGroup,
         covers: &["CD-3"],
         class: ClaimClass::Invariant,
@@ -1194,7 +1196,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "raft_adapter",
             filters: &["admit_tests::"],
         },
-        min_cases: 16,
+        min_cases: 18,
     },
     CheckDef {
         id: "DIFFERENTIAL",

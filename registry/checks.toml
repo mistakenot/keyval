@@ -767,14 +767,14 @@ status = "implemented"
 
 [[check]]
 id = "PEER-ADMISSION"
-summary = "the adapter steps only peer messages v1 exchanges (br-xx08; §7.3, §7.8, §8.2; W02 audit S-1, H-3): Append, Heartbeat, RequestVote and RequestPreVote and their responses, addressed to this node from another voter; it refuses every other message type, snapshots and snapshot requests, contexts and priorities, term 0, terms and indices above 2^53 - 1, entries v1 never replicates or that do not follow their predecessor, and unknown fields at every depth; a vote request from a non-voter, a proposal, a snapshot or a configuration change from the wire never reaches the library, a follower that knows its leader never forwards a proposal, and a heartbeat from another voter still reaches the library"
+summary = "the adapter steps only peer messages v1 exchanges (br-xx08; §7.3, §7.8, §8.2; W02 audit S-1, H-3): Append, Heartbeat, RequestVote and RequestPreVote and their responses, addressed to this node from another voter; it refuses every other message type, snapshots and snapshot requests, contexts and priorities, term 0, terms and indices above 2^53 - 1, entries v1 never replicates or that do not follow their predecessor, and unknown fields at every depth; a vote request from a non-voter, a proposal, a snapshot or a configuration change from the wire never reaches the library, a follower that knows its leader never forwards a proposal, a heartbeat committing past this node's log is refused (br-1jtp), an append conflicting below the commit index is answered without a panic, and a heartbeat from another voter still reaches the library"
 kind = "test_group"
 covers = ["CD-3"]
 api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check PEER-ADMISSION"
-min_cases = 16
+min_cases = 18
 status = "implemented"
 
 [[check]]

@@ -12,7 +12,7 @@ use types::{
     StepError, Term,
 };
 
-use crate::admit::{Inadmissible, admit};
+use crate::admit::{Inadmissible, admit, fits_log};
 use crate::node::RaftNode;
 use crate::test_support::{Journal, Seeded, config, empty_log};
 
@@ -450,6 +450,121 @@ fn follower(journal: &Journal) -> RaftNode<Journal> {
         LogIndex::ZERO,
     )
     .unwrap()
+}
+
+/// Runs every Ready `node` has, persisting each frame into `journal`, and reports what it
+/// committed as applied.
+fn settle_node(node: &mut RaftNode<Journal>, journal: &Journal) {
+    while let Some(ready) = node.ready() {
+        if let Some(frame) = node.persist().unwrap() {
+            journal.push(&frame);
+            node.synced();
+        }
+        let light = node.advance();
+        if let Some(last) = ready.committed().iter().chain(&light.committed).last() {
+            node.applied(last.index.index());
+        }
+    }
+}
+
+/// Node 1 following node 7 in term 2, with entries 1 to 3 of term 2 committed.
+fn follower_with_committed_log(journal: &Journal) -> RaftNode<Journal> {
+    let mut node = follower(journal);
+    let mut sent = message(MessageType::MsgAppend);
+    sent.term = 2;
+    sent.commit = 3;
+    for index in 1..=3 {
+        sent.entries.push(eraftpb::Entry {
+            index,
+            term: 2,
+            data: b"committed".to_vec().into(),
+            ..eraftpb::Entry::default()
+        });
+    }
+    node.step(encode(&sent)).unwrap();
+    settle_node(&mut node, journal);
+    assert_eq!(
+        (node.status().commit.get(), node.status().last.get()),
+        (3, 3),
+        "fixture: entries 1 to 3 are committed"
+    );
+    node
+}
+
+#[test]
+fn a_heartbeat_commit_past_the_log_is_refused() {
+    let mut heartbeat = message(MessageType::MsgHeartbeat);
+    heartbeat.commit = 5;
+    assert_eq!(
+        fits_log(&heartbeat, 4),
+        Err(Inadmissible::CommitPastLog { commit: 5, last: 4 }),
+        "rule: raft-rs's commit_to would fatal! past the last index (br-1jtp)"
+    );
+    heartbeat.commit = 4;
+    assert_eq!(
+        fits_log(&heartbeat, 4),
+        Ok(()),
+        "rule: up to the last index is fine"
+    );
+    let mut append = append(&[2, 3]);
+    append.commit = 99;
+    assert_eq!(
+        fits_log(&append, 4),
+        Ok(()),
+        "rule: an append's commit is bounded by its own entries (maybe_append), so it is safe"
+    );
+    // Without this refusal, raft-rs fatal!s: "to_commit 1 is out of range [last_index 0]".
+    let journal = Journal::default();
+    let mut node = follower(&journal);
+    let before = node.status();
+    let mut forged = message(MessageType::MsgHeartbeat);
+    forged.commit = 1;
+    assert_eq!(
+        node.step(encode(&forged)),
+        Err(StepError::Rejected),
+        "rule: a heartbeat committing past this node's log never reaches the library"
+    );
+    assert_eq!(
+        (node.ready(), node.status()),
+        (None, before),
+        "rule: and changes nothing"
+    );
+}
+
+#[test]
+fn an_append_conflicting_with_committed_entries_is_answered_not_fatal() {
+    // raft-rs fatal!s if an appended entry conflicts with a committed one
+    // (maybe_append). Admission makes that unreachable: below the commit index,
+    // handle_append_entries answers at once; at or above it, contiguity puts every entry
+    // past the commit index (br-1jtp).
+    let journal = Journal::default();
+    let mut node = follower_with_committed_log(&journal);
+    let mut forged = message(MessageType::MsgAppend);
+    forged.term = 3;
+    forged.index = 1;
+    forged.log_term = 2;
+    forged.entries.push(eraftpb::Entry {
+        index: 2,
+        term: 3,
+        data: b"conflicting".to_vec().into(),
+        ..eraftpb::Entry::default()
+    });
+    assert_eq!(
+        node.step(encode(&forged)),
+        Ok(()),
+        "rule: the admitted append reaches the library, which answers it without panicking"
+    );
+    settle_node(&mut node, &journal);
+    let term_at = |index| {
+        node.log()
+            .term(types::EntryIndex::new(index).unwrap())
+            .map(Term::get)
+    };
+    assert_eq!(
+        (term_at(2), node.status().commit.get()),
+        (Some(2), 3),
+        "rule: the committed entry is kept, and the commit index with it"
+    );
 }
 
 #[test]

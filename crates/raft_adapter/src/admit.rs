@@ -25,6 +25,17 @@
 //! - **Unknown fields:** refused at every depth. [`decode_message`] refuses them on the
 //!   message and its entries, and the only other nested message, the snapshot, is refused
 //!   outright.
+//!
+//! Every rule above is stateless. One more needs the node's log ([`fits_log`], br-1jtp): a
+//! heartbeat whose commit index is past this node's last index is refused, because raft-rs's
+//! `commit_to` would `fatal!` on it. An honest leader never sends one: it sends
+//! `min(matched, committed)`, and `matched` covers only entries this node synced before
+//! acknowledging them (DUR-2); a heartbeat from an older term would be ignored anyway.
+//! raft-rs's other stateful `fatal!` on peer input, an appended entry conflicting with a
+//! committed one, cannot be reached: `handle_append_entries` answers at once when the
+//! message's index is below the commit index, and otherwise the contiguity rule puts every
+//! entry above it. A peer that forges otherwise plausible state is Byzantine, outside v1's
+//! fault model (§2.2).
 
 use raft::eraftpb::{self, EntryType, MessageType};
 use types::{MAX_COMMAND_BYTES, MAX_SAFE_INTEGER, NodeId};
@@ -60,6 +71,13 @@ pub enum Inadmissible {
     OutOfRange,
     /// A message term of 0, which only local messages carry.
     ZeroTerm,
+    /// A heartbeat whose commit index is past this node's last index.
+    CommitPastLog {
+        /// The heartbeat's commit index.
+        commit: u64,
+        /// This node's last index.
+        last: u64,
+    },
     /// The entry at `position` is not one v1 replicates: entries on a message type that
     /// carries none, a configuration change, a context, `sync_log`, or more than one
     /// command's bytes.
@@ -122,6 +140,22 @@ pub fn admit(
     }
     check_entries(&message)?;
     Ok(message)
+}
+
+/// Whether `message`, already admitted, fits this node's log, whose last index is `last`
+/// (module documentation).
+///
+/// # Errors
+///
+/// [`Inadmissible::CommitPastLog`] for a heartbeat whose commit index is past `last`.
+pub fn fits_log(message: &eraftpb::Message, last: u64) -> Result<(), Inadmissible> {
+    if message.get_msg_type() == MessageType::MsgHeartbeat && message.commit > last {
+        return Err(Inadmissible::CommitPastLog {
+            commit: message.commit,
+            last,
+        });
+    }
+    Ok(())
 }
 
 /// Whether v1 peers exchange messages of `kind`: `Some(true)` if they may carry entries,
