@@ -165,11 +165,12 @@ impl StateMachine {
     /// - `SM-APPLY-IN-ORDER`: `entry` is not the one after the applied index;
     /// - `SM-COMMAND-DECODES`: a committed command does not decode, although the leader
     ///   validated it before proposing it (step 2);
-    /// - `SM-COMMAND-ADMITTED`: a committed DELETE or compare-and-swap, which no node
-    ///   admits before W27 implements their apply;
+    /// - `SM-COMMAND-ADMITTED`: a committed compare-and-swap, which no node admits before
+    ///   W27.2 implements its apply;
     /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds;
     /// - `SM-LIVE-BYTES` and `SM-COMMAND-BYTES`: a live-bytes or committed-command-bytes
-    ///   counter that would go below zero or overflow;
+    ///   counter that would go below zero or overflow, on a PUT's overwrite or a DELETE's
+    ///   removal;
     /// - `SM-VERSION-INCREASES`: a write that would not raise its key's version (DM-3);
     /// - `SM-LIVE-WITHIN-QUOTA` and `SM-HISTORY-BOUNDED`: after the entry, the live state
     ///   exceeds its DM-6 quota, or the history holds more records than entries applied.
@@ -263,8 +264,9 @@ impl StateMachine {
     }
 
     /// Step 4: a command's first execution. A PUT sets its key with `version = index`
-    /// unless the live-state quota refuses it. The result, whatever it is, is recorded in
-    /// the history, and the command's `size` is added to the DM-7 counter.
+    /// unless the live-state quota refuses it; a DELETE removes its key if present and
+    /// reports whether it existed (F-3), assigning no version (DM-3). The result, whatever it
+    /// is, is recorded in the history, and the command's `size` is added to the DM-7 counter.
     fn first_execution(
         &mut self,
         index: EntryIndex,
@@ -276,20 +278,20 @@ impl StateMachine {
             request_id,
             mutation,
         } = command;
-        let put = match mutation {
-            Mutation::Put { key, value } => Some((key, value)),
-            Mutation::Delete { .. } | Mutation::Cas { .. } => None,
+        let decision = match mutation {
+            Mutation::Put { key, value } => Some(self.put(index, key, value)),
+            Mutation::Delete { key } => Some(self.delete(index, &key)),
+            Mutation::Cas { .. } => None,
         };
         invariant!(
-            put.is_some(),
+            decision.is_some(),
             "SM-COMMAND-ADMITTED",
-            "node {}: committed entry {index} carries a DELETE or compare-and-swap, which \
-             no node admits before W27 implements their apply",
+            "node {}: committed entry {index} carries a compare-and-swap, which no node \
+             admits before W27.2 implements its apply",
             self.node
         );
         // The fallback is unreachable once the invariant above holds.
-        put.map_or(Applied::Empty, |(key, value)| {
-            let decision = self.put(index, key, value);
+        decision.map_or(Applied::Empty, |decision| {
             let result = TerminalResult::executed_at(index, decision);
             let earlier = self
                 .history
@@ -368,12 +370,35 @@ impl StateMachine {
         Decision::Set
     }
 
+    /// A DELETE's step 4: removes the key if it is live, and says whether it was (F-3).
+    /// Nothing gets a version (DM-3), and the live-state counters shrink by the removed
+    /// entry, so a DELETE is never refused by the quota (DM-6).
+    fn delete(&mut self, index: EntryIndex, key: &Key) -> Decision {
+        let Some(stored) = self.map.remove(key) else {
+            return Decision::Deleted { existed: false };
+        };
+        let removed = entry_bytes(key.as_str(), stored.value.as_str());
+        let rest = self.live_bytes.checked_sub(removed);
+        invariant!(
+            rest.is_some(),
+            "SM-LIVE-BYTES",
+            "node {}: entry {index}: live bytes {} are fewer than the deleted entry's {}",
+            self.node,
+            self.live_bytes.get(),
+            removed.get()
+        );
+        self.live_bytes = rest.unwrap_or(ByteCount::ZERO);
+        Decision::Deleted { existed: true }
+    }
+
     /// Whether one more live key fits `max_live_keys` (DM-6).
     fn has_room_for_a_key(&self) -> bool {
         self.live_keys() < self.limits.max_live_keys
     }
 }
 
+#[cfg(test)]
+mod delete_tests;
 #[cfg(test)]
 mod invariant_fixtures;
 
@@ -594,7 +619,7 @@ mod tests {
     #[test]
     #[should_panic(
         expected = "invariant SM-COMMAND-ADMITTED violated: node 1: committed entry \
-                               1 carries a DELETE or compare-and-swap"
+                               1 carries a compare-and-swap"
     )]
     fn a_committed_compare_and_swap_is_not_admitted_before_w27() {
         let cas = codec::encode(&Command {

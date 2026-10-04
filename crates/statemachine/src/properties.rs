@@ -2,7 +2,9 @@
 //! - a PUT's version is its execution index;
 //! - a replay returns the original result;
 //! - a conflicting command changes nothing;
-//! - a quota refusal is terminal and deterministic.
+//! - a quota refusal is terminal and deterministic;
+//! - a DELETE removes its key and reports whether it existed, and a key's versions strictly
+//!   increase across delete and re-create (W27.1, F-3, DM-3).
 //!
 //! These are hand-rolled rather than proptest (the decision on
 //! br-w09-4-invariants-property-tests-5mr): this is a deterministic crate, so no RNG crate.
@@ -21,7 +23,7 @@ use std::panic::{self, AssertUnwindSafe};
 use types::{
     ByteCount, Decision, Entry, EntryIndex, EntryPayload, ItemCount, Key, KeyValueLimits,
     LiveStateLimit, LogIndex, MAX_SAFE_INTEGER, Mutation, NodeId, RequestId, Term, TerminalResult,
-    Value,
+    Value, Version,
 };
 
 use crate::{Applied, Command, StateLimits, StateMachine, Stored, codec};
@@ -56,6 +58,8 @@ enum Step {
     Empty,
     /// A PUT of key `k<key>` to a value of `len` bytes, under request ID `request`.
     Put { request: u8, key: u8, len: u8 },
+    /// A DELETE of key `k<key>`, under request ID `request`.
+    Delete { request: u8, key: u8 },
 }
 
 impl Step {
@@ -70,6 +74,20 @@ impl Step {
                         .unwrap(),
                 },
             })),
+            Self::Delete { request, key } => EntryPayload::Command(codec::encode(&Command {
+                request_id: RequestId::from_bytes([request; 16]),
+                mutation: Mutation::Delete {
+                    key: key_named(key),
+                },
+            })),
+        }
+    }
+
+    /// The key a PUT or DELETE names.
+    const fn key(self) -> Option<u8> {
+        match self {
+            Self::Put { key, .. } | Self::Delete { key, .. } => Some(key),
+            Self::Empty => None,
         }
     }
 }
@@ -108,10 +126,15 @@ fn generate(seed: u64) -> Vec<Step> {
             {
                 return previous;
             }
-            let step = Step::Put {
-                request,
-                key: below(&mut rng, 5),
-                len: below(&mut rng, 12),
+            let key = below(&mut rng, 5);
+            let step = if next(&mut rng).is_multiple_of(4) {
+                Step::Delete { request, key }
+            } else {
+                Step::Put {
+                    request,
+                    key,
+                    len: below(&mut rng, 12),
+                }
             };
             first.entry(request).or_insert(step);
             step
@@ -166,11 +189,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                 }
             }
             (Applied::Executed { request_id, result }, Step::Put { key, .. }) => {
-                if first.insert(*request_id, *result).is_some() {
-                    return Err(format!(
-                        "entry {raw}: request {request_id} executed twice (C-6)"
-                    ));
-                }
+                once(raw, &mut first, *request_id, *result)?;
                 match result.decision() {
                     Decision::Set => {
                         let version = state.get(&key_named(key)).map(Stored::version);
@@ -192,15 +211,14 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                         return Err(format!("entry {raw}: a PUT decided {result:?}"));
                     }
                 }
-                if after.command_bytes <= before.command_bytes
-                    || after.records != before.records + 1
-                {
-                    return Err(format!(
-                        "entry {raw}: a first execution was not recorded and counted (DM-5, DM-7)"
-                    ));
-                }
+                recorded(raw, &before, &after)?;
             }
-            (Applied::Replayed { request_id, result }, Step::Put { .. }) => {
+            (Applied::Executed { request_id, result }, Step::Delete { key, .. }) => {
+                once(raw, &mut first, *request_id, *result)?;
+                delete_executed(raw, key, result, &before, &after)?;
+                recorded(raw, &before, &after)?;
+            }
+            (Applied::Replayed { request_id, result }, Step::Put { .. } | Step::Delete { .. }) => {
                 if first.get(request_id) != Some(result) {
                     return Err(format!(
                         "entry {raw}: a replay of {request_id} returned {result:?}, not the \
@@ -217,7 +235,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                     request_id,
                     original_index,
                 },
-                Step::Put { .. },
+                Step::Put { .. } | Step::Delete { .. },
             ) => {
                 let original = first.get(request_id).map(|result| result.index());
                 if original != Some(original_index.index()) {
@@ -232,7 +250,7 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
                     ));
                 }
             }
-            (Applied::Empty, Step::Put { .. })
+            (Applied::Empty, Step::Put { .. } | Step::Delete { .. })
             | (
                 Applied::Executed { .. } | Applied::Replayed { .. } | Applied::Conflict { .. },
                 Step::Empty,
@@ -243,6 +261,65 @@ fn check(steps: &[Step]) -> Result<Vec<Applied>, String> {
         results.push(applied);
     }
     Ok(results)
+}
+
+/// A DELETE's first execution of key `k<key>` (F-3, DM-3, DM-6): `existed` says whether the
+/// key was live, nothing gets a version, the key is gone and every other key is untouched,
+/// and the live bytes shrink only if it existed.
+fn delete_executed(
+    raw: u64,
+    key: u8,
+    result: &TerminalResult,
+    before: &Snapshot,
+    after: &Snapshot,
+) -> Result<(), String> {
+    let was = before.keys.iter().any(|(live, _)| *live == key_named(key));
+    if result.decision() != (Decision::Deleted { existed: was }) || result.version().is_some() {
+        return Err(format!(
+            "entry {raw}: a DELETE of a key that {} decided {result:?} (F-3, DM-3)",
+            if was { "existed" } else { "was absent" }
+        ));
+    }
+    let left: Vec<&(Key, Stored)> = before
+        .keys
+        .iter()
+        .filter(|(live, _)| *live != key_named(key))
+        .collect();
+    if after.keys.iter().collect::<Vec<_>>() != left
+        || (!was && after.live_bytes != before.live_bytes)
+        || (was && after.live_bytes >= before.live_bytes)
+    {
+        return Err(format!(
+            "entry {raw}: a DELETE left the live state wrong: before {before:?}, \
+             after {after:?} (F-3, DM-6)"
+        ));
+    }
+    Ok(())
+}
+
+/// A request ID executes for the first time once (C-6); records its result.
+fn once(
+    raw: u64,
+    first: &mut BTreeMap<RequestId, TerminalResult>,
+    request_id: RequestId,
+    result: TerminalResult,
+) -> Result<(), String> {
+    if first.insert(request_id, result).is_some() {
+        return Err(format!(
+            "entry {raw}: request {request_id} executed twice (C-6)"
+        ));
+    }
+    Ok(())
+}
+
+/// A first execution is recorded in the history and counted toward DM-7 (DM-5, §7.5).
+fn recorded(raw: u64, before: &Snapshot, after: &Snapshot) -> Result<(), String> {
+    if after.command_bytes <= before.command_bytes || after.records != before.records + 1 {
+        return Err(format!(
+            "entry {raw}: a first execution was not recorded and counted (DM-5, DM-7)"
+        ));
+    }
+    Ok(())
 }
 
 /// [`check`] twice: every property holds, and the same log gives the same results both
@@ -316,7 +393,25 @@ fn w09_properties_hold_on_seeded_logs() {
 fn the_generated_logs_reach_every_outcome() {
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     for seed in 0..SEEDS {
-        for applied in check(&generate(seed)).unwrap() {
+        let steps = generate(seed);
+        let mut deleted: Vec<u8> = Vec::new();
+        for (step, applied) in steps.iter().zip(check(&steps).unwrap()) {
+            if let Applied::Executed { result, .. } = &applied {
+                match (result.decision(), step.key()) {
+                    (Decision::Deleted { existed: true }, Some(key)) => deleted.push(key),
+                    (Decision::Set, Some(key)) if deleted.contains(&key) => {
+                        *seen.entry("re-created").or_insert(0) += 1;
+                        deleted.retain(|gone| *gone != key);
+                    }
+                    (
+                        Decision::Set
+                        | Decision::Deleted { .. }
+                        | Decision::VersionMismatch { .. }
+                        | Decision::CapacityExceeded { .. },
+                        _,
+                    ) => {}
+                }
+            }
             let kind = match applied {
                 Applied::Empty => "empty",
                 Applied::Replayed { .. } => "replayed",
@@ -329,7 +424,9 @@ fn the_generated_logs_reach_every_outcome() {
                     Decision::CapacityExceeded {
                         limit: LiveStateLimit::Bytes,
                     } => "refused for bytes",
-                    Decision::Deleted { .. } | Decision::VersionMismatch { .. } => "other",
+                    Decision::Deleted { existed: true } => "deleted",
+                    Decision::Deleted { existed: false } => "deleted absent",
+                    Decision::VersionMismatch { .. } => "other",
                 },
             };
             *seen.entry(kind).or_insert(0) += 1;
@@ -342,6 +439,9 @@ fn the_generated_logs_reach_every_outcome() {
         "refused for bytes",
         "replayed",
         "conflict",
+        "deleted",
+        "deleted absent",
+        "re-created",
     ] {
         assert!(
             seen.get(kind).is_some_and(|&count| count > 0),
@@ -375,6 +475,54 @@ fn the_shrinker_finds_a_minimal_failing_log() {
 fn matches_key(step: Step, wanted: u8) -> bool {
     match step {
         Step::Put { key, .. } => key == wanted,
-        Step::Empty => false,
+        Step::Delete { .. } | Step::Empty => false,
     }
+}
+
+#[test]
+fn versions_strictly_increase_across_delete_and_re_create_on_seeded_logs() {
+    // W27.1, DM-3: a key's version only grows over its whole life, deletes included. The
+    // test is non-vacuous only if some key is re-created after a DELETE.
+    let mut re_created = 0;
+    for seed in REGRESSION_SEEDS.iter().copied().chain(0..SEEDS) {
+        let steps = generate(seed);
+        let mut highest: BTreeMap<u8, Version> = BTreeMap::new();
+        let mut deleted: Vec<u8> = Vec::new();
+        for (raw, (step, applied)) in (1_u64..).zip(steps.iter().zip(check(&steps).unwrap())) {
+            let Applied::Executed { result, .. } = applied else {
+                continue;
+            };
+            let Some(key) = step.key() else {
+                continue;
+            };
+            match (result.decision(), result.version()) {
+                (Decision::Set, Some(version)) => {
+                    let previous = highest.insert(key, version);
+                    assert!(
+                        previous.is_none_or(|previous| previous < version),
+                        "rule: a key's version strictly increases, across delete and \
+                         re-create too (DM-3); seed {seed}, entry {raw}: k{key} got {version:?} \
+                         after {previous:?}; re-run: ./dev check STATE-PROPERTIES --case \
+                         properties::versions_strictly_increase_across_delete_and_re_create_on_seeded_logs"
+                    );
+                    if deleted.contains(&key) {
+                        re_created += 1;
+                        deleted.retain(|gone| *gone != key);
+                    }
+                }
+                (Decision::Deleted { existed: true }, _) => deleted.push(key),
+                (
+                    Decision::Set
+                    | Decision::Deleted { existed: false }
+                    | Decision::VersionMismatch { .. }
+                    | Decision::CapacityExceeded { .. },
+                    _,
+                ) => {}
+            }
+        }
+    }
+    assert!(
+        re_created > 0,
+        "fixture: some key is re-created after a DELETE, so the property is not vacuous (P10)"
+    );
 }

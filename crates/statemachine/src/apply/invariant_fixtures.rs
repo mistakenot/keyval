@@ -174,3 +174,19 @@ fn a_second_first_execution_of_a_request_fires() {
         first,
     );
 }
+
+#[test]
+#[should_panic(
+    expected = "invariant SM-LIVE-BYTES violated: node 1: entry 2: live bytes 1 \
+                           are fewer than the deleted entry's 3"
+)]
+fn a_live_bytes_counter_below_a_deleted_entry_fires() {
+    let mut state = machine(roomy());
+    state.apply(&entry(1, put(1, "k", "vv")), far());
+    state.live_bytes = ByteCount::new(1);
+    let delete = codec::encode(&Command {
+        request_id: RequestId::from_bytes([2; 16]),
+        mutation: Mutation::Delete { key: key("k") },
+    });
+    state.apply(&entry(2, EntryPayload::Command(delete)), far());
+}

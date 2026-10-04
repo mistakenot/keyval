@@ -891,8 +891,9 @@ pub const CATALOGUE: &[CheckDef] = &[
         id: "STATE-INVARIANTS",
         summary: "every state-machine invariant is armed: a corrupted-state fixture makes each \
                   fire with its ID, node and entry (applied beyond commit, a version that would \
-                  not grow, live state over quota, counter underflow or overflow, history past \
-                  the applied entries, a request executed twice) (CD-7)",
+                  not grow, live state over quota, counter underflow or overflow on an overwrite \
+                  or a delete, history past the applied entries, a request executed twice) \
+                  (CD-7)",
         kind: Kind::TestGroup,
         covers: &["CD-7"],
         class: ClaimClass::Invariant,
@@ -901,14 +902,16 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "statemachine",
             filters: &["apply::invariant_fixtures::"],
         },
-        min_cases: 8,
+        min_cases: 9,
     },
     CheckDef {
         id: "STATE-PROPERTIES",
         summary: "over seeded random logs with retries, conflicts and quota refusals: version = \
                   execution index, a replay returns the original result, a conflicting command \
-                  changes nothing, and a quota refusal is terminal and deterministic; failures \
-                  shrink and name their seed (DM-3, DM-5, DM-6, C-6)",
+                  changes nothing, a quota refusal is terminal and deterministic, a DELETE \
+                  removes its key and reports whether it existed, and a key's versions strictly \
+                  increase across delete and re-create; failures shrink and name their seed \
+                  (DM-3, DM-5, DM-6, C-6)",
         kind: Kind::TestGroup,
         covers: &["DM-3", "DM-5", "DM-6", "C-6"],
         class: ClaimClass::Invariant,
@@ -917,7 +920,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "statemachine",
             filters: &["properties::"],
         },
-        min_cases: 3,
+        min_cases: 4,
     },
     CheckDef {
         id: "MODEL",
@@ -1541,6 +1544,26 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["attempt_table_tests::"],
         },
         min_cases: 17,
+    },
+    CheckDef {
+        id: "APPLY-DELETE",
+        summary: "DELETE in apply (§7.5, F-3, DM-3, DM-5, DM-6, DM-7, W27.1): a DELETE removes a \
+                  live key and returns existed = true, and deleting an absent key succeeds with \
+                  existed = false and changes no live state; it assigns no version, and a \
+                  re-created key gets its re-creating index; at the key quota it is never \
+                  refused and frees room for a new key; its result is recorded once in the \
+                  history, so a duplicate entry replays existed = true and another command with \
+                  its ID conflicts; its canonical length counts toward DM-7 once; and a log with \
+                  deletes replays to the same state and results",
+        kind: Kind::TestGroup,
+        covers: &["F-3", "DM-3", "DM-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["apply::delete_tests::"],
+        },
+        min_cases: 7,
     },
 ];
 
