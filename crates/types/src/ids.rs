@@ -138,23 +138,10 @@ impl RequestId {
     /// [`RequestIdError`] on any other length, or on any character outside `0-9a-f`
     /// (uppercase included).
     pub fn parse(text: &str) -> Result<Self, RequestIdError> {
-        let bytes = text.as_bytes();
-        if bytes.len() != Self::TEXT_LEN {
-            return Err(RequestIdError::WrongLength { bytes: bytes.len() });
-        }
-        let mut id = [0_u8; 16];
-        for (index, &[high, low]) in bytes.as_chunks::<2>().0.iter().enumerate() {
-            let nibble = |at: usize, byte: u8| match byte {
-                b'0'..=b'9' => Ok(byte - b'0'),
-                b'a'..=b'f' => Ok(byte - b'a' + 10),
-                _ => Err(RequestIdError::NotLowercaseHex { at }),
-            };
-            let value = (nibble(2 * index, high)? << 4) | nibble(2 * index + 1, low)?;
-            if let Some(slot) = id.get_mut(index) {
-                *slot = value;
-            }
-        }
-        Ok(Self(id))
+        parse_hex16(text).map(Self).map_err(|error| match error {
+            HexError::WrongLength { bytes } => RequestIdError::WrongLength { bytes },
+            HexError::NotLowercaseHex { at } => RequestIdError::NotLowercaseHex { at },
+        })
     }
 
     /// An ID from its 16 bytes.
@@ -193,11 +180,169 @@ impl fmt::Display for RequestIdError {
 
 impl std::error::Error for RequestIdError {}
 
+/// Why text is not 16 bytes as 32 lowercase hexadecimal characters.
+enum HexError {
+    /// The text is not 32 bytes long.
+    WrongLength {
+        /// Its length in bytes.
+        bytes: usize,
+    },
+    /// The byte at `at` is not one of `0-9` or `a-f`.
+    NotLowercaseHex {
+        /// Its position, from 0.
+        at: usize,
+    },
+}
+
+/// 16 bytes from exactly 32 lowercase hexadecimal characters: the text form of
+/// [`RequestId`] and [`InstanceId`].
+fn parse_hex16(text: &str) -> Result<[u8; 16], HexError> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 32 {
+        return Err(HexError::WrongLength { bytes: bytes.len() });
+    }
+    let mut id = [0_u8; 16];
+    for (index, &[high, low]) in bytes.as_chunks::<2>().0.iter().enumerate() {
+        let nibble = |at: usize, byte: u8| match byte {
+            b'0'..=b'9' => Ok(byte - b'0'),
+            b'a'..=b'f' => Ok(byte - b'a' + 10),
+            _ => Err(HexError::NotLowercaseHex { at }),
+        };
+        let value = (nibble(2 * index, high)? << 4) | nibble(2 * index + 1, low)?;
+        if let Some(slot) = id.get_mut(index) {
+            *slot = value;
+        }
+    }
+    Ok(id)
+}
+
+/// The cluster instance ID: 128 random bits stamped into every genesis frame at `init`
+/// and carried in every peer envelope (§7.7 step 0, D-63).
+///
+/// Two separately initialised clusters therefore never interoperate, even with identical
+/// configured names. Its text form is 32 lowercase hexadecimal characters, as
+/// `keyval-server init --instance <hex>` takes it.
+///
+/// Invariant: none beyond its 16 bytes; every 128-bit value is a valid ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct InstanceId([u8; 16]);
+
+/// Why a string is not a valid [`InstanceId`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstanceIdError {
+    /// The text is not exactly 32 bytes long; `bytes` is its length.
+    WrongLength {
+        /// The rejected text's length in bytes.
+        bytes: usize,
+    },
+    /// The byte at `at` is not one of `0-9` or `a-f`.
+    NotLowercaseHex {
+        /// The offending byte's position, from 0.
+        at: usize,
+    },
+}
+
+impl InstanceId {
+    /// Parses the text form: exactly 32 characters from `0-9a-f`.
+    ///
+    /// # Errors
+    ///
+    /// [`InstanceIdError`] on any other length, or on any character outside `0-9a-f`.
+    pub fn parse(text: &str) -> Result<Self, InstanceIdError> {
+        parse_hex16(text).map(Self).map_err(|error| match error {
+            HexError::WrongLength { bytes } => InstanceIdError::WrongLength { bytes },
+            HexError::NotLowercaseHex { at } => InstanceIdError::NotLowercaseHex { at },
+        })
+    }
+
+    /// An ID from its 16 bytes, such as 128 bits drawn from the entropy port at `init`,
+    /// or the bytes read back from a genesis frame.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// The ID's 16 bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 16] {
+        self.0
+    }
+}
+
+impl fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
+impl fmt::Display for InstanceIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongLength { bytes } => write!(
+                f,
+                "an instance ID is 32 hexadecimal characters; this one is {bytes} bytes"
+            ),
+            Self::NotLowercaseHex { at } => {
+                write!(f, "character {at} of the instance ID is not 0-9 or a-f")
+            }
+        }
+    }
+}
+
+impl std::error::Error for InstanceIdError {}
+
 #[cfg(test)]
 mod tests {
     // check: NEWTYPES
 
     use super::*;
+
+    #[test]
+    fn instance_ids_round_trip_through_32_lowercase_hex_characters() {
+        let text = "00ff10a0b1c2d3e4f5a6b7c8d9e0f1ee";
+        let id = InstanceId::parse(text).unwrap();
+        assert_eq!(
+            id.to_string(),
+            text,
+            "rule: the text form is canonical (D-63)"
+        );
+        assert_eq!(
+            InstanceId::from_bytes(id.to_bytes()),
+            id,
+            "rule: bytes round-trip"
+        );
+        assert_eq!(
+            id.to_bytes()[0..2],
+            [0x00, 0xff],
+            "rule: big-endian hex digit pairs"
+        );
+        let cases = [
+            ("", InstanceIdError::WrongLength { bytes: 0 }),
+            (
+                "00ff10a0b1c2d3e4f5a6b7c8d9e0f1e",
+                InstanceIdError::WrongLength { bytes: 31 },
+            ),
+            (
+                "00ff10a0b1c2d3e4f5a6b7c8d9e0f1eee",
+                InstanceIdError::WrongLength { bytes: 33 },
+            ),
+            (
+                "00FF10a0b1c2d3e4f5a6b7c8d9e0f1ee",
+                InstanceIdError::NotLowercaseHex { at: 2 },
+            ),
+            (
+                "00ff10a0b1c2d3e4f5a6b7c8d9e0f1eg",
+                InstanceIdError::NotLowercaseHex { at: 31 },
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(
+                InstanceId::parse(text),
+                Err(expected),
+                "rule: an instance ID is exactly 32 characters of 0-9a-f; text={text:?}"
+            );
+        }
+    }
     use crate::MAX_SAFE_INTEGER;
 
     #[test]

@@ -99,7 +99,9 @@ pub use counts::{ByteCount, PageSize, Tick};
 pub use data::{Key, KeyError, KeyValueLimits, Value, ValueError};
 pub use effects::{Effect, Inbound, Incarnation, Input, StorageOp, SyncSeq};
 pub use error_code::{ErrorCode, Terminality};
-pub use ids::{ClusterId, ClusterIdError, NodeId, RequestId, RequestIdError};
+pub use ids::{
+    ClusterId, ClusterIdError, InstanceId, InstanceIdError, NodeId, RequestId, RequestIdError,
+};
 pub use in_process::{DataDir, Entropy, EntropyStream, JournalRead, ReadLen, StorageError};
 pub use lifecycle::{Lifecycle, NotReadyLifecycle};
 pub use limits::{Limit, LimitSource};

@@ -748,6 +748,21 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 11,
     },
+    CheckDef {
+        id: "JOURNAL-FRAMES",
+        summary: "journal frames follow the §7.6 layout with header and frame CRC-32C (in-crate, RFC \
+                  3720 vectors); every damaged field is refused; genesis and Raft-batch \
+                  goldens decode and re-encode byte for byte (DUR-5)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-5", "CD-12"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "journal",
+            filters: &["crc32c::tests::", "frame::tests::", "golden::"],
+        },
+        min_cases: 14,
+    },
 ];
 
 /// Outcome of one requested check.

@@ -488,3 +488,15 @@ tier = "T0"
 run = "./dev check LIMITS"
 min_cases = 11
 status = "implemented"
+
+[[check]]
+id = "JOURNAL-FRAMES"
+summary = "journal frames follow the §7.6 layout with header and frame CRC-32C (in-crate, RFC 3720 vectors); every damaged field is refused; genesis and Raft-batch goldens decode and re-encode byte for byte (DUR-5)"
+kind = "test_group"
+covers = ["DUR-5", "CD-12"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check JOURNAL-FRAMES"
+min_cases = 14
+status = "implemented"
