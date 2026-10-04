@@ -37,9 +37,13 @@
 //!
 //! An attempt is `NotSubmitted` until its proposal is handed to the library, and
 //! `Submitted` from the moment it is handed over, before the library sees it. Only the
-//! application of an entry carrying its request ID and its command answers it with a
-//! terminal result (DUR-1). An attempt that attached to a same-command proposal counts as
-//! submitted (A-5).
+//! application of an entry carrying its request ID answers it with a terminal result
+//! (DUR-1): with its command, that entry's result; with another command,
+//! `request_id_conflict` naming the original index, because its own entry can then only
+//! apply as a conflict (§7.8, §7.5 step 3). A queued proposal is then withdrawn, and a
+//! submitted one keeps its bytes in flight until its own copy applies, its leadership is
+//! lost, or the node fails or stops. An attempt that attached to a same-command proposal
+//! counts as submitted (A-5).
 //!
 //! - A synchronous refusal by the library with nothing appended: the owner was never
 //!   submitted (`busy`, or `not_leader`/`unavailable`); attached waiters answer
@@ -361,8 +365,10 @@ impl WritePath {
     }
 
     /// The loop applied an entry (§7.4 step 5). If it carries a pending proposal's request
-    /// ID and command, every attempt waiting on that proposal is answered: the attempts with
-    /// its command with the entry's result, the others against the committed history.
+    /// ID, every attempt waiting on that proposal is answered. With the proposal's command,
+    /// the attempts with that command get the entry's result and the others are answered
+    /// against the committed history. With another command, the proposal is decided by it
+    /// (see `decided_by_another`).
     pub fn applied(&mut self, applying: &mut Applying<'_>, effects: &mut Vec<Effect>) {
         let EntryPayload::Command(bytes) = &applying.entry().payload else {
             return;
@@ -374,13 +380,13 @@ impl WritePath {
             | Applied::Conflict { request_id, .. } => *request_id,
             Applied::Empty => return,
         };
-        if self
-            .pending
-            .get(&request_id)
-            .is_none_or(|pending| pending.digest != digest)
-        {
-            // Not a pending proposal's command: another entry with this ID. The pending
-            // proposal resolves when its own entry applies, or when its leadership is lost.
+        let Some(pending_digest) = self.pending.get(&request_id).map(|pending| pending.digest)
+        else {
+            return;
+        };
+        if pending_digest != digest {
+            self.decided_by_another(applying, request_id, effects);
+            self.check();
             return;
         }
         let Some(pending) = self.take_pending(&request_id) else {
@@ -430,6 +436,70 @@ impl WritePath {
             self.answer(applying, attempt, answer, effects);
         }
         self.check();
+    }
+
+    /// Another command carrying `request_id` applied while a proposal for it is pending
+    /// (§7.8 Submitted row). The history now holds the ID, so the proposal's own entry can
+    /// only apply as a conflict (§7.5 step 3):
+    /// - its owner and attached waiters answer `request_id_conflict` naming the original
+    ///   index, never the other command's result;
+    /// - the attempts behind it are answered from the history: `replayed` with the original
+    ///   result for the applied command, `request_id_conflict` for any other;
+    /// - a queued proposal is withdrawn, never proposed;
+    /// - a submitted one stays pending with no waiters, so its bytes count as in flight until
+    ///   its own copy applies, its leadership is lost, or the node fails or stops (§7.11,
+    ///   br-evs6).
+    fn decided_by_another(
+        &mut self,
+        applying: &mut Applying<'_>,
+        request_id: RequestId,
+        effects: &mut Vec<Effect>,
+    ) {
+        let Some(record) = applying.state().history().get(&request_id).copied() else {
+            return;
+        };
+        let Some(pending) = self.pending.get_mut(&request_id) else {
+            return;
+        };
+        let stage = pending.stage;
+        let decided: Vec<AttemptId> = pending
+            .owner
+            .take()
+            .into_iter()
+            .chain(std::mem::take(&mut pending.attached))
+            .collect();
+        let behind = std::mem::take(&mut pending.behind);
+        match stage {
+            Stage::Queued => {
+                self.take_pending(&request_id);
+            }
+            Stage::Submitted => {}
+        }
+        let served_by = ServedBy {
+            node: self.node,
+            applied: applying.state().applied_index(),
+        };
+        let conflict = Response::Conflict {
+            original_index: record.first_index(),
+        };
+        for attempt in decided {
+            self.answer(applying, attempt, conflict.clone(), effects);
+        }
+        for attempt in behind {
+            let Some(waiting) = self.attempts.get(&attempt) else {
+                continue;
+            };
+            let answer = if record.digest() == waiting.write.digest {
+                Response::Written {
+                    result: record.result(),
+                    replayed: true,
+                    served_by,
+                }
+            } else {
+                conflict.clone()
+            };
+            self.answer(applying, attempt, answer, effects);
+        }
     }
 
     /// `attempt`'s deadline passed (§7.8): a submitted or attached attempt answers

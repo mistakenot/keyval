@@ -609,22 +609,131 @@ fn a_different_command_behind_a_dropped_proposal_proposes_its_own() {
 }
 
 #[test]
-fn only_an_entry_with_the_attempts_own_command_answers_it() {
+fn another_command_for_the_id_resolves_a_submitted_proposal_with_request_id_conflict() {
     let mut bench = Bench::leader("one-voter");
     let mine = put(1, "k", "mine");
     let theirs = put(1, "k", "theirs");
     bench.attempt(1, mine.clone());
     bench.submit();
-    assert!(
-        bench.apply(command(&theirs)).is_empty(),
-        "rule: another command carrying the ID, committed first (from another node), \
-         answers nothing here: the pending proposal resolves with its own entry"
+    bench.attempt(2, mine.clone());
+    assert_eq!(
+        bench.apply(command(&theirs)),
+        vec![conflict(1, 1), conflict(2, 1)],
+        "rule: another command carrying the ID, committed first (from another leadership), \
+         decides the pending proposal: its owner and the attached attempt answer \
+         request_id_conflict naming the original index at once, never the other command's \
+         result and never unknown_outcome later (§7.8 Submitted row, §7.5 step 3)"
     );
     assert_eq!(
-        bench.apply(command(&mine)),
+        (
+            bench.core.deadlines.len(),
+            bench.expire(1),
+            bench.expire(2),
+            bench.path.waiting()
+        ),
+        (0, Vec::new(), Vec::new(), 0),
+        "rule: an answered attempt is out of the table with its deadline cancelled, so its \
+         deadline answers nothing more"
+    );
+    assert!(
+        bench.apply(command(&mine)).is_empty(),
+        "rule: the proposal's own copy, applying later as a conflict, has nobody left to \
+         answer"
+    );
+}
+
+#[test]
+fn attempts_behind_are_answered_from_the_history_when_another_command_decides() {
+    let mut bench = Bench::leader("one-voter");
+    let mine = put(1, "k", "mine");
+    let theirs = put(1, "k", "theirs");
+    bench.attempt(1, mine);
+    bench.submit();
+    bench.attempt(2, theirs.clone());
+    bench.attempt(3, put(1, "k", "third"));
+    let served = ServedBy {
+        node: bench.node(),
+        applied: LogIndex::new(1).unwrap(),
+    };
+    assert_eq!(
+        bench.apply(command(&theirs)),
+        vec![conflict(1, 1), written(2, 1, true, served), conflict(3, 1)],
+        "rule: when another command decides the pending proposal, the attempts behind it are \
+         answered from the history at once: the attempt with the applied command gets the \
+         original result as replayed, any other request_id_conflict (F-6, §7.5 step 3)"
+    );
+}
+
+#[test]
+fn a_queued_proposal_is_withdrawn_when_another_command_for_its_id_applies() {
+    let mut bench = Bench::leader("one-voter");
+    bench.attempt(1, put(1, "k", "mine"));
+    assert_eq!(
+        bench.apply(command(&put(1, "k", "theirs"))),
         vec![conflict(1, 1)],
-        "rule: its own entry then applies as a conflict: request_id_conflict naming the \
-         original index, never the other command's result (§7.5 step 3, F-6)"
+        "rule: a proposal not yet handed to the library is decided like a submitted one: \
+         request_id_conflict naming the original index (§7.8)"
+    );
+    assert_eq!(
+        (
+            bench.next_proposal(),
+            bench.path.pending(),
+            bench.path.in_flight_bytes()
+        ),
+        (None, 0, 0),
+        "rule: the queued proposal is withdrawn, never proposed, and holds no bytes in flight"
+    );
+}
+
+#[test]
+fn a_decided_submitted_proposal_keeps_its_bytes_until_its_copy_applies_or_leadership_is_lost() {
+    let mut bench = Bench::leader("one-voter");
+    let mine = put(1, "k", "mine");
+    let theirs = put(1, "k", "theirs");
+    let bytes = u64::try_from(command(&mine).len()).unwrap();
+    bench.attempt(1, mine.clone());
+    bench.submit();
+    bench.apply(command(&theirs));
+    assert_eq!(
+        (
+            bench.path.in_flight_bytes(),
+            bench.path.pending(),
+            bench.path.waiting()
+        ),
+        (bytes, 1, 0),
+        "rule: the decided proposal's own copy is still uncommitted in the library's log, so \
+         its bytes stay in flight (§7.11: proposed this leadership and not yet applied), with \
+         nobody waiting on it"
+    );
+    assert_eq!(
+        bench.attempt(2, mine.clone()),
+        vec![conflict(2, 1)],
+        "rule: a new attempt with the ID is answered from the history (F-7 step 4) before it \
+         could attach to the decided proposal"
+    );
+    assert_eq!(
+        (
+            bench.apply(command(&mine)),
+            bench.path.in_flight_bytes(),
+            bench.path.pending()
+        ),
+        (Vec::new(), 0, 0),
+        "rule: its bytes leave the in-flight count when its own copy applies"
+    );
+
+    let mut lost = Bench::leader("three-voters");
+    lost.attempt(1, mine);
+    lost.submit();
+    lost.apply(command(&theirs));
+    lost.follow(Some(other_node()));
+    assert_eq!(
+        (
+            lost.status_changed(),
+            lost.path.in_flight_bytes(),
+            lost.path.pending()
+        ),
+        (Vec::new(), 0, 0),
+        "rule: or when the leadership it was proposed under is lost, answering nobody"
     );
 }
 

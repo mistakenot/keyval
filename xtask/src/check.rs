@@ -1463,16 +1463,20 @@ pub const CATALOGUE: &[CheckDef] = &[
                   apply), then propose; a proposal is handed to the library once, even after a \
                   queued owner's deadline and a retry or the waiter behind it (br-nxsb); an \
                   attempt is submitted when handed to the library and answered only by the \
-                  application of its own command's entry; a synchronous drop is busy and \
-                  attached waiters unknown_outcome; a same-ID attempt with another command \
-                  waits, then gets request_id_conflict on apply or proposes its own if the \
-                  proposal failed unapplied; at its deadline a submitted or attached attempt is \
-                  unknown_outcome and one never proposed busy; leadership loss, a new term or \
-                  failure answers submitted attempts unknown_outcome and re-decides the rest; \
-                  shutdown answers unknown_outcome or unavailable; end to end through the \
-                  controller, a lone leader commits and replays, a replay is answered while a \
-                  sync is outstanding, a deadline gives unknown_outcome, and a follower \
-                  redirects to the leader; each NODE-WRITE-* invariant fires on corrupt state",
+                  application of an entry carrying its request ID: its own command's result, or \
+                  request_id_conflict at once when another command for the ID applies first, the \
+                  attempts behind answered from the history, a queued proposal withdrawn and a \
+                  submitted one's bytes in flight until its copy applies or the leadership is lost \
+                  (br-evs6); a synchronous drop is busy and attached waiters unknown_outcome; a \
+                  same-ID attempt with another command waits, then gets request_id_conflict on \
+                  apply or proposes its own if the proposal failed unapplied; at its deadline a \
+                  submitted or attached attempt is unknown_outcome and one never proposed busy; \
+                  leadership loss, a new term or failure answers submitted attempts \
+                  unknown_outcome and re-decides the rest; shutdown answers unknown_outcome or \
+                  unavailable; end to end through the controller, a lone leader commits and \
+                  replays, a replay is answered while a sync is outstanding, a deadline gives \
+                  unknown_outcome, and a follower redirects to the leader; each NODE-WRITE-* \
+                  invariant fires on corrupt state",
         kind: Kind::TestGroup,
         covers: &["F-7", "A-5", "DM-7"],
         class: ClaimClass::Invariant,
@@ -1481,7 +1485,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "node",
             filters: &["write_path_tests::", "write_path::invariant_fixtures::"],
         },
-        min_cases: 33,
+        min_cases: 36,
     },
     CheckDef {
         id: "NODE-READ-PATH",
