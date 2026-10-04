@@ -101,6 +101,34 @@ impl fmt::Display for Endpoint {
     }
 }
 
+/// Why the network dropped a packet.
+///
+/// Each reason reads differently in the canonical trace, so two runs that drop a packet for
+/// different reasons differ at that packet, not at some later one the shifted randomness
+/// touches (T-11, K-14; br-ktgc).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropReason {
+    /// Lost by chance.
+    Lost,
+    /// Its link was cut when it was sent.
+    CutAtSend,
+    /// Its link was cut while it was in flight.
+    CutInFlight,
+    /// Its link already held a full queue.
+    QueueFull,
+}
+
+impl DropReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lost => "lost",
+            Self::CutAtSend => "cut_at_send",
+            Self::CutInFlight => "cut_in_flight",
+            Self::QueueFull => "queue_full",
+        }
+    }
+}
+
 /// What happened to a packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PacketFate {
@@ -108,19 +136,39 @@ pub enum PacketFate {
     Sent,
     /// It reached its destination.
     Delivered,
-    /// The network lost it.
-    Dropped,
-    /// The network delivered an extra copy.
+    /// The network dropped it, for this reason.
+    Dropped(DropReason),
+    /// The network made an extra copy of it, at send.
     Duplicated,
 }
 
-impl PacketFate {
-    const fn as_str(self) -> &'static str {
+impl fmt::Display for PacketFate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Sent => "sent",
-            Self::Delivered => "delivered",
-            Self::Dropped => "dropped",
-            Self::Duplicated => "duplicated",
+            Self::Sent => f.write_str("sent"),
+            Self::Delivered => f.write_str("delivered"),
+            Self::Dropped(reason) => write!(f, "dropped:{}", reason.as_str()),
+            Self::Duplicated => f.write_str("duplicated"),
+        }
+    }
+}
+
+/// Which copy of a packet a record is about: a dropped duplicate reads differently from a
+/// dropped original (br-ktgc).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PacketCopy {
+    /// The packet as sent.
+    Original,
+    /// The network's extra copy.
+    Duplicate,
+}
+
+impl PacketCopy {
+    /// Its suffix to the packet's fate in the canonical trace: none for the original.
+    const fn suffix(self) -> &'static str {
+        match self {
+            Self::Original => "",
+            Self::Duplicate => "/dup",
         }
     }
 }
@@ -241,6 +289,8 @@ pub enum Record {
     Packet {
         /// What happened to it.
         fate: PacketFate,
+        /// Which copy it is.
+        copy: PacketCopy,
         /// Its source.
         from: Endpoint,
         /// Its destination.
@@ -335,10 +385,16 @@ impl fmt::Display for Record {
         match self {
             Self::Packet {
                 fate,
+                copy,
                 from,
                 to,
                 bytes,
-            } => write!(f, "packet {} {from} {to} {}", fate.as_str(), Hex(bytes)),
+            } => write!(
+                f,
+                "packet {fate}{} {from} {to} {}",
+                copy.suffix(),
+                Hex(bytes)
+            ),
             Self::Disk { node, op } => write!(f, "disk {} {op}", On(*node)),
             Self::Role { node, role, term } => {
                 write!(f, "role {} {} {}", On(*node), role.as_str(), term.get())
@@ -751,6 +807,7 @@ mod tests {
     fn packets_keep_their_logical_endpoints_and_encoded_bytes() {
         let packet = Record::Packet {
             fate: PacketFate::Delivered,
+            copy: PacketCopy::Original,
             from: Endpoint::Node(node(2)),
             to: Endpoint::Client(ClientId::new(7)),
             bytes: vec![0x00, 0xFF, 0x10],
@@ -761,12 +818,25 @@ mod tests {
             "rule: the trace keeps logical endpoints and the packet's bytes (§10.2)"
         );
         let empty = Record::Packet {
-            fate: PacketFate::Dropped,
+            fate: PacketFate::Dropped(DropReason::Lost),
+            copy: PacketCopy::Original,
             from: Endpoint::Client(ClientId::new(1)),
             to: Endpoint::Node(node(3)),
             bytes: Vec::new(),
         };
-        assert_eq!(empty.to_string(), "packet dropped c1 n3 -");
+        assert_eq!(empty.to_string(), "packet dropped:lost c1 n3 -");
+        let duplicate = Record::Packet {
+            fate: PacketFate::Dropped(DropReason::CutInFlight),
+            copy: PacketCopy::Duplicate,
+            from: Endpoint::Node(node(1)),
+            to: Endpoint::Node(node(2)),
+            bytes: vec![0xAB],
+        };
+        assert_eq!(
+            duplicate.to_string(),
+            "packet dropped:cut_in_flight/dup n1 n2 ab",
+            "rule: a drop names its reason, and a duplicate copy reads differently (br-ktgc)"
+        );
     }
 
     #[test]
@@ -1376,6 +1446,7 @@ mod tests {
             },
             Record::Packet {
                 fate: PacketFate::Sent,
+                copy: PacketCopy::Original,
                 from: Endpoint::Node(node(1)),
                 to: Endpoint::Node(node(2)),
                 bytes: vec![1, 2, 3],

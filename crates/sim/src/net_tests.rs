@@ -16,7 +16,7 @@ use crate::net::{
     QueueBound,
 };
 use crate::scheduler::{EventBudget, VirtualTime};
-use crate::trace::{ClientId, Endpoint, PacketFate, Record};
+use crate::trace::{ClientId, Endpoint, ObservationBound, PacketFate, Record, Trace};
 
 fn node(id: u64) -> Endpoint {
     Endpoint::Node(NodeId::new(id).unwrap())
@@ -150,7 +150,7 @@ fn loss_follows_its_probability_on_each_path() {
                 lost += 1;
                 assert_eq!(
                     sent.records.last().map(fate),
-                    Some(PacketFate::Dropped),
+                    Some(PacketFate::Dropped(DropReason::Lost)),
                     "rule: a loss is traced"
                 );
             }
@@ -308,7 +308,7 @@ fn a_cut_also_drops_traffic_already_in_flight() {
         matches!(
             net.arrive(packet),
             Arrival::Dropped(Record::Packet {
-                fate: PacketFate::Dropped,
+                fate: PacketFate::Dropped(DropReason::CutInFlight),
                 ..
             })
         ),
@@ -510,6 +510,152 @@ fn a_duplicated_send_never_puts_some_copies_in_flight_and_drops_others() {
         "rule: no copy of the refused send was inserted or took a link slot"
     );
     assert_counts_settle(&net);
+}
+
+#[test]
+fn every_drop_reason_and_copy_reads_differently_in_the_trace() {
+    let final_line = |sent: &crate::net::Sent| sent.records.last().unwrap().to_string();
+    let mut chancy = network(
+        LinkProfile::new(1, 1, Ppm::ALWAYS, Ppm::NEVER).unwrap(),
+        LinkProfile::reliable(1),
+        1,
+    );
+    let lost = chancy
+        .send(VirtualTime::ZERO, node(1), node(2), b"m")
+        .unwrap();
+    let mut cut = reliable(1);
+    cut.links_mut().cut(id(1), id(2));
+    let at_send = cut.send(VirtualTime::ZERO, node(1), node(2), b"m").unwrap();
+    let mut tight = Network::new(
+        NetConfig {
+            peer: LinkProfile::reliable(1),
+            client: LinkProfile::reliable(1),
+            queue: QueueBound {
+                messages: ItemCount::new(1),
+                bytes: ByteCount::new(1 << 20),
+            },
+            max_in_flight: EventBudget::DEFAULT,
+        },
+        SplitMix64::new(1),
+    );
+    tight
+        .send(VirtualTime::ZERO, node(1), node(2), b"m")
+        .unwrap();
+    let full = tight
+        .send(VirtualTime::ZERO, node(1), node(2), b"m")
+        .unwrap();
+    let doubled = || {
+        network(
+            LinkProfile::new(1, 1, Ppm::NEVER, Ppm::ALWAYS).unwrap(),
+            LinkProfile::reliable(1),
+            1,
+        )
+    };
+    let mut severed = doubled();
+    let both = severed
+        .send(VirtualTime::ZERO, node(1), node(2), b"m")
+        .unwrap();
+    severed.links_mut().cut(id(1), id(2));
+    let mut dropped_copies = Vec::new();
+    for &(_, copy) in &both.arrivals {
+        let Arrival::Dropped(record) = severed.arrive(copy) else {
+            panic!("fixture: the cut drops both copies in flight");
+        };
+        dropped_copies.push(record.to_string());
+    }
+    let mut kept = doubled();
+    let twice = kept
+        .send(VirtualTime::ZERO, node(1), node(2), b"m")
+        .unwrap();
+    let mut delivered_copies = Vec::new();
+    for &(_, copy) in &twice.arrivals {
+        let Arrival::Delivered(_, record) = kept.arrive(copy) else {
+            panic!("fixture: both copies are delivered");
+        };
+        delivered_copies.push(record.to_string());
+    }
+    assert_eq!(
+        [
+            final_line(&lost),
+            final_line(&at_send),
+            final_line(&full),
+            dropped_copies[0].clone(),
+            dropped_copies[1].clone(),
+            both.records[1].to_string(),
+            delivered_copies[0].clone(),
+            delivered_copies[1].clone(),
+        ],
+        [
+            "packet dropped:lost n1 n2 6d",
+            "packet dropped:cut_at_send n1 n2 6d",
+            "packet dropped:queue_full n1 n2 6d",
+            "packet dropped:cut_in_flight n1 n2 6d",
+            "packet dropped:cut_in_flight/dup n1 n2 6d",
+            "packet duplicated/dup n1 n2 6d",
+            "packet delivered n1 n2 6d",
+            "packet delivered/dup n1 n2 6d",
+        ]
+        .map(str::to_owned),
+        "rule: every drop names its reason and a duplicate's records are marked, so runs that \
+         differ in a packet's fate differ at that packet (T-11, K-14, br-ktgc)"
+    );
+}
+
+#[test]
+fn the_counts_reach_the_trace_as_metrics_and_settle() {
+    let mut net = network(
+        LinkProfile::new(
+            0,
+            50,
+            Ppm::new(200_000).unwrap(),
+            Ppm::new(200_000).unwrap(),
+        )
+        .unwrap(),
+        LinkProfile::reliable(1),
+        5,
+    );
+    let mut arrivals = Vec::new();
+    for at in 0..200_u64 {
+        if at == 100 {
+            net.links_mut().cut(id(2), id(1));
+        }
+        let (from, to) = if at % 2 == 0 {
+            (node(1), node(2))
+        } else {
+            (node(2), node(1))
+        };
+        arrivals.extend(
+            net.send(VirtualTime::ZERO, from, to, b"m")
+                .unwrap()
+                .arrivals,
+        );
+    }
+    deliver_all(&mut net, &mut arrivals);
+    assert_counts_settle(&net);
+    let c = net.counts();
+    assert!(
+        c.lost > 0 && c.duplicated > 0 && c.cut_at_send > 0 && c.cut_in_flight > 0,
+        "fixture: the run loses, duplicates and cuts at send and in flight; counts={c:?}"
+    );
+    let mut trace = Trace::new(ObservationBound::new(16));
+    net.record_metrics(&mut trace);
+    let canonical = trace.canonical();
+    for (name, value) in [
+        ("net.sent", c.sent),
+        ("net.delivered", c.delivered),
+        ("net.duplicated", c.duplicated),
+        ("net.lost", c.lost),
+        ("net.cut_at_send", c.cut_at_send),
+        ("net.cut_in_flight", c.cut_in_flight),
+        ("net.queue_full", c.queue_full),
+        ("net.in_flight", 0),
+    ] {
+        assert!(
+            canonical.contains(&format!("M {name} {value}\n")),
+            "rule: the network's counts are deterministic metrics in the trace (§10.2, §7.11, \
+             br-ktgc); missing {name}={value}; canonical={canonical:?}"
+        );
+    }
 }
 
 #[test]

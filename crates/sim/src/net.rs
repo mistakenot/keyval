@@ -33,7 +33,10 @@
 //! - **Packets are not tied to incarnations** (§9.1): one addressed to a node reaches
 //!   whatever incarnation is running when it arrives, as an ordinary stale message.
 //!
-//! Every fate is counted ([`NetCounts`]) and traced as a [`Record::Packet`].
+//! Every fate is counted ([`NetCounts`]) and traced as a [`Record::Packet`]: a drop names its
+//! [`DropReason`], and a duplicate's records are marked as the duplicate's
+//! ([`PacketCopy`]), so two runs that differ in a packet's fate differ at that packet
+//! (T-11). [`Network::record_metrics`] writes the counts into the trace (br-ktgc).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,7 +44,8 @@ use types::{BoundedMap, ByteCount, Config, ItemCount, NodeId};
 
 use crate::entropy::SplitMix64;
 use crate::scheduler::{EventBudget, VirtualTime};
-use crate::trace::{Endpoint, PacketFate, Record};
+pub use crate::trace::DropReason;
+use crate::trace::{Endpoint, Name, PacketCopy, PacketFate, Record, Trace};
 
 /// A probability in parts per million: exact and integer, so it draws the same on every
 /// platform.
@@ -178,19 +182,6 @@ pub struct Delivery {
     pub bytes: Vec<u8>,
 }
 
-/// Why the network dropped a packet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropReason {
-    /// Lost by chance.
-    Lost,
-    /// Its link was cut when it was sent.
-    CutAtSend,
-    /// Its link was cut while it was in flight.
-    CutInFlight,
-    /// Its link already held a full queue.
-    QueueFull,
-}
-
 /// Why a send could not be made at all (§7.11, P10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetError {
@@ -313,6 +304,8 @@ struct InFlight {
     bytes: Vec<u8>,
     /// Whether it holds a slot in its link's queue: the original copy on a peer link.
     queued: bool,
+    /// Which copy it is.
+    copy: PacketCopy,
 }
 
 /// A directed peer link's load: the packets and bytes it holds in flight.
@@ -351,9 +344,16 @@ pub struct Network {
 }
 
 /// The packet trace record for `fate`.
-fn record(fate: PacketFate, from: Endpoint, to: Endpoint, bytes: &[u8]) -> Record {
+fn record(
+    fate: PacketFate,
+    copy: PacketCopy,
+    from: Endpoint,
+    to: Endpoint,
+    bytes: &[u8],
+) -> Record {
     Record::Packet {
         fate,
+        copy,
         from,
         to,
         bytes: bytes.to_vec(),
@@ -413,6 +413,34 @@ impl Network {
         self.incomplete
     }
 
+    /// Writes what became of every packet so far into `trace` as deterministic metrics
+    /// (§10.2), so §7.11's network failures are in the canonical bytes: sent, delivered,
+    /// duplicated, each drop reason, and the copies still in flight (br-ktgc).
+    pub fn record_metrics(&self, trace: &mut Trace) {
+        let c = self.counts;
+        let in_flight = u64::try_from(self.in_flight.len()).unwrap_or(u64::MAX);
+        for (name, value) in [
+            ("net.sent", c.sent),
+            ("net.delivered", c.delivered),
+            ("net.duplicated", c.duplicated),
+            ("net.lost", c.lost),
+            ("net.cut_at_send", c.cut_at_send),
+            ("net.cut_in_flight", c.cut_in_flight),
+            ("net.queue_full", c.queue_full),
+            ("net.in_flight", in_flight),
+        ] {
+            let metric = Name::new(name);
+            types::invariant!(
+                metric.is_some(),
+                "NET-METRIC-NAME",
+                "{name} is not a valid trace name"
+            );
+            if let Some(metric) = metric {
+                trace.metric(metric, value);
+            }
+        }
+    }
+
     /// The packets and bytes in flight on the link from `from` to `to`.
     #[must_use]
     pub fn load(&self, from: NodeId, to: NodeId) -> (u64, u64) {
@@ -442,7 +470,13 @@ impl Network {
             return Err(full);
         }
         let mut sent = Sent::default();
-        sent.records.push(record(PacketFate::Sent, from, to, bytes));
+        sent.records.push(record(
+            PacketFate::Sent,
+            PacketCopy::Original,
+            from,
+            to,
+            bytes,
+        ));
         let link = match (from, to) {
             (Endpoint::Node(a), Endpoint::Node(b)) => Some((a, b)),
             (Endpoint::Node(_) | Endpoint::Client(_), Endpoint::Client(_))
@@ -467,8 +501,13 @@ impl Network {
             self.counts.sent = self.counts.sent.saturating_add(1);
             self.counts.record(reason);
             sent.dropped = Some(reason);
-            sent.records
-                .push(record(PacketFate::Dropped, from, to, bytes));
+            sent.records.push(record(
+                PacketFate::Dropped(reason),
+                PacketCopy::Original,
+                from,
+                to,
+                bytes,
+            ));
             return Ok(sent);
         }
         let copies: usize = if self.chance(profile.duplicate) { 2 } else { 1 };
@@ -489,6 +528,11 @@ impl Network {
                 to,
                 bytes: bytes.to_vec(),
                 queued,
+                copy: if copy == 0 {
+                    PacketCopy::Original
+                } else {
+                    PacketCopy::Duplicate
+                },
             };
             let inserted = self.in_flight.insert(id, packet).is_ok();
             types::invariant!(
@@ -505,8 +549,13 @@ impl Network {
             }
             if copy > 0 {
                 self.counts.duplicated = self.counts.duplicated.saturating_add(1);
-                sent.records
-                    .push(record(PacketFate::Duplicated, from, to, bytes));
+                sent.records.push(record(
+                    PacketFate::Duplicated,
+                    PacketCopy::Duplicate,
+                    from,
+                    to,
+                    bytes,
+                ));
             }
             sent.arrivals.push((at, id));
         }
@@ -532,14 +581,21 @@ impl Network {
         if link.is_some_and(|(a, b)| !self.links.allows(a, b)) {
             self.counts.record(DropReason::CutInFlight);
             return Arrival::Dropped(record(
-                PacketFate::Dropped,
+                PacketFate::Dropped(DropReason::CutInFlight),
+                packet.copy,
                 packet.from,
                 packet.to,
                 &packet.bytes,
             ));
         }
         self.counts.delivered = self.counts.delivered.saturating_add(1);
-        let traced = record(PacketFate::Delivered, packet.from, packet.to, &packet.bytes);
+        let traced = record(
+            PacketFate::Delivered,
+            packet.copy,
+            packet.from,
+            packet.to,
+            &packet.bytes,
+        );
         Arrival::Delivered(
             Delivery {
                 from: packet.from,
