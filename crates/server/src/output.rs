@@ -9,7 +9,10 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::init::{InitRefusal, Initialised, Resumed};
-use crate::run::{Prepared, RunRefusal, Uninitialised};
+use node::StartError;
+
+use crate::run::{RunRefusal, Uninitialised};
+use crate::runtime::StartRefusal;
 
 /// The init report's schema identifier; its JSON Schema is
 /// `schemas/server/init.v1.schema.json`.
@@ -161,7 +164,8 @@ pub enum Code {
     Damaged,
     /// A storage call failed.
     Storage,
-    /// `run`: the directory passed the preflight, but this build cannot serve yet (W18.2).
+    /// Kept for the v1 schema: a pre-W18.3 build's answer once the preflight passed. No
+    /// longer emitted.
     NotServing,
 }
 
@@ -339,28 +343,37 @@ impl ErrorReport {
         Self::new(Command::Run, code, message, data_dir)
     }
 
-    /// `run`'s answer once the preflight passed: this build cannot serve yet (W18.2).
+    /// `run`'s answer when the node could not start after its preflight passed.
     #[must_use]
-    pub fn not_serving(prepared: &Prepared) -> Self {
-        let genesis = prepared.recovered.genesis();
-        let tail = prepared
-            .recovered
-            .truncate_to()
-            .map_or_else(String::new, |len| {
-                format!(", with a torn tail to truncate at byte {}", len.get())
-            });
-        Self::new(
-            Command::Run,
-            Code::NotServing,
-            format!(
-                "node {} of cluster {} (instance {}) recovers from its data directory{tail}, \
-                 but this build does not serve yet: the production wiring is W18.2",
-                genesis.node_id(),
-                genesis.cluster_id(),
-                genesis.instance_id()
+    pub fn start(refusal: &StartRefusal, data_dir: &Path) -> Self {
+        let (code, message) = match refusal {
+            StartRefusal::System { what, error } => (
+                Code::Storage,
+                format!("cannot get {what} from the system: {error}"),
             ),
-            Some(&prepared.data_dir),
-        )
+            StartRefusal::Reader(failure) => (
+                Code::Storage,
+                format!(
+                    "cannot {} {}: {}",
+                    failure.op,
+                    failure.path.display(),
+                    failure.cause
+                ),
+            ),
+            StartRefusal::Core(StartError::NotAVoter { node }) => (
+                Code::UnknownNode,
+                format!("node {node} is not a voter of the configuration"),
+            ),
+            StartRefusal::Core(
+                error @ (StartError::Replay { .. }
+                | StartError::Construct(_)
+                | StartError::SyncSeqExhausted),
+            ) => (
+                Code::Damaged,
+                format!("the node cannot start from its journal: {error:?}"),
+            ),
+        };
+        Self::new(Command::Run, code, message, Some(data_dir))
     }
 
     /// The error as a line for people.

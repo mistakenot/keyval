@@ -230,7 +230,7 @@ deps = ["W03", "W08", "W12", "W14"]
 reqs = ["F-1", "F-2", "O-1", "O-3", "O-9", "DUR-3", "§7.7 step 0"]
 area = ["server"]
 milestone = "m1"
-accept = ["./dev check SERVER-INIT", "./dev check SERVER-RUNTIME"]
+accept = ["./dev check SERVER-INIT", "./dev check SERVER-RUNTIME", "./dev check SERVER-HTTP"]
 bead = "br-w18-server-single-node-x8b"
 
 [[item]]

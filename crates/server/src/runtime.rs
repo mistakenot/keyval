@@ -66,8 +66,13 @@ pub struct Snapshot {
     pub leader: Option<NodeId>,
     /// Its commit index.
     pub commit: LogIndex,
-    /// Its durable last index.
+    /// The last index in its log, synced or not.
     pub last: LogIndex,
+    /// The last index synced to its journal: the log's last index whenever no sync is
+    /// outstanding (every append precedes its sync on the I/O thread, §7.4).
+    pub durable_last: LogIndex,
+    /// Each voter's matched index, as leader (O-1's `match_index`); empty otherwise.
+    pub matched: Vec<(NodeId, LogIndex)>,
     /// Its applied index.
     pub applied: LogIndex,
     /// The ticks its clock has processed since boot (§7.10).
@@ -159,7 +164,15 @@ pub fn start(
     ));
     let (io, io_thread) = Io::spawn(storage, incarnation, Arc::clone(&inbox), log.clone())
         .map_err(system("the I/O thread"))?;
-    let snapshot = Arc::new(Mutex::new(snapshot_of(node, &controller, 0, 0, 0)));
+    let durable_last = controller.status().last;
+    let snapshot = Arc::new(Mutex::new(snapshot_of(
+        node,
+        &controller,
+        durable_last,
+        0,
+        0,
+        0,
+    )));
     let counts = Arc::new(Mutex::new((0, 0)));
     let mut task = Task {
         node,
@@ -169,6 +182,7 @@ pub fn start(
         log: log.clone(),
         snapshot: Arc::clone(&snapshot),
         counts: Arc::clone(&counts),
+        durable_last,
     };
     task.route(effects);
     task.publish();
@@ -204,6 +218,7 @@ struct Task {
     log: Log,
     snapshot: Arc<Mutex<Snapshot>>,
     counts: Arc<Mutex<(u64, u64)>>,
+    durable_last: LogIndex,
 }
 
 impl Task {
@@ -269,12 +284,16 @@ impl Task {
     }
 
     /// Publishes the node's state for readers outside the controller.
-    fn publish(&self) {
+    fn publish(&mut self) {
+        if self.controller.outstanding_sync().is_none() {
+            self.durable_last = self.controller.status().last;
+        }
         let (clients_refused, peers_dropped) =
             *self.counts.lock().unwrap_or_else(PoisonError::into_inner);
         let snapshot = snapshot_of(
             self.node,
             &self.controller,
+            self.durable_last,
             clients_refused,
             peers_dropped,
             self.log.dropped(),
@@ -283,9 +302,10 @@ impl Task {
     }
 }
 
-const fn snapshot_of(
+fn snapshot_of(
     node: NodeId,
     controller: &Controller<FsStorage, RequestLifecycle>,
+    durable_last: LogIndex,
     clients_refused: u64,
     peers_dropped: u64,
     log_records_dropped: u64,
@@ -299,6 +319,12 @@ const fn snapshot_of(
         leader: status.leader,
         commit: status.commit,
         last: status.last,
+        durable_last,
+        matched: status
+            .progress
+            .iter()
+            .map(|progress| (progress.node, progress.matched))
+            .collect(),
         applied: controller.state().applied_index(),
         ticks: controller.now().get(),
         clients_refused,
@@ -360,6 +386,11 @@ impl Node {
 
     fn count(&self, bump: impl FnOnce(&mut (u64, u64))) {
         bump(&mut self.counts.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// Writes a record of the root's own to the node's log (O-3), e.g. O-9's warning.
+    pub fn log(&self, record: serde_json::Map<String, serde_json::Value>) {
+        self.log.record(record);
     }
 
     /// The node as the controller last published it.

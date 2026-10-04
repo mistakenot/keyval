@@ -1758,6 +1758,43 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 13,
     },
+    CheckDef {
+        id: "SERVER-HTTP",
+        summary: "the client API over HTTP (§8, §7.12, O-1, O-9, W18.3), std-only HTTP/1.1: a \
+                  PUT parses into domain types at the boundary and refuses, 400 invalid_request, \
+                  a missing or malformed Idempotency-Key, a missing, repeated, unescaped-plus, \
+                  empty or 257-byte key, a missing Content-Type, an unknown field, a duplicate \
+                  member, malformed UTF-8, a wrong type, trailing data and a missing body, with \
+                  request_id exactly when a well-formed ID was sent, and 413 too_large past 64 \
+                  KiB of value or 512 KiB of body; every core answer renders with §8.4's status \
+                  and details (VersionedWriteResult with version == index, replays, \
+                  request_id_conflict, capacity_exceeded, a 307 naming the leader's client URL \
+                  with the key re-encoded, busy, unavailable and unknown_outcome with every \
+                  voter's URL, recovering, history_full; ReadResult, not_found and read refusals \
+                  without write fields); health live and ready and /v1/cluster render the \
+                  published snapshot; a hand-off refusal is busy and a silent core \
+                  unknown_outcome; queries are percent-decoded strictly and re-encoded exactly; \
+                  heads over 16 KiB, chunked bodies and bare-LF lines are refused; every \
+                  response is no-store; DELETE, CAS, SCAN and the status lookup are refused \
+                  until served; a non-loopback address warns; end to end a real node answers \
+                  PUT, GET, health and cluster over loopback, keeps a connection alive and \
+                  closes one that asks",
+        kind: Kind::TestGroup,
+        covers: &["F-1", "F-2", "O-1", "O-9", "CD-3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &[
+                "serve_tests::",
+                "api::tests::",
+                "http::tests::",
+                "query::tests::",
+                "serve::tests::",
+            ],
+        },
+        min_cases: 18,
+    },
 ];
 
 /// Outcome of one requested check.

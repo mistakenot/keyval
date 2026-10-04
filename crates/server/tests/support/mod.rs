@@ -2,9 +2,13 @@
 //! dir, and configs written into them whose relative data directories resolve there.
 #![cfg(test)]
 
+use std::fmt::Write as _;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use journal::{FrameKind, Genesis, encode};
 use types::{Config, InstanceId, NodeId};
@@ -66,4 +70,96 @@ pub fn journal_bytes(dir: &Path) -> Option<Vec<u8>> {
 pub fn genesis_frame(config: &Config, id: u64) -> Vec<u8> {
     let genesis = Genesis::new(config, node(id), instance()).unwrap();
     encode(FrameKind::Genesis, 1, &genesis.encode()).unwrap()
+}
+
+/// A free loopback port, for a node's client address in a config.
+pub fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// What an HTTP call got back.
+#[derive(Debug)]
+pub struct Reply {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: serde_json::Value,
+}
+
+impl Reply {
+    /// Every value of the header `name` (lower-case).
+    pub fn header(&self, name: &str) -> Vec<&str> {
+        self.headers
+            .iter()
+            .filter(|(header, _)| header == name)
+            .map(|(_, value)| value.as_str())
+            .collect()
+    }
+
+    /// The error envelope's code, if the body is one.
+    pub fn code(&self) -> Option<&str> {
+        self.body["error"]["code"].as_str()
+    }
+}
+
+/// Sends `raw` (a whole HTTP/1.1 request) to `address` and reads one response.
+pub fn send(address: SocketAddr, raw: &[u8]) -> Reply {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    stream.write_all(raw).unwrap();
+    read_reply(&mut BufReader::new(stream))
+}
+
+/// Reads one response from `reader`.
+pub fn read_reply(reader: &mut impl BufRead) -> Reply {
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line).unwrap();
+    let status: u16 = status_line.split(' ').nth(1).unwrap().parse().unwrap();
+    let mut headers = Vec::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        let (name, value) = line.split_once(':').unwrap();
+        headers.push((name.to_ascii_lowercase(), value.trim().to_owned()));
+    }
+    let length: usize = headers
+        .iter()
+        .find(|(name, _)| name == "content-length")
+        .map_or(0, |(_, value)| value.parse().unwrap());
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    Reply {
+        status,
+        headers,
+        body: serde_json::from_slice(&body).unwrap(),
+    }
+}
+
+/// A request to `target` with `method`, the extra `headers`, and `body` (with its
+/// Content-Length), closing the connection after the response.
+pub fn request(method: &str, target: &str, headers: &[(&str, &str)], body: &str) -> Vec<u8> {
+    let mut raw = format!("{method} {target} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n");
+    for (name, value) in headers {
+        let _ = write!(raw, "{name}: {value}\r\n");
+    }
+    if !body.is_empty() {
+        let _ = write!(raw, "Content-Length: {}\r\n", body.len());
+    }
+    raw.push_str("\r\n");
+    raw.push_str(body);
+    raw.into_bytes()
+}
+
+/// The JSON body of a PUT of `value`.
+pub fn put_body(value: &str) -> String {
+    serde_json::json!({"value": value}).to_string()
 }

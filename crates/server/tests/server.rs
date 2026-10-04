@@ -746,3 +746,295 @@ mod runtime_tests {
         );
     }
 }
+
+mod serve_tests {
+    //! The client API over HTTP (§8, §7.12 "Mapping", O-1; W18.3): a real node behind the
+    //! std-only HTTP/1.1 server on loopback, driven with raw requests.
+
+    // check: SERVER-HTTP
+
+    use std::io::{BufReader, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Value as Json, json};
+    use server::init::init;
+    use server::run::prepare;
+    use server::runtime::{Options, start};
+    use server::serve::{Responders, Serving, serve};
+    use types::Config;
+
+    use crate::support::{
+        INSTANCE, Reply, free_port, instance, node, one_voter, put_body, read_reply, request,
+        scratch, send,
+    };
+
+    /// A one-voter config with a 5 ms tick whose client address is a free loopback port.
+    fn config(dir: &Path) -> (Config, SocketAddr) {
+        let port = free_port();
+        let config = one_voter(dir, |text| {
+            text.replace("tick_ms = 50", "tick_ms = 5")
+                .replace("127.0.0.1:7101", &format!("127.0.0.1:{port}"))
+        })
+        .1;
+        (config, SocketAddr::from(([127, 0, 0, 1], port)))
+    }
+
+    /// An initialised node, started and served, once it leads.
+    fn served(dir: &Path) -> (Config, Serving) {
+        let (config, address) = config(dir);
+        init(&config, node(1), instance()).unwrap();
+        let prepared = prepare(&config, node(1)).unwrap();
+        let responders = Responders::new();
+        let running = start(
+            prepared,
+            &config,
+            node(1),
+            responders.outputs(),
+            &Options {
+                log_file: dir.join("node.log"),
+            },
+        )
+        .unwrap();
+        let listener = TcpListener::bind(address).unwrap();
+        let serving = serve(listener, Arc::new(running), responders, &config).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let cluster = send(address, &request("GET", "/v1/cluster", &[], ""));
+            if cluster.body["role"] == "leader" && cluster.body["applied_index"].as_u64() > Some(0)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fixture: the node leads within 10 s"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        (config, serving)
+    }
+
+    /// Stops serving and the node.
+    fn stop(serving: Serving) {
+        let running = serving.stop(Duration::from_secs(5)).unwrap();
+        if let Ok(running) = Arc::try_unwrap(running) {
+            running.shutdown().unwrap();
+        }
+    }
+
+    fn put(address: SocketAddr, target: &str, id: &str, body: &str) -> Reply {
+        send(
+            address,
+            &request(
+                "PUT",
+                target,
+                &[
+                    ("Idempotency-Key", id),
+                    ("Content-Type", "application/json"),
+                ],
+                body,
+            ),
+        )
+    }
+
+    fn get(address: SocketAddr, target: &str) -> Reply {
+        send(address, &request("GET", target, &[], ""))
+    }
+
+    const OTHER_ID: &str = "ffeeddccbbaa99887766554433221100";
+
+    #[test]
+    fn a_put_and_a_get_round_trip_over_http_in_the_spec_s_shapes() {
+        let dir = scratch("serve-kv");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let first = put(address, "/v1/kv?key=a%2Fb%20c", INSTANCE, &put_body("v1"));
+        let index = first.body["index"].clone();
+        let replay = put(address, "/v1/kv?key=a%2Fb%20c", INSTANCE, &put_body("v1"));
+        let misuse = put(address, "/v1/kv?key=a%2Fb%20c", INSTANCE, &put_body("v2"));
+        let read = get(address, "/v1/kv?key=a%2Fb%20c");
+        let absent = get(address, "/v1/kv?key=nothing");
+        let applied = read.body["served_by"]["applied_index"].clone();
+        let replies = [&first, &replay, &misuse, &read, &absent];
+        let no_store = replies
+            .iter()
+            .all(|reply| reply.header("cache-control") == vec!["no-store"]);
+        stop(serving);
+        assert_eq!(
+            (
+                (first.status, first.body.clone()),
+                (replay.status, replay.body["replayed"].clone()),
+                (
+                    misuse.status,
+                    misuse.code(),
+                    misuse.body["error"]["details"].clone()
+                ),
+                (read.status, read.body.clone()),
+                (absent.status, absent.code()),
+                no_store,
+            ),
+            (
+                (
+                    200,
+                    json!({"request_id": INSTANCE, "index": index, "version": index,
+                    "replayed": false,
+                    "served_by": {"node_id": 1, "applied_index": first.body["served_by"]["applied_index"]}})
+                ),
+                (200, json!(true)),
+                (
+                    409,
+                    Some("request_id_conflict"),
+                    json!({"request_id": INSTANCE, "original_index": index})
+                ),
+                (
+                    200,
+                    json!({"key": "a/b c", "value": "v1", "version": index,
+                    "served_by": {"node_id": 1, "applied_index": applied}})
+                ),
+                (404, Some("not_found")),
+                true,
+            ),
+            "rule: a PUT over HTTP is answered once applied with request_id, index, version == \
+             index and served_by; a retry replays it and another command under its ID is \
+             request_id_conflict; a GET reads the decoded key; every response carries \
+             Cache-Control: no-store (F-1, F-2, F-6, §8.1, §8.3)"
+        );
+    }
+
+    #[test]
+    fn health_and_cluster_report_the_running_node() {
+        let dir = scratch("serve-health");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let live = get(address, "/v1/health/live");
+        let ready = get(address, "/v1/health/ready");
+        let cluster = get(address, "/v1/cluster");
+        stop(serving);
+        let peers = cluster.body["peers"].clone();
+        assert_eq!(
+            (
+                (live.status, live.body),
+                (ready.status, ready.body),
+                cluster.status,
+                cluster.body["role"].clone(),
+                cluster.body["leader_id"].clone(),
+                peers[0]["client_address"].clone(),
+                peers[0]["match_index"].as_u64() >= cluster.body["commit_index"].as_u64(),
+                cluster.body["durable_last_index"].as_u64()
+                    >= cluster.body["commit_index"].as_u64(),
+            ),
+            (
+                (
+                    200,
+                    json!({"status": "ok", "node_id": 1, "lifecycle": "ready"})
+                ),
+                (
+                    200,
+                    json!({"status": "ok", "node_id": 1, "lifecycle": "ready"})
+                ),
+                200,
+                json!("leader"),
+                json!(1),
+                json!(format!("http://{address}")),
+                true,
+                true,
+            ),
+            "rule: health live and ready report the ready node, and /v1/cluster its role, \
+             term, leader and indices with every voter's client URL and match index (O-1)"
+        );
+    }
+
+    #[test]
+    fn malformed_requests_are_refused_over_the_wire_and_a_connection_is_kept_alive() {
+        let dir = scratch("serve-strict");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let unknown_field = put(address, "/v1/kv?key=a", INSTANCE, r#"{"value":"v","x":1}"#);
+        let plus = put(address, "/v1/kv?key=a+b", INSTANCE, &put_body("v"));
+        let no_id = send(
+            address,
+            &request(
+                "PUT",
+                "/v1/kv?key=a",
+                &[("Content-Type", "application/json")],
+                &put_body("v"),
+            ),
+        );
+        let delete = send(address, &request("DELETE", "/v1/kv?key=a", &[], ""));
+        let bare_lf = send(address, b"GET /v1/kv?key=a HTTP/1.1\nHost: x\n\n");
+        // Two requests on one connection, the first kept alive.
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .write_all(b"GET /v1/health/live HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let first = read_reply(&mut reader);
+        stream
+            .write_all(&request(
+                "PUT",
+                "/v1/kv?key=kept",
+                &[
+                    ("Idempotency-Key", OTHER_ID),
+                    ("Content-Type", "application/json"),
+                ],
+                &put_body("alive"),
+            ))
+            .unwrap();
+        let second = read_reply(&mut reader);
+        // The second request asked to close: the server closes after answering it.
+        let mut rest = Vec::new();
+        let closed = std::io::Read::read_to_end(&mut reader, &mut rest).is_ok() && rest.is_empty();
+        drop(reader);
+        drop(stream);
+        stop(serving);
+        let shape = |reply: &Reply| {
+            (
+                reply.status,
+                reply.code().map(str::to_owned),
+                reply.body["error"]["details"]["request_id"].clone(),
+                reply.header("cache-control") == vec!["no-store"],
+            )
+        };
+        assert_eq!(
+            (
+                [&unknown_field, &plus, &no_id, &delete, &bare_lf].map(shape),
+                delete.header("allow"),
+                bare_lf.header("connection"),
+                (
+                    first.status,
+                    second.status,
+                    second.header("connection"),
+                    closed
+                ),
+            ),
+            (
+                [
+                    (
+                        400,
+                        Some("invalid_request".to_owned()),
+                        json!(INSTANCE),
+                        true
+                    ),
+                    (
+                        400,
+                        Some("invalid_request".to_owned()),
+                        json!(INSTANCE),
+                        true
+                    ),
+                    (400, Some("invalid_request".to_owned()), Json::Null, true),
+                    (405, Some("invalid_request".to_owned()), Json::Null, true),
+                    (400, Some("invalid_request".to_owned()), Json::Null, true),
+                ],
+                vec!["GET, PUT"],
+                vec!["close"],
+                (200, 200, vec!["close"], true),
+            ),
+            "rule: over the wire, an unknown field and an unescaped '+' are 400 with the \
+             request ID, a write without an Idempotency-Key is 400 without one, DELETE is 405 \
+             until W27, malformed HTTP is 400 and closes the connection, every refusal is \
+             no-store, and a kept-alive connection serves the next request (§8.1, §8.4)"
+        );
+    }
+}

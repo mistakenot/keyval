@@ -15,7 +15,14 @@ mod cli_tests {
     //! `--json` output (§8.7, O-6, D-52).
 
     use crate::harness::{Ran, assert_init_schema, init, keyval_server, run};
-    use crate::support::{INSTANCE, data_dir, genesis_frame, journal_bytes, one_voter, scratch};
+    use std::net::{SocketAddr, TcpStream};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use crate::support::{
+        INSTANCE, data_dir, free_port, genesis_frame, journal_bytes, one_voter, put_body, request,
+        scratch, send,
+    };
 
     #[test]
     fn init_prints_its_report_and_exits_0_then_refuses_with_exit_1_or_2() {
@@ -89,25 +96,118 @@ mod cli_tests {
     }
 
     #[test]
-    fn run_on_an_initialised_directory_says_it_does_not_serve_yet() {
-        let dir = scratch("cli-run-ready");
-        let (path, config) = one_voter(&dir, |text| text);
+    fn run_serves_an_initialised_directory_over_http_until_killed() {
+        let dir = scratch("cli-run-serves");
+        let port = free_port();
+        let (path, config) = one_voter(&dir, |text| {
+            text.replace("tick_ms = 50", "tick_ms = 5")
+                .replace("127.0.0.1:7101", &format!("127.0.0.1:{port}"))
+        });
         let initialised = init(&path, "1", INSTANCE, &[]);
-        let ran = run(&path, "1");
-        let envelope = ran.json();
+        let log = dir.join("node.log");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_keyval-server"))
+            .args([
+                "run",
+                "--config",
+                path.to_str().unwrap(),
+                "--node",
+                "1",
+                "--log-file",
+            ])
+            .arg(&log)
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let ready = loop {
+            if let Ok(stream) = TcpStream::connect(address) {
+                drop(stream);
+                let ready = send(address, &request("GET", "/v1/health/ready", &[], ""));
+                let leads = send(address, &request("GET", "/v1/cluster", &[], ""));
+                if ready.status == 200 && leads.body["role"] == "leader" {
+                    break ready;
+                }
+            }
+            assert!(Instant::now() < deadline, "fixture: run serves within 20 s");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let written = send(
+            address,
+            &request(
+                "PUT",
+                "/v1/kv?key=k",
+                &[
+                    ("Idempotency-Key", INSTANCE),
+                    ("Content-Type", "application/json"),
+                ],
+                &put_body("v"),
+            ),
+        );
+        let read = send(address, &request("GET", "/v1/kv?key=k", &[], ""));
+        let missing = send(address, &request("GET", "/v1/kv?key=other", &[], ""));
+        // The log is written by its own thread: wait for the election's record before the kill.
+        let elected = serde_json::json!({"role": "leader", "leader": 1});
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let events = loop {
+            let events = logged_events(&log);
+            if events
+                .iter()
+                .any(|(event, fields)| event == "role_changed" && *fields == elected)
+                || Instant::now() >= deadline
+            {
+                break events;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let logged = (
+            events.iter().any(|(event, _)| event == "boot"),
+            events
+                .iter()
+                .any(|(event, fields)| event == "role_changed" && *fields == elected),
+        );
         assert_eq!(
             (
                 initialised.code,
-                ran.error_code(),
-                envelope["message"]
-                    .as_str()
-                    .is_some_and(|message| message.contains("W18.2")),
-                journal_bytes(&data_dir(&config, 1)) == Some(genesis_frame(&config, 1)),
+                ready.header("cache-control"),
+                written.status,
+                (read.status, read.body["value"].clone()),
+                missing.code(),
+                logged,
+                journal_bytes(&data_dir(&config, 1)).map_or(0, |bytes| bytes.len())
+                    > genesis_frame(&config, 1).len(),
             ),
-            (Some(0), (Some(1), "not_serving".to_owned()), true, true),
-            "rule: an initialised directory passes run's preflight, and until W18.2 wires the \
-             node run says it does not serve rather than pretend to (P6), changing nothing"
+            (
+                Some(0),
+                vec!["no-store"],
+                200,
+                (200, serde_json::json!("v")),
+                Some("not_found"),
+                (true, true),
+                true,
+            ),
+            "rule: run starts the node from its initialised directory and serves the client \
+             API on its client address (§7.12): ready, a PUT and a GET over HTTP, with the \
+             boot and its own election (a role_changed record, O-3) in its --log-file and the \
+             write in its journal; logged events {events:?}"
         );
+    }
+
+    /// Each JSON line of the log at `path`: its event and its role and leader fields.
+    fn logged_events(path: &std::path::Path) -> Vec<(String, serde_json::Value)> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .map(|record| {
+                (
+                    record["event"].as_str().unwrap_or_default().to_owned(),
+                    serde_json::json!({"role": record["role"], "leader": record["leader"]}),
+                )
+            })
+            .collect()
     }
 
     #[test]
