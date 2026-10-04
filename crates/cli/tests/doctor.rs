@@ -55,14 +55,16 @@ fn genesis_frame() -> Vec<u8> {
     encode(FrameKind::Genesis, 1, &genesis.encode()).unwrap()
 }
 
-/// A data directory a node has used: created, locked once (so `LOCK` exists), with
-/// `journal` as its journal file.
+/// A data directory a node has used: created, with the empty `LOCK` file a node's lock
+/// leaves behind, and `journal` as its journal file.
+///
+/// The test never takes the lock itself. A process that a sibling test spawns while the
+/// lock is held inherits it until it execs, so this test's doctor could see a live node
+/// and judge nothing (br-o8co).
 fn data_dir(name: &str, journal: &[u8]) -> PathBuf {
     let dir = scratch(name);
     assert_eq!(create_data_dir(&dir), Ok(DataDirCreated::New));
-    let mut node = FsStorage::open(&dir).unwrap();
-    node.lock().unwrap();
-    drop(node);
+    fs::write(dir.join(fs_storage::LOCK), b"").unwrap();
     fs::write(dir.join(fs_storage::JOURNAL), journal).unwrap();
     dir
 }
@@ -513,7 +515,8 @@ mod doctor_cli {
             assert_eq!(
                 reported_numbers(&report),
                 examined_numbers(&bytes),
-                "rule: the report gives exactly the numbers recovery read (O-7); golden={}",
+                "rule: the report gives exactly the numbers recovery read (O-7); golden={}, \
+                 report={report}",
                 golden.name
             );
         }
