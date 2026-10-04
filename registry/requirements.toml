@@ -53,7 +53,7 @@ notes = "Owner disposition: live-state capacity accepted as stated 2026-10-01 (ย
 [[requirement]]
 id = "DM-7"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "History capacity admission limits and a local journal hard stop"
 notes = "Owner disposition: history capacity and journal hard stop accepted as stated 2026-10-01 (ยง15 Q3); journal exhaustion is an accepted v1 failure mode (D-61)."
 
