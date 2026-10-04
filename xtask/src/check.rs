@@ -1367,7 +1367,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["net_tests::"],
         },
-        min_cases: 11,
+        min_cases: 12,
     },
     CheckDef {
         id: "SIM-NET-SCENARIOS",

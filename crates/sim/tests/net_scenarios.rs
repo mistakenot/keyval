@@ -182,7 +182,7 @@ mod scenarios {
                     peer,
                     client,
                     queue,
-                    max_in_flight: ItemCount::new(1_000_000),
+                    max_in_flight: EventBudget::new(2_000_000),
                 },
                 master.stream(Subsystem::Network),
             );
@@ -313,7 +313,15 @@ mod scenarios {
 
         fn send(&mut self, from: Endpoint, to: Endpoint, bytes: &[u8]) {
             let now = self.now();
-            let sent = self.net.send(now, from, to, bytes);
+            let sent = match self.net.send(now, from, to, bytes) {
+                Ok(sent) => sent,
+                Err(error) => {
+                    self.violations.push(format!(
+                        "the network refused a send ({error:?}): the run is incomplete (P10)"
+                    ));
+                    return;
+                }
+            };
             let link_seq = match (from, to) {
                 (Endpoint::Node(a), Endpoint::Node(b)) => {
                     let next = self.link_sent.entry((a, b)).or_insert(0);

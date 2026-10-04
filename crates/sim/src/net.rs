@@ -23,6 +23,13 @@
 //!   `peer_send_queue_messages` packets and `peer_send_queue_bytes` bytes in flight. A send
 //!   past either bound is dropped and counted, never queued: the queue never grows. A
 //!   duplicate is the network's own copy and takes no sender slot.
+//! - **Copies in flight** are bounded by the run's event budget ([`NetConfig::max_in_flight`],
+//!   an [`EventBudget`], whose default is the registered `Limit::SimEventsPerRun`, §7.11):
+//!   each copy in flight is one pending arrival event. A send whose copies would not all fit
+//!   is refused with [`NetError::InFlightFull`]: nothing is inserted or counted, and the run
+//!   is incomplete from then on, as when the scheduler's queue is full (P10). It is never a
+//!   silent drop, and no copy is ever in flight while its send reads as dropped (br-n6is,
+//!   br-xoqp).
 //! - **Packets are not tied to incarnations** (§9.1): one addressed to a node reaches
 //!   whatever incarnation is running when it arrives, as an ordinary stale message.
 //!
@@ -33,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use types::{BoundedMap, ByteCount, Config, ItemCount, NodeId};
 
 use crate::entropy::SplitMix64;
-use crate::scheduler::VirtualTime;
+use crate::scheduler::{EventBudget, VirtualTime};
 use crate::trace::{Endpoint, PacketFate, Record};
 
 /// A probability in parts per million: exact and integer, so it draws the same on every
@@ -141,10 +148,11 @@ pub struct NetConfig {
     pub client: LinkProfile,
     /// Each directed peer link's bound.
     pub queue: QueueBound,
-    /// The most packets in flight at once, every copy counted: a send past it is dropped
-    /// and counted as an overflow (CD-9). Each packet in flight is one pending scheduler
-    /// event, so the run's event budget is the natural value.
-    pub max_in_flight: ItemCount,
+    /// The most copies in flight at once: the run's event budget (CD-9, §7.11). Each copy
+    /// in flight is one pending arrival event, so the network never holds more than the
+    /// scheduler could; [`EventBudget::DEFAULT`] is the registered `Limit::SimEventsPerRun`.
+    /// A send past it is refused and makes the run incomplete ([`NetError::InFlightFull`]).
+    pub max_in_flight: EventBudget,
 }
 
 /// One copy of a packet in flight. Each copy has its own.
@@ -181,8 +189,18 @@ pub enum DropReason {
     CutInFlight,
     /// Its link already held a full queue.
     QueueFull,
-    /// The network already held its most packets in flight.
-    Overflow,
+}
+
+/// Why a send could not be made at all (§7.11, P10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetError {
+    /// The packet's copies would not all fit within the run's event budget
+    /// ([`NetConfig::max_in_flight`]), now or at an earlier send. Nothing was inserted or
+    /// counted, and the run is incomplete from then on, which fails (P10, br-n6is).
+    InFlightFull {
+        /// The bound: the run's event budget.
+        bound: EventBudget,
+    },
 }
 
 /// What became of every packet so far.
@@ -202,8 +220,6 @@ pub struct NetCounts {
     pub cut_in_flight: u64,
     /// Packets dropped on a full link queue.
     pub queue_full: u64,
-    /// Copies dropped because too many were in flight.
-    pub overflow: u64,
 }
 
 impl NetCounts {
@@ -214,7 +230,6 @@ impl NetCounts {
             DropReason::CutAtSend => &mut self.cut_at_send,
             DropReason::CutInFlight => &mut self.cut_in_flight,
             DropReason::QueueFull => &mut self.queue_full,
-            DropReason::Overflow => &mut self.overflow,
         };
         *count = count.saturating_add(1);
     }
@@ -312,7 +327,8 @@ struct Load {
 /// The simulated network of one run.
 ///
 /// Invariants: every link's load is within [`NetConfig::queue`] and is the sum over its
-/// queued copies in flight; at most [`NetConfig::max_in_flight`] copies are in flight.
+/// queued copies in flight; at most [`NetConfig::max_in_flight`] copies are in flight; every
+/// packet sent and every extra copy made is delivered, dropped or still in flight.
 #[derive(Clone, Debug)]
 pub struct Network {
     /// Its settings.
@@ -330,6 +346,8 @@ pub struct Network {
     next: u64,
     /// What became of every packet so far.
     counts: NetCounts,
+    /// Whether a send was refused for want of room in flight: the run is incomplete (P10).
+    incomplete: bool,
 }
 
 /// The packet trace record for `fate`.
@@ -361,6 +379,7 @@ impl Network {
             in_flight: BoundedMap::new(max_in_flight),
             next: 0,
             counts: NetCounts::default(),
+            incomplete: false,
         }
     }
 
@@ -387,6 +406,13 @@ impl Network {
         self.in_flight.len()
     }
 
+    /// Whether a send was refused for want of room in flight: the run is incomplete, which
+    /// fails (P10, br-n6is).
+    #[must_use]
+    pub const fn incomplete(&self) -> bool {
+        self.incomplete
+    }
+
     /// The packets and bytes in flight on the link from `from` to `to`.
     #[must_use]
     pub fn load(&self, from: NodeId, to: NodeId) -> (u64, u64) {
@@ -396,9 +422,26 @@ impl Network {
     }
 
     /// Sends `bytes` from `from` to `to` at `now` (module documentation).
-    pub fn send(&mut self, now: VirtualTime, from: Endpoint, to: Endpoint, bytes: &[u8]) -> Sent {
+    ///
+    /// # Errors
+    ///
+    /// [`NetError::InFlightFull`] if the packet's copies would not all fit within
+    /// [`NetConfig::max_in_flight`], now or at an earlier send: nothing is inserted or
+    /// counted, and the run is incomplete from then on (P10, br-n6is).
+    pub fn send(
+        &mut self,
+        now: VirtualTime,
+        from: Endpoint,
+        to: Endpoint,
+        bytes: &[u8],
+    ) -> Result<Sent, NetError> {
+        let full = NetError::InFlightFull {
+            bound: self.config.max_in_flight,
+        };
+        if self.incomplete {
+            return Err(full);
+        }
         let mut sent = Sent::default();
-        self.counts.sent = self.counts.sent.saturating_add(1);
         sent.records.push(record(PacketFate::Sent, from, to, bytes));
         let link = match (from, to) {
             (Endpoint::Node(a), Endpoint::Node(b)) => Some((a, b)),
@@ -421,13 +464,21 @@ impl Network {
             None
         };
         if let Some(reason) = refusal {
+            self.counts.sent = self.counts.sent.saturating_add(1);
             self.counts.record(reason);
             sent.dropped = Some(reason);
             sent.records
                 .push(record(PacketFate::Dropped, from, to, bytes));
-            return sent;
+            return Ok(sent);
         }
-        let copies = if self.chance(profile.duplicate) { 2 } else { 1 };
+        let copies: usize = if self.chance(profile.duplicate) { 2 } else { 1 };
+        // Room for every copy, or none is inserted (br-n6is, br-xoqp).
+        let bound = usize::try_from(self.config.max_in_flight.get()).unwrap_or(usize::MAX);
+        if copies > bound.saturating_sub(self.in_flight.len()) {
+            self.incomplete = true;
+            return Err(full);
+        }
+        self.counts.sent = self.counts.sent.saturating_add(1);
         for copy in 0..copies {
             let at = VirtualTime::from_micros(now.as_micros().saturating_add(self.delay(profile)));
             let queued = copy == 0 && link.is_some();
@@ -439,13 +490,14 @@ impl Network {
                 bytes: bytes.to_vec(),
                 queued,
             };
-            if self.in_flight.insert(id, packet).is_err() {
-                self.counts.record(DropReason::Overflow);
-                sent.dropped.get_or_insert(DropReason::Overflow);
-                sent.records
-                    .push(record(PacketFate::Dropped, from, to, bytes));
-                continue;
-            }
+            let inserted = self.in_flight.insert(id, packet).is_ok();
+            types::invariant!(
+                inserted,
+                "NET-IN-FLIGHT",
+                "copy {} of a packet from {from} to {to} did not fit in flight after room for \
+                 {copies} copies was checked",
+                id.get()
+            );
             if let Some(link) = link.filter(|_| queued) {
                 let load = self.loads.entry(link).or_default();
                 load.messages = load.messages.saturating_add(1);
@@ -458,7 +510,7 @@ impl Network {
             }
             sent.arrivals.push((at, id));
         }
-        sent
+        Ok(sent)
     }
 
     /// The copy `id` arrives: delivered, or dropped if its link has been cut meanwhile.

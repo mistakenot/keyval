@@ -894,7 +894,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SIM-NET"
-min_cases = 11
+min_cases = 12
 status = "implemented"
 
 [[check]]

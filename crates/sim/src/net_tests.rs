@@ -12,9 +12,10 @@ use types::{ByteCount, Config, InstanceId, ItemCount, NodeId, OutboundMessage};
 
 use crate::entropy::SplitMix64;
 use crate::net::{
-    Arrival, DropReason, LinkProfile, NetConfig, NetCounts, Network, PacketId, Ppm, QueueBound,
+    Arrival, DropReason, LinkProfile, NetConfig, NetCounts, NetError, Network, PacketId, Ppm,
+    QueueBound,
 };
-use crate::scheduler::VirtualTime;
+use crate::scheduler::{EventBudget, VirtualTime};
 use crate::trace::{ClientId, Endpoint, PacketFate, Record};
 
 fn node(id: u64) -> Endpoint {
@@ -38,7 +39,7 @@ fn network(peer: LinkProfile, client: LinkProfile, seed: u64) -> Network {
             peer,
             client,
             queue: QueueBound::of(&local()),
-            max_in_flight: ItemCount::new(1_000_000),
+            max_in_flight: EventBudget::DEFAULT,
         },
         SplitMix64::new(seed),
     )
@@ -63,7 +64,7 @@ fn delivery_follows_delay_not_send_order() {
     );
     let mut arrivals = Vec::new();
     for n in 0_u8..50 {
-        let sent = net.send(VirtualTime::ZERO, node(1), node(2), &[n]);
+        let sent = net.send(VirtualTime::ZERO, node(1), node(2), &[n]).unwrap();
         assert_eq!(
             sent.arrivals.len(),
             1,
@@ -113,7 +114,10 @@ fn every_delay_lies_in_its_range_and_the_same_seed_gives_the_same_fates() {
     let run = |seed| {
         let mut net = network(profile, profile, seed);
         (0_u8..200)
-            .map(|n| net.send(VirtualTime::from_micros(1_000), node(1), node(3), &[n]))
+            .map(|n| {
+                net.send(VirtualTime::from_micros(1_000), node(1), node(3), &[n])
+                    .unwrap()
+            })
             .collect::<Vec<_>>()
     };
     let first = run(5);
@@ -141,7 +145,7 @@ fn loss_follows_its_probability_on_each_path() {
         let mut lost = 0;
         let mut arrivals = Vec::new();
         for _ in 0..10_000 {
-            let sent = net.send(VirtualTime::ZERO, node(1), node(2), b"m");
+            let sent = net.send(VirtualTime::ZERO, node(1), node(2), b"m").unwrap();
             if sent.dropped == Some(DropReason::Lost) {
                 lost += 1;
                 assert_eq!(
@@ -176,7 +180,7 @@ fn a_duplicate_is_an_independent_copy() {
     let (mut earlier, mut later) = (0, 0);
     let mut extra_times = std::collections::BTreeSet::new();
     for n in 0_u8..20 {
-        let mut sent = net.send(VirtualTime::ZERO, node(4), node(5), &[n]);
+        let mut sent = net.send(VirtualTime::ZERO, node(4), node(5), &[n]).unwrap();
         assert_eq!(
             (
                 sent.arrivals.len(),
@@ -238,7 +242,9 @@ fn a_symmetric_partition_cuts_both_ways_between_groups_only() {
         (1, 2, false),
         (4, 5, false),
     ] {
-        let sent = net.send(VirtualTime::ZERO, node(from), node(to), b"m");
+        let sent = net
+            .send(VirtualTime::ZERO, node(from), node(to), b"m")
+            .unwrap();
         assert_eq!(
             sent.dropped,
             crosses.then_some(DropReason::CutAtSend),
@@ -247,7 +253,7 @@ fn a_symmetric_partition_cuts_both_ways_between_groups_only() {
         );
     }
     net.links_mut().heal_all();
-    let sent = net.send(VirtualTime::ZERO, node(1), node(3), b"m");
+    let sent = net.send(VirtualTime::ZERO, node(1), node(3), b"m").unwrap();
     assert_eq!(sent.dropped, None, "rule: healing restores the link");
 }
 
@@ -258,8 +264,12 @@ fn an_asymmetric_cut_blocks_one_direction() {
     for peer in 2..=5 {
         net.links_mut().cut(id(peer), id(1));
     }
-    let out = net.send(VirtualTime::ZERO, node(1), node(2), b"append");
-    let back = net.send(VirtualTime::ZERO, node(2), node(1), b"ack");
+    let out = net
+        .send(VirtualTime::ZERO, node(1), node(2), b"append")
+        .unwrap();
+    let back = net
+        .send(VirtualTime::ZERO, node(2), node(1), b"ack")
+        .unwrap();
     assert_eq!(
         (out.dropped, back.dropped),
         (None, Some(DropReason::CutAtSend)),
@@ -289,7 +299,9 @@ fn an_asymmetric_cut_blocks_one_direction() {
 #[test]
 fn a_cut_also_drops_traffic_already_in_flight() {
     let mut net = reliable(1);
-    let mut sent = net.send(VirtualTime::ZERO, node(1), node(2), b"in flight");
+    let mut sent = net
+        .send(VirtualTime::ZERO, node(1), node(2), b"in flight")
+        .unwrap();
     net.links_mut().cut(id(1), id(2));
     let (_, packet) = sent.arrivals.pop().unwrap();
     assert!(
@@ -334,7 +346,7 @@ fn a_full_link_queue_drops_and_counts_and_never_grows() {
                 messages: ItemCount::new(3),
                 bytes: ByteCount::new(100),
             },
-            max_in_flight: ItemCount::new(1_000),
+            max_in_flight: EventBudget::new(1_000),
         },
         SplitMix64::new(1),
     );
@@ -342,25 +354,34 @@ fn a_full_link_queue_drops_and_counts_and_never_grows() {
     for _ in 0..3 {
         arrivals.extend(
             net.send(VirtualTime::ZERO, node(1), node(2), &[0; 10])
+                .unwrap()
                 .arrivals,
         );
     }
-    let full = net.send(VirtualTime::ZERO, node(1), node(2), &[0; 10]);
+    let full = net
+        .send(VirtualTime::ZERO, node(1), node(2), &[0; 10])
+        .unwrap();
     assert_eq!(
         (full.dropped, net.load(id(1), id(2))),
         (Some(DropReason::QueueFull), (3, 30)),
         "rule: a send past the message bound is dropped, and the queue never grows (§7.11)"
     );
-    let other = net.send(VirtualTime::ZERO, node(1), node(3), &[0; 10]);
+    let other = net
+        .send(VirtualTime::ZERO, node(1), node(3), &[0; 10])
+        .unwrap();
     assert_eq!(
         other.dropped, None,
         "rule: each directed link has its own queue"
     );
     let (_, first) = arrivals.remove(0);
     assert!(matches!(net.arrive(first), Arrival::Delivered(..)));
-    let room = net.send(VirtualTime::ZERO, node(1), node(2), &[0; 10]);
+    let room = net
+        .send(VirtualTime::ZERO, node(1), node(2), &[0; 10])
+        .unwrap();
     assert_eq!(room.dropped, None, "rule: an arrival frees its slot");
-    let heavy = net.send(VirtualTime::ZERO, node(2), node(1), &[0; 101]);
+    let heavy = net
+        .send(VirtualTime::ZERO, node(2), node(1), &[0; 101])
+        .unwrap();
     assert_eq!(
         heavy.dropped,
         Some(DropReason::QueueFull),
@@ -382,7 +403,9 @@ fn client_paths_have_their_own_profile_and_are_never_partitioned() {
     );
     net.links_mut().partition(&[&[id(1)], &[id(2), id(3)]]);
     let client = Endpoint::Client(ClientId::new(9));
-    let reply = net.send(VirtualTime::ZERO, node(1), client, b"response");
+    let reply = net
+        .send(VirtualTime::ZERO, node(1), client, b"response")
+        .unwrap();
     assert_eq!(
         reply.dropped,
         Some(DropReason::Lost),
@@ -390,7 +413,9 @@ fn client_paths_have_their_own_profile_and_are_never_partitioned() {
     );
     let mut net = network(LinkProfile::reliable(1), LinkProfile::reliable(5), 1);
     net.links_mut().partition(&[&[id(1)], &[id(2), id(3)]]);
-    let reply = net.send(VirtualTime::ZERO, node(1), client, b"response");
+    let reply = net
+        .send(VirtualTime::ZERO, node(1), client, b"response")
+        .unwrap();
     assert_eq!(
         (
             reply.dropped,
@@ -401,26 +426,90 @@ fn client_paths_have_their_own_profile_and_are_never_partitioned() {
     );
 }
 
-#[test]
-fn too_many_copies_in_flight_overflow_and_are_counted() {
-    let mut net = Network::new(
+/// A network of reliable paths duplicating with probability `duplicate`, holding at most
+/// `bound` copies in flight.
+fn bounded(bound: u64, duplicate: Ppm) -> Network {
+    let path = LinkProfile::new(1, 1, Ppm::NEVER, duplicate).unwrap();
+    Network::new(
         NetConfig {
-            peer: LinkProfile::reliable(1),
-            client: LinkProfile::reliable(1),
+            peer: path,
+            client: path,
             queue: QueueBound::of(&local()),
-            max_in_flight: ItemCount::new(2),
+            max_in_flight: EventBudget::new(bound),
         },
         SplitMix64::new(1),
-    );
-    let outcomes: Vec<_> = (0..3)
-        .map(|_| net.send(VirtualTime::ZERO, node(1), node(2), b"m").dropped)
-        .collect();
+    )
+}
+
+/// Every packet sent and every extra copy made is delivered, dropped or still in flight.
+fn assert_counts_settle(net: &Network) {
+    let c = net.counts();
+    let fates = c.delivered + c.lost + c.cut_at_send + c.cut_in_flight + c.queue_full;
     assert_eq!(
-        (outcomes, net.in_flight(), net.counts().overflow),
-        (vec![None, None, Some(DropReason::Overflow)], 2, 1),
-        "rule: the network holds at most its bound in flight; past it a copy is dropped and \
-         counted (CD-9)"
+        c.sent + c.duplicated,
+        fates + u64::try_from(net.in_flight()).unwrap(),
+        "rule: every packet made is delivered, dropped or in flight (br-xoqp); counts={c:?}"
     );
+}
+
+#[test]
+fn a_send_past_the_in_flight_bound_is_refused_and_the_run_is_incomplete() {
+    let mut net = bounded(2, Ppm::NEVER);
+    let mut arrivals = Vec::new();
+    for _ in 0..2 {
+        arrivals.extend(
+            net.send(VirtualTime::ZERO, node(1), node(2), b"m")
+                .unwrap()
+                .arrivals,
+        );
+    }
+    let full = Err(NetError::InFlightFull {
+        bound: EventBudget::new(2),
+    });
+    assert_eq!(
+        net.send(VirtualTime::ZERO, node(1), node(2), b"m"),
+        full,
+        "rule: past the run's event budget a send is refused, never dropped silently (CD-9, \
+         §7.11, br-n6is)"
+    );
+    assert_eq!(
+        (net.in_flight(), net.incomplete(), net.counts().sent),
+        (2, true, 2),
+        "rule: nothing was inserted or counted, and the run is incomplete (P10)"
+    );
+    deliver_all(&mut net, &mut arrivals);
+    assert_eq!(
+        net.send(VirtualTime::ZERO, node(1), node(2), b"m"),
+        full,
+        "rule: once incomplete, the run stays incomplete, even with room again"
+    );
+    assert_counts_settle(&net);
+}
+
+#[test]
+fn a_duplicated_send_never_puts_some_copies_in_flight_and_drops_others() {
+    // br-xoqp: one below the bound, a duplicated send used to insert its original and
+    // drop its duplicate, reporting the packet dropped while the original was in flight.
+    let mut net = bounded(3, Ppm::ALWAYS);
+    let first = net.send(VirtualTime::ZERO, node(1), node(2), b"m").unwrap();
+    assert_eq!(
+        (first.arrivals.len(), first.dropped),
+        (2, None),
+        "fixture: the first send fits both copies"
+    );
+    assert_eq!(
+        net.send(VirtualTime::ZERO, node(1), node(2), b"m"),
+        Err(NetError::InFlightFull {
+            bound: EventBudget::new(3)
+        }),
+        "rule: a send whose copies do not all fit is refused whole (br-xoqp)"
+    );
+    assert_eq!(
+        (net.in_flight(), net.load(id(1), id(2)).0),
+        (2, 1),
+        "rule: no copy of the refused send was inserted or took a link slot"
+    );
+    assert_counts_settle(&net);
 }
 
 #[test]
@@ -451,12 +540,14 @@ fn real_sealed_peer_envelopes_cross_the_network_unchanged() {
         })
         .unwrap();
     let mut net = reliable(1);
-    let mut sent = net.send(
-        VirtualTime::ZERO,
-        Endpoint::Node(from),
-        Endpoint::Node(to),
-        &envelope,
-    );
+    let mut sent = net
+        .send(
+            VirtualTime::ZERO,
+            Endpoint::Node(from),
+            Endpoint::Node(to),
+            &envelope,
+        )
+        .unwrap();
     let Some(Arrival::Delivered(delivery, _)) = deliver_all(&mut net, &mut sent.arrivals).pop()
     else {
         panic!("rule: a reliable path delivers it");
