@@ -341,6 +341,18 @@ impl fmt::Display for Overflow {
 
 impl Error for Overflow {}
 
+/// The line that ends an incomplete trace's canonical bytes (P10).
+///
+/// A required observation overflowed its bound, so the trace is not the run's full
+/// evidence, and a checker that reads only the bytes must still refuse it.
+pub const INCOMPLETE_MARKER: &str = "X incomplete";
+
+/// Whether `canonical` is marked incomplete: its last line is [`INCOMPLETE_MARKER`].
+#[must_use]
+pub fn marks_incomplete(canonical: &str) -> bool {
+    canonical.lines().next_back() == Some(INCOMPLETE_MARKER)
+}
+
 /// A run's canonical trace, built step by step.
 #[derive(Clone, Debug)]
 pub struct Trace {
@@ -427,7 +439,8 @@ impl Trace {
         self.metrics.insert(name, value);
     }
 
-    /// Whether every required observation was recorded.
+    /// Whether every required observation was recorded. Once false it stays false, and
+    /// the canonical bytes end with [`INCOMPLETE_MARKER`].
     #[must_use]
     pub const fn is_complete(&self) -> bool {
         !self.incomplete
@@ -445,17 +458,21 @@ impl Trace {
         self.dropped_diagnostics
     }
 
-    /// The canonical bytes: every line, then the metrics, each ending in a newline.
+    /// The canonical bytes: every line, then the metrics, each ending in a newline. An
+    /// incomplete trace ends with [`INCOMPLETE_MARKER`], so incompleteness is part of the
+    /// bytes that are compared, not only of this value (P10).
     #[must_use]
     pub fn canonical(&self) -> String {
         let metrics = self
             .metrics
             .iter()
             .map(|(name, value)| format!("M {} {value}", name.as_str()));
+        let marker = self.incomplete.then(|| INCOMPLETE_MARKER.to_owned());
         self.lines
             .iter()
             .cloned()
             .chain(metrics)
+            .chain(marker)
             .fold(String::new(), |mut text, line| {
                 text.push_str(&line);
                 text.push('\n');
@@ -506,34 +523,35 @@ pub enum Comparison {
     Identical,
     /// They differ first at `line` (1-based); a side is `None` where its trace ended.
     Differs {
-        /// The first differing line.
+        /// The line holding the first differing byte.
         line: usize,
-        /// The left trace's line.
+        /// The left trace's line, exactly, with its terminator if it has one.
         left: Option<String>,
-        /// The right trace's line.
+        /// The right trace's line, exactly, with its terminator if it has one.
         right: Option<String>,
     },
 }
 
-/// Compares two canonical traces completely, events and metrics alike, and reports the
-/// first differing line. The hash never decides equality.
+/// Compares two canonical traces byte for byte (§10.5 K-14), events and metrics alike.
+///
+/// It reports the line holding the first differing byte. A missing final newline or a
+/// `\r\n` counts as a difference. The hash never decides equality.
 #[must_use]
 pub fn compare(left: &str, right: &str) -> Comparison {
-    let mut lefts = left.lines();
-    let mut rights = right.lines();
-    let mut line = 1;
-    loop {
-        match (lefts.next(), rights.next()) {
-            (None, None) => return Comparison::Identical,
-            (here, there) if here == there => line += 1,
-            (here, there) => {
-                return Comparison::Differs {
-                    line,
-                    left: here.map(str::to_owned),
-                    right: there.map(str::to_owned),
-                };
-            }
-        }
+    let at = left
+        .bytes()
+        .zip(right.bytes())
+        .take_while(|(here, there)| here == there)
+        .count();
+    if at == left.len() && at == right.len() {
+        return Comparison::Identical;
+    }
+    let line = left.bytes().take(at).filter(|&byte| byte == b'\n').count() + 1;
+    let piece = |text: &str| text.split_inclusive('\n').nth(line - 1).map(str::to_owned);
+    Comparison::Differs {
+        line,
+        left: piece(left),
+        right: piece(right),
     }
 }
 
@@ -824,8 +842,136 @@ mod tests {
             !trace.is_complete(),
             "rule: overflowing the bound fails closed, the run is incomplete (P10)"
         );
-        assert_eq!(trace.canonical().lines().count(), 2);
+        assert_eq!(
+            trace.canonical(),
+            "R - commit n1/1 1\nR - commit n1/1 2\nX incomplete\n",
+            "rule: the refused record is absent and the bytes end with the incomplete marker"
+        );
         assert_eq!(ObservationBound::DEFAULT.get(), 4_096, "rule: §5 limits");
+    }
+
+    #[test]
+    fn incompleteness_is_sticky_and_ends_the_canonical_bytes() {
+        let verdict = Record::Verdict {
+            checker: name("K-1"),
+            passed: true,
+        };
+        let mut trace = Trace::new(ObservationBound::new(1));
+        assert_eq!(trace.record(&verdict), Ok(()));
+        assert!(
+            trace.record(&verdict).is_err(),
+            "test setup: the step overflows"
+        );
+        let mut scheduler = Scheduler::new(
+            MasterSeed::new(1).stream(Subsystem::Scheduler),
+            EventBudget::DEFAULT,
+        );
+        scheduler
+            .schedule(VirtualTime::from_micros(1), None, ())
+            .unwrap();
+        let Step::Event(event) = scheduler.step() else {
+            panic!("expected an event");
+        };
+        trace.event(&event, &name("tick"));
+        assert_eq!(
+            trace.record(&verdict),
+            Ok(()),
+            "rule: the next step has a fresh bound"
+        );
+        trace.metric(name("events"), 1);
+        assert!(
+            !trace.is_complete(),
+            "rule: incompleteness is sticky across later steps (P10)"
+        );
+        let canonical = trace.canonical();
+        assert!(
+            canonical.ends_with("M events 1\nX incomplete\n"),
+            "rule: the marker is the last line, after the metrics; canonical={canonical:?}"
+        );
+        assert!(marks_incomplete(&canonical));
+        assert!(
+            !marks_incomplete(&trace_of(&[]).canonical()),
+            "rule: a complete trace carries no marker"
+        );
+    }
+
+    #[test]
+    fn each_event_starts_a_fresh_observation_bound() {
+        let verdict = Record::Verdict {
+            checker: name("K-2"),
+            passed: true,
+        };
+        let mut scheduler = Scheduler::new(
+            MasterSeed::new(2).stream(Subsystem::Scheduler),
+            EventBudget::DEFAULT,
+        );
+        let mut trace = Trace::new(ObservationBound::new(2));
+        for step in 0..3 {
+            scheduler
+                .schedule(VirtualTime::from_micros(step + 1), None, ())
+                .unwrap();
+            let Step::Event(event) = scheduler.step() else {
+                panic!("expected an event");
+            };
+            trace.event(&event, &name("tick"));
+            assert_eq!(trace.record(&verdict), Ok(()), "rule: N-1 fit; step={step}");
+            assert_eq!(trace.record(&verdict), Ok(()), "rule: N fit; step={step}");
+        }
+        assert!(
+            trace.is_complete(),
+            "rule: the bound is per step, and event() resets it"
+        );
+        assert_eq!(
+            trace.record(&verdict),
+            Err(Overflow {
+                bound: ObservationBound::new(2),
+            }),
+            "rule: N+1 in one step overflows"
+        );
+    }
+
+    #[test]
+    fn compare_decides_on_exact_bytes() {
+        assert_eq!(
+            compare("", ""),
+            Comparison::Identical,
+            "rule: two empty traces are the same bytes; K-14 refuses them elsewhere"
+        );
+        assert_eq!(
+            compare("", "M a 1\n"),
+            Comparison::Differs {
+                line: 1,
+                left: None,
+                right: Some("M a 1\n".to_owned()),
+            }
+        );
+        assert_eq!(
+            compare("M a 1\nM b 2\n", "M a 1\nM b 2"),
+            Comparison::Differs {
+                line: 2,
+                left: Some("M b 2\n".to_owned()),
+                right: Some("M b 2".to_owned()),
+            },
+            "rule: a missing final newline differs (§10.5: byte-for-byte)"
+        );
+        assert_eq!(
+            compare("M a 1\r\n", "M a 1\n"),
+            Comparison::Differs {
+                line: 1,
+                left: Some("M a 1\r\n".to_owned()),
+                right: Some("M a 1\n".to_owned()),
+            },
+            "rule: CRLF differs from LF"
+        );
+        assert_eq!(
+            compare("M \u{e9} 1\n", "M \u{e8} 1\n"),
+            Comparison::Differs {
+                line: 1,
+                left: Some("M \u{e9} 1\n".to_owned()),
+                right: Some("M \u{e8} 1\n".to_owned()),
+            },
+            "rule: a difference inside a multibyte character is reported, never a panic"
+        );
     }
 
     #[test]
@@ -845,8 +991,8 @@ mod tests {
             compare(&canonical, &other.canonical()),
             Comparison::Differs {
                 line: 7,
-                left: Some("M packets.sent 7".to_owned()),
-                right: Some("M packets.sent 8".to_owned()),
+                left: Some("M packets.sent 7\n".to_owned()),
+                right: Some("M packets.sent 8\n".to_owned()),
             },
             "rule: comparisons include the metrics"
         );
@@ -869,8 +1015,8 @@ mod tests {
             compare(&left, &right),
             Comparison::Differs {
                 line: 6,
-                left: Some("R 4 commit n1/1 3".to_owned()),
-                right: Some("R 4 commit n1/1 4".to_owned()),
+                left: Some("R 4 commit n1/1 3\n".to_owned()),
+                right: Some("R 4 commit n1/1 4\n".to_owned()),
             }
         );
         let longer = trace_of(&[commit.clone(), commit]).canonical();
@@ -879,7 +1025,7 @@ mod tests {
             Comparison::Differs {
                 line: 7,
                 left: None,
-                right: Some("R 4 commit n1/1 3".to_owned()),
+                right: Some("R 4 commit n1/1 3\n".to_owned()),
             },
             "rule: a trace that stops early differs where it stops"
         );

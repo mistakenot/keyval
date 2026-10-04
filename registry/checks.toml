@@ -450,7 +450,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SIM-TRACE"
-min_cases = 17
+min_cases = 20
 status = "implemented"
 
 [[check]]
@@ -462,7 +462,7 @@ api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check K-14"
-min_cases = 8
+min_cases = 12
 status = "implemented"
 
 [[check]]

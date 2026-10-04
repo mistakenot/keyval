@@ -9,6 +9,13 @@
 //! traces share before it, and both trace files, which are kept. Any difference fails
 //! (RISK-6).
 //!
+//! A replay that would compare nothing is refused, never passed (P10): no seeds, a
+//! repeated seed, fewer than two processes, a trace with no events, or a trace marked
+//! incomplete ([`INCOMPLETE_MARKER`](crate::trace::INCOMPLETE_MARKER)). Each process runs
+//! with its stdout discarded and its stderr kept in a file beside its trace, of which a
+//! report keeps only the tail. A process still running at its timeout is killed and fails
+//! the replay. The timeout supervises processes; it never reaches a run (P4).
+//!
 //! K-14 lives in `sim`, an explicit, stated exemption from T-12 (§10.5): it compares
 //! canonical traces byte for byte and consults no expected-result oracle.
 //!
@@ -20,12 +27,15 @@
 //! nodes, and a timer armed by an earlier incarnation still fires after the restart, as
 //! a stale event that is ignored.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use types::{Entropy as _, EntropyStream, Incarnation, NodeId};
 
@@ -33,7 +43,7 @@ use crate::entropy::{MasterSeed, NodeStreams, Subsystem};
 use crate::scheduler::{
     EventBudget, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step, VirtualTime,
 };
-use crate::trace::{Comparison, Name, ObservationBound, Trace, compare};
+use crate::trace::{Comparison, Name, ObservationBound, Trace, compare, marks_incomplete};
 
 /// The machinery run's nodes: the five voters (§1).
 const NODES: u64 = 5;
@@ -56,6 +66,12 @@ const HORIZON_MICROS: u64 = 20_000;
 
 /// The most stderr bytes a failed process's report keeps (CD-9).
 const STDERR_TAIL: usize = 4096;
+
+/// How long one process may run before it is killed and the replay fails.
+pub const PROCESS_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How often a running process is polled for its exit.
+const POLL: Duration = Duration::from_millis(5);
 
 /// What happens in the machinery run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,10 +359,12 @@ pub struct Divergence {
 
 impl fmt::Display for Divergence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let show = |line: Option<&str>| line.unwrap_or("<end of trace>").to_owned();
+        let show = |line: Option<&str>| {
+            line.map_or_else(|| "<end of trace>".to_owned(), |line| format!("{line:?}"))
+        };
         write!(
             f,
-            "seed {}: process {} differs from process 0 at line {} (after `{}`): `{}` vs `{}`; \
+            "seed {}: process {} differs from process 0 at line {} (after `{}`): {} vs {}; \
              {} vs {} events; traces kept: {} and {}",
             self.seed.get(),
             self.process,
@@ -371,6 +389,11 @@ pub enum ReplayError {
         seeds: usize,
         /// Processes asked for.
         processes: u32,
+    },
+    /// A seed is listed twice; its processes would share one trace file.
+    RepeatedSeed {
+        /// The seed.
+        seed: MasterSeed,
     },
     /// A trace directory, or a trace left by an earlier replay, could not be prepared.
     Prepare {
@@ -399,12 +422,39 @@ pub enum ReplayError {
         /// The tail of its stderr.
         stderr: String,
     },
+    /// A process was still running at its timeout, and was killed.
+    TimedOut {
+        /// Its seed.
+        seed: MasterSeed,
+        /// Its number.
+        process: u32,
+        /// The timeout.
+        after: Duration,
+    },
     /// A process's trace could not be read, or was never written.
     Unreadable {
         /// The trace file.
         path: PathBuf,
         /// The OS error.
         error: String,
+    },
+    /// A process's trace has no events: there is nothing to compare.
+    NoEvents {
+        /// Its seed.
+        seed: MasterSeed,
+        /// Its number.
+        process: u32,
+        /// The trace file.
+        path: PathBuf,
+    },
+    /// A process's trace is marked incomplete: it is not the run's full evidence.
+    Incomplete {
+        /// Its seed.
+        seed: MasterSeed,
+        /// Its number.
+        process: u32,
+        /// The trace file.
+        path: PathBuf,
     },
 }
 
@@ -415,6 +465,9 @@ impl fmt::Display for ReplayError {
                 f,
                 "a replay needs at least one seed and two processes, not {seeds} and {processes}"
             ),
+            Self::RepeatedSeed { seed } => {
+                write!(f, "seed {} is listed twice in one replay", seed.get())
+            }
             Self::Prepare { path, error } => write!(f, "prepare {}: {error}", path.display()),
             Self::Spawn {
                 seed,
@@ -435,9 +488,38 @@ impl fmt::Display for ReplayError {
                 "process {process} for seed {} failed ({status}): {stderr}",
                 seed.get()
             ),
+            Self::TimedOut {
+                seed,
+                process,
+                after,
+            } => write!(
+                f,
+                "process {process} for seed {} was still running after {after:?}, and was killed",
+                seed.get()
+            ),
             Self::Unreadable { path, error } => {
                 write!(f, "read trace {}: {error}", path.display())
             }
+            Self::NoEvents {
+                seed,
+                process,
+                path,
+            } => write!(
+                f,
+                "process {process}'s trace for seed {} has no events ({})",
+                seed.get(),
+                path.display()
+            ),
+            Self::Incomplete {
+                seed,
+                process,
+                path,
+            } => write!(
+                f,
+                "process {process}'s trace for seed {} is marked incomplete ({})",
+                seed.get(),
+                path.display()
+            ),
         }
     }
 }
@@ -446,18 +528,22 @@ impl Error for ReplayError {}
 
 /// Runs every seed in `processes` fresh processes and compares their traces (K-14).
 ///
-/// The processes run one after another. `launch(seed, path)` builds the command that runs
-/// `seed` and writes its canonical trace to `path`. Traces go under `out` at
-/// [`trace_path`]; a trace left there by an earlier replay is removed first, so a process
-/// that writes nothing is caught.
+/// The processes run one after another, each killed if still running after `timeout`.
+/// `launch(seed, path)` builds the command that runs `seed` and writes its canonical trace
+/// to `path`; its stdin and stdout are null and its stderr goes to a file beside the trace.
+/// Traces go under `out` at [`trace_path`]; a trace left there by an earlier replay is
+/// removed first, so a process that writes nothing is caught.
 ///
 /// # Errors
 ///
-/// [`ReplayError`] if nothing would be compared, or a process fails or leaves no trace.
+/// [`ReplayError`] if nothing would be compared (no seeds, a repeated seed, one process,
+/// a trace without events or marked incomplete), or a process fails, times out or leaves
+/// no trace.
 pub fn fresh_processes(
     seeds: &[MasterSeed],
     processes: u32,
     out: &Path,
+    timeout: Duration,
     launch: impl Fn(MasterSeed, &Path) -> Command,
 ) -> Result<Report, ReplayError> {
     if seeds.is_empty() || processes < 2 {
@@ -465,6 +551,10 @@ pub fn fresh_processes(
             seeds: seeds.len(),
             processes,
         });
+    }
+    let mut distinct = BTreeSet::new();
+    if let Some(&seed) = seeds.iter().find(|seed| !distinct.insert(seed.get())) {
+        return Err(ReplayError::RepeatedSeed { seed });
     }
     for process in 0..processes {
         let dir = out.join(format!("p{process}"));
@@ -476,21 +566,7 @@ pub fn fresh_processes(
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => return Err(prepare(&path, &err)),
             }
-            let output = launch(seed, &path)
-                .output()
-                .map_err(|err| ReplayError::Spawn {
-                    seed,
-                    process,
-                    error: err.to_string(),
-                })?;
-            if !output.status.success() {
-                return Err(ReplayError::Failed {
-                    seed,
-                    process,
-                    status: output.status.to_string(),
-                    stderr: tail(&output.stderr),
-                });
-            }
+            run_process(launch(seed, &path), seed, process, &path, timeout)?;
         }
     }
     let mut bytes = 0;
@@ -498,10 +574,12 @@ pub fn fresh_processes(
     for &seed in seeds {
         let first_path = trace_path(out, seed, 0);
         let first = read(&first_path)?;
+        check_trace(seed, 0, &first_path, &first)?;
         bytes += first.len();
         for process in 1..processes {
             let path = trace_path(out, seed, process);
             let other = read(&path)?;
+            check_trace(seed, process, &path, &other)?;
             bytes += other.len();
             match compare(&first, &other) {
                 Comparison::Identical => {}
@@ -523,6 +601,99 @@ pub fn fresh_processes(
         bytes,
         divergences,
     })
+}
+
+/// Runs one process to its exit within `timeout`: stdin and stdout null, stderr in a
+/// file beside `trace` (`.stderr`), of which a failure report keeps only the tail (CD-9).
+fn run_process(
+    mut command: Command,
+    seed: MasterSeed,
+    process: u32,
+    trace: &Path,
+    timeout: Duration,
+) -> Result<(), ReplayError> {
+    let stderr_path = trace.with_extension("stderr");
+    let stderr = File::create(&stderr_path).map_err(|err| prepare(&stderr_path, &err))?;
+    let spawn_error = |err: io::Error| ReplayError::Spawn {
+        seed,
+        process,
+        error: err.to_string(),
+    };
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .map_err(spawn_error)?;
+    let deadline = Instant::now().checked_add(timeout);
+    let status: ExitStatus = loop {
+        match child.try_wait().map_err(spawn_error)? {
+            Some(status) => break status,
+            None if deadline.is_some_and(|deadline| Instant::now() >= deadline) => {
+                // The kill can only fail if the process has just exited; wait reaps it.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ReplayError::TimedOut {
+                    seed,
+                    process,
+                    after: timeout,
+                });
+            }
+            None => thread::sleep(POLL),
+        }
+    };
+    if status.success() {
+        return Ok(());
+    }
+    Err(ReplayError::Failed {
+        seed,
+        process,
+        status: status.to_string(),
+        stderr: tail_of(&stderr_path),
+    })
+}
+
+/// The last [`STDERR_TAIL`] bytes of the file at `path`, read without loading the rest.
+fn tail_of(path: &Path) -> String {
+    let limit = u64::try_from(STDERR_TAIL).unwrap_or(u64::MAX);
+    let read = || -> io::Result<Vec<u8>> {
+        let mut file = File::open(path)?;
+        let len = file.metadata()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(limit)))?;
+        let mut bytes = Vec::new();
+        file.take(limit).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    read().map_or_else(
+        |err| format!("<stderr unreadable: {err}>"),
+        |bytes| tail(&bytes),
+    )
+}
+
+/// Refuses a trace that would make the comparison vacuous: one marked incomplete, or one
+/// without events (P10).
+fn check_trace(
+    seed: MasterSeed,
+    process: u32,
+    path: &Path,
+    canonical: &str,
+) -> Result<(), ReplayError> {
+    let path = path.to_path_buf();
+    if marks_incomplete(canonical) {
+        return Err(ReplayError::Incomplete {
+            seed,
+            process,
+            path,
+        });
+    }
+    if events(canonical) == 0 {
+        return Err(ReplayError::NoEvents {
+            seed,
+            process,
+            path,
+        });
+    }
+    Ok(())
 }
 
 fn prepare(path: &Path, err: &io::Error) -> ReplayError {
@@ -578,22 +749,49 @@ mod tests {
     const SEED: &str = "KEYVAL_K14_SEED";
     const OUT: &str = "KEYVAL_K14_OUT";
     const COUNTER: &str = "KEYVAL_K14_COUNTER";
-    const FAIL: &str = "KEYVAL_K14_FAIL";
+    const MODE: &str = "KEYVAL_K14_MODE";
 
-    /// If this process is a child, runs its seed, writes the trace and returns `true`.
+    /// If this process is a child, does what its mode says (by default: runs its seed and
+    /// writes the trace) and returns `true`.
     fn child() -> bool {
         let (Some(seed), Some(out)) = (env::var_os(SEED), env::var_os(OUT)) else {
             return false;
         };
-        assert!(
-            env::var_os(FAIL).is_none(),
-            "rule: this child fails on purpose"
-        );
+        match env::var(MODE).unwrap_or_default().as_str() {
+            "fail" => panic!("rule: this child fails on purpose"),
+            "noisy-fail" => {
+                eprint!("{}", "x".repeat(10 * STDERR_TAIL));
+                panic!("rule: this child fails on purpose");
+            }
+            "sleep" => thread::sleep(Duration::from_secs(60)),
+            "empty" => {
+                fs::write(out, "").unwrap();
+                return true;
+            }
+            "incomplete" => {
+                fs::write(out, incomplete_trace()).unwrap();
+                return true;
+            }
+            _ => {}
+        }
         let seed = MasterSeed::new(seed.to_str().unwrap().parse().unwrap());
         let skew = env::var_os(COUNTER).map_or(0, |path| bump(Path::new(&path)));
         let run = run(seed, counter_skew(skew)).unwrap();
         fs::write(out, run.trace.canonical()).unwrap();
         true
+    }
+
+    /// A real run's trace, with events, whose last step then overflows its observation
+    /// bound, so the run is incomplete.
+    fn incomplete_trace() -> String {
+        let mut trace = machinery(MasterSeed::new(3)).unwrap().trace;
+        let verdict = crate::trace::Record::Verdict {
+            checker: Name::new("K-14").unwrap(),
+            passed: true,
+        };
+        while trace.record(&verdict).is_ok() {}
+        assert!(!trace.is_complete(), "test setup: the last step overflowed");
+        trace.canonical()
     }
 
     /// Reads the counter file (absent: 0), stores the next value and returns the one read.
@@ -644,7 +842,7 @@ mod tests {
         // T0: 2 seeds x 2 fresh processes (§10.7).
         let seeds = [MasterSeed::new(0), MasterSeed::new(42)];
         let out = out_dir("identical");
-        let report = fresh_processes(&seeds, 2, &out, launcher(TEST)).unwrap();
+        let report = fresh_processes(&seeds, 2, &out, PROCESS_TIMEOUT, launcher(TEST)).unwrap();
         assert!(
             report.divergences.is_empty(),
             "rule: the same seed and binary give byte-identical traces in fresh processes \
@@ -688,7 +886,7 @@ mod tests {
             Err(err) => assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}"),
         }
         let launch = launcher(TEST);
-        let report = fresh_processes(&[seed], 2, &out, |seed, path| {
+        let report = fresh_processes(&[seed], 2, &out, PROCESS_TIMEOUT, |seed, path| {
             let mut command = launch(seed, path);
             command.env(COUNTER, &counter);
             command
@@ -740,9 +938,10 @@ mod tests {
             &[MasterSeed::new(1)],
             2,
             &out_dir("failing"),
+            PROCESS_TIMEOUT,
             |seed, path| {
                 let mut command = launch(seed, path);
-                command.env(FAIL, "1");
+                command.env(MODE, "noisy-fail");
                 command
             },
         );
@@ -751,8 +950,131 @@ mod tests {
                 result,
                 Err(ReplayError::Failed { process: 0, ref stderr, .. })
                     if stderr.contains("this child fails on purpose")
+                        && stderr.len() <= STDERR_TAIL
             ),
-            "rule: a failed process is an error, never a pass (P10); {result:?}"
+            "rule: a failed process is an error, never a pass (P10), and its report keeps \
+             only the tail of 10x the bound of stderr (CD-9); {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_trace_without_events_fails_the_replay() {
+        const TEST: &str = "replay::tests::a_trace_without_events_fails_the_replay";
+        if child() {
+            return;
+        }
+        let launch = launcher(TEST);
+        let out = out_dir("eventless");
+        let result = fresh_processes(
+            &[MasterSeed::new(1)],
+            2,
+            &out,
+            PROCESS_TIMEOUT,
+            |seed, path| {
+                let mut command = launch(seed, path);
+                command.env(MODE, "empty");
+                command
+            },
+        );
+        assert_eq!(
+            result,
+            Err(ReplayError::NoEvents {
+                seed: MasterSeed::new(1),
+                process: 0,
+                path: trace_path(&out, MasterSeed::new(1), 0),
+            }),
+            "rule: two empty traces are byte-identical, but compare nothing, so they fail (P10)"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_trace_fails_the_replay_even_when_identical() {
+        const TEST: &str =
+            "replay::tests::an_incomplete_trace_fails_the_replay_even_when_identical";
+        if child() {
+            return;
+        }
+        let launch = launcher(TEST);
+        let out = out_dir("incomplete");
+        let result = fresh_processes(
+            &[MasterSeed::new(1)],
+            2,
+            &out,
+            PROCESS_TIMEOUT,
+            |seed, path| {
+                let mut command = launch(seed, path);
+                command.env(MODE, "incomplete");
+                command
+            },
+        );
+        assert_eq!(
+            result,
+            Err(ReplayError::Incomplete {
+                seed: MasterSeed::new(1),
+                process: 0,
+                path: trace_path(&out, MasterSeed::new(1), 0),
+            }),
+            "rule: identical incomplete traces are not replay identity (P10)"
+        );
+        let written = fs::read_to_string(trace_path(&out, MasterSeed::new(1), 1)).unwrap();
+        assert!(
+            events(&written) > 0 && written == incomplete_trace(),
+            "test setup: both processes wrote the same incomplete trace, with events"
+        );
+    }
+
+    #[test]
+    fn a_process_past_its_timeout_is_killed_and_fails_the_replay() {
+        const TEST: &str =
+            "replay::tests::a_process_past_its_timeout_is_killed_and_fails_the_replay";
+        if child() {
+            return;
+        }
+        let launch = launcher(TEST);
+        let timeout = Duration::from_millis(200);
+        let started = Instant::now();
+        let result = fresh_processes(
+            &[MasterSeed::new(1)],
+            2,
+            &out_dir("timeout"),
+            timeout,
+            |seed, path| {
+                let mut command = launch(seed, path);
+                command.env(MODE, "sleep");
+                command
+            },
+        );
+        assert_eq!(
+            result,
+            Err(ReplayError::TimedOut {
+                seed: MasterSeed::new(1),
+                process: 0,
+                after: timeout,
+            }),
+            "rule: a process that never finishes fails the replay; it is never awaited forever"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "rule: the sleeping child was killed, not awaited; elapsed={:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn repeated_seeds_are_refused_before_anything_runs() {
+        let never = |_: MasterSeed, _: &Path| -> Command { panic!("rule: nothing is launched") };
+        let seed = MasterSeed::new(4);
+        assert_eq!(
+            fresh_processes(
+                &[seed, MasterSeed::new(5), seed],
+                2,
+                &out_dir("repeated"),
+                PROCESS_TIMEOUT,
+                never
+            ),
+            Err(ReplayError::RepeatedSeed { seed }),
+            "rule: a repeated seed's processes would share one trace file and be counted \
+             twice"
         );
     }
 
@@ -770,6 +1092,7 @@ mod tests {
             &[MasterSeed::new(1)],
             2,
             &out,
+            PROCESS_TIMEOUT,
             launcher("replay::tests::no_such_test"),
         );
         assert_eq!(
@@ -786,14 +1109,20 @@ mod tests {
     fn a_replay_needs_a_seed_and_two_processes() {
         let never = |_: MasterSeed, _: &Path| -> Command { panic!("rule: nothing is launched") };
         assert_eq!(
-            fresh_processes(&[], 2, &out_dir("vacuous"), never),
+            fresh_processes(&[], 2, &out_dir("vacuous"), PROCESS_TIMEOUT, never),
             Err(ReplayError::Vacuous {
                 seeds: 0,
                 processes: 2
             })
         );
         assert_eq!(
-            fresh_processes(&[MasterSeed::new(1)], 1, &out_dir("vacuous"), never),
+            fresh_processes(
+                &[MasterSeed::new(1)],
+                1,
+                &out_dir("vacuous"),
+                PROCESS_TIMEOUT,
+                never
+            ),
             Err(ReplayError::Vacuous {
                 seeds: 1,
                 processes: 1
@@ -854,17 +1183,17 @@ mod tests {
 
     #[test]
     fn the_first_divergence_names_the_event_step_before_it() {
-        let trace = "R - packet\nE 0 10 - n1@0 timeout\nR 0 role\nE 1 10 0 n2@0 timeout\n";
+        let trace = "R - packet\nE 0 10 - n1/0 timeout\nR 0 role\nE 1 10 0 n2/0 timeout\n";
         assert_eq!(step_before(trace, 1), None, "rule: before the first event");
         assert_eq!(step_before(trace, 2), None);
         assert_eq!(
             step_before(trace, 3).as_deref(),
-            Some("E 0 10 - n1@0 timeout"),
+            Some("E 0 10 - n1/0 timeout"),
             "rule: a differing record names the step it belongs to"
         );
         assert_eq!(
             step_before(trace, 4).as_deref(),
-            Some("E 0 10 - n1@0 timeout"),
+            Some("E 0 10 - n1/0 timeout"),
             "rule: a differing event names the step before it"
         );
         assert_eq!(events(trace), 2);

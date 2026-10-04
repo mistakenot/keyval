@@ -27,13 +27,14 @@ pub mod trace;
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};
 pub use replay::{
-    Divergence, MachineryRun, ReplayError, Report, RunError, fresh_processes, machinery, trace_path,
+    Divergence, MachineryRun, PROCESS_TIMEOUT, ReplayError, Report, RunError, fresh_processes,
+    machinery, trace_path,
 };
 pub use scheduler::{
     Event, EventBudget, EventSeq, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step,
     VirtualTime,
 };
 pub use trace::{
-    Comparison, DiskOp, Endpoint, Name, ObservationBound, Overflow, PacketFate, Record, Trace,
-    TraceHash, compare,
+    Comparison, DiskOp, Endpoint, INCOMPLETE_MARKER, Name, ObservationBound, Overflow, PacketFate,
+    Record, Trace, TraceHash, compare, marks_incomplete,
 };
