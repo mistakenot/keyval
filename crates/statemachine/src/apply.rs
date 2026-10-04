@@ -9,6 +9,7 @@ use types::{
 };
 
 use crate::codec::{self, Command};
+use crate::history::{CommandDigest, History, Record};
 
 /// A key's stored value and the version that set it (§7.5, DM-3).
 ///
@@ -45,13 +46,31 @@ pub enum Applied {
         /// What it decided, at its index.
         result: TerminalResult,
     },
+    /// The request ID already executed this same command: its stored result, returned
+    /// unchanged; nothing changed (step 3, DM-5).
+    Replayed {
+        /// The command's request ID.
+        request_id: RequestId,
+        /// The result recorded at the first execution.
+        result: TerminalResult,
+    },
+    /// The request ID already executed a different command: nothing changed, and the
+    /// original result stays authoritative. Waiters for this entry get
+    /// `request_id_conflict` (step 3, F-6).
+    Conflict {
+        /// The command's request ID.
+        request_id: RequestId,
+        /// The index of the request's first execution.
+        original_index: EntryIndex,
+    },
 }
 
-/// The replicated state machine (§7.5): the ordered map `key → (value, version)` and the
-/// applied index, changed only by [`StateMachine::apply`].
+/// The replicated state machine (§7.5): the ordered map `key → (value, version)`, the
+/// request history and the applied index, changed only by [`StateMachine::apply`].
 ///
 /// Invariants: entries are applied once each, in index order, from index 1, so the
-/// applied index is the last one's; every stored version is at most the applied index.
+/// applied index is the last one's; every stored version is at most the applied index;
+/// a request ID is recorded once, at its first execution, and never changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateMachine {
     /// The node this state belongs to, named in invariant messages (CD-7).
@@ -60,6 +79,8 @@ pub struct StateMachine {
     limits: KeyValueLimits,
     /// The live keys, in byte-wise key order (DM-4).
     map: BTreeMap<Key, Stored>,
+    /// Every request ID's first execution, kept forever (DM-5).
+    history: History,
     /// The index of the last applied entry; 0 before the first.
     applied: LogIndex,
 }
@@ -73,6 +94,7 @@ impl StateMachine {
             node,
             limits,
             map: BTreeMap::new(),
+            history: History::new(),
             applied: LogIndex::ZERO,
         }
     }
@@ -94,6 +116,12 @@ impl StateMachine {
         self.map.iter()
     }
 
+    /// The request history (DM-5): what each request ID's first execution decided.
+    #[must_use]
+    pub const fn history(&self) -> &History {
+        &self.history
+    }
+
     /// The number of live keys.
     #[must_use]
     pub fn live_keys(&self) -> usize {
@@ -112,7 +140,8 @@ impl StateMachine {
     /// - `SM-COMMAND-DECODES`: a committed command does not decode, although the leader
     ///   validated it before proposing it (step 2);
     /// - `SM-COMMAND-ADMITTED`: a committed DELETE or compare-and-swap, which no node
-    ///   admits before W27 implements their apply.
+    ///   admits before W27 implements their apply;
+    /// - `SM-HISTORY-ONCE`: a first execution of a request ID the history already holds.
     pub fn apply(&mut self, entry: &Entry) -> Applied {
         let index = entry.index;
         invariant!(
@@ -131,7 +160,8 @@ impl StateMachine {
         applied
     }
 
-    /// Steps 2 and 4: decodes a committed command and executes it.
+    /// Steps 2 to 4: decodes a committed command, then replays it, refuses it as a
+    /// conflict, or executes it for the first time.
     fn execute(&mut self, index: EntryIndex, bytes: &[u8]) -> Applied {
         let command = codec::decode(bytes, self.limits);
         invariant!(
@@ -144,14 +174,33 @@ impl StateMachine {
         );
         // The fallback is unreachable once the invariant above holds.
         command.map_or(Applied::Empty, |command| {
-            self.first_execution(index, command)
+            // The entry's bytes are canonical (decode accepts nothing else), so this is the
+            // command's digest.
+            let digest = CommandDigest::of_canonical(bytes);
+            let seen = self.history.get(&command.request_id).copied();
+            match seen {
+                Some(record) if record.digest() == digest => Applied::Replayed {
+                    request_id: command.request_id,
+                    result: record.result(),
+                },
+                Some(record) => Applied::Conflict {
+                    request_id: command.request_id,
+                    original_index: record.first_index(),
+                },
+                None => self.first_execution(index, digest, command),
+            }
         })
     }
 
     /// Step 4: a command's first execution, which sets a PUT's key with
-    /// `version = index`. The request history (W09.2) routes replays and conflicts away
-    /// from here, and the live-state quota (W09.3) refuses over-quota writes.
-    fn first_execution(&mut self, index: EntryIndex, command: Command) -> Applied {
+    /// `version = index` and records the result in the history, whatever it is. The
+    /// live-state quota (W09.3) refuses over-quota writes.
+    fn first_execution(
+        &mut self,
+        index: EntryIndex,
+        digest: CommandDigest,
+        command: Command,
+    ) -> Applied {
         let Command {
             request_id,
             mutation,
@@ -171,10 +220,18 @@ impl StateMachine {
         put.map_or(Applied::Empty, |(key, value)| {
             let version = index.version();
             self.map.insert(key, Stored { value, version });
-            Applied::Executed {
-                request_id,
-                result: TerminalResult::executed_at(index, Decision::Set),
-            }
+            let result = TerminalResult::executed_at(index, Decision::Set);
+            let earlier = self
+                .history
+                .insert(request_id, Record::new(index, digest, result));
+            invariant!(
+                earlier.is_none(),
+                "SM-HISTORY-ONCE",
+                "node {}: entry {index} executed request {request_id} again; its first \
+                 execution was {earlier:?}",
+                self.node
+            );
+            Applied::Executed { request_id, result }
         })
     }
 }

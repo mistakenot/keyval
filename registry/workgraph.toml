@@ -130,7 +130,7 @@ deps = ["W04", "W08"]
 reqs = ["DM-3", "DM-5", "DM-6", "F-1", "F-2", "F-6", "C-6", "CD-7"]
 area = ["statemachine"]
 milestone = "m1"
-accept = ["./dev check COMMAND-CODEC", "./dev check APPLY-PUT"]
+accept = ["./dev check COMMAND-CODEC", "./dev check APPLY-PUT", "./dev check REQUEST-HISTORY"]
 bead = "br-w09-state-machine-core-oxe"
 
 [[item]]

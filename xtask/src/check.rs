@@ -831,6 +831,23 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 9,
     },
+    CheckDef {
+        id: "REQUEST-HISTORY",
+        summary: "the request history records each request ID's first execution (index, SHA-256 \
+                  digest of the canonical command, terminal result) forever; the same command \
+                  again replays the stored result and another command under the ID is a \
+                  conflict, neither changing state; replay recomputes both exactly (§7.5 step 3, \
+                  DM-5, C-6)",
+        kind: Kind::TestGroup,
+        covers: &["DM-5", "F-6", "C-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "statemachine",
+            filters: &["history::tests::"],
+        },
+        min_cases: 5,
+    },
 ];
 
 /// Outcome of one requested check.
