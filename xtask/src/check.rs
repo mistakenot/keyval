@@ -1945,6 +1945,41 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 9,
     },
+    CheckDef {
+        id: "CLIENT-RETRY",
+        summary: "The client retry policy shared by the CLI and the simulated clients (§10.3, \
+                  §12.2 W36.1): one logical operation keeps its request ID and command across \
+                  every attempt, follows not_leader at once, backs off with bounded jitter, \
+                  resends after unknown_outcome or silence or asks the status lookup (a status \
+                  of unknown means resend, P8), and stops at the attempt, node and deadline \
+                  bounds of §7.11 with an unresolved outcome, never a new ID",
+        kind: Kind::TestGroup,
+        covers: &["F-6", "A-5", "O-4", "P8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "types",
+            filters: &["retry::tests::"],
+        },
+        min_cases: 10,
+    },
+    CheckDef {
+        id: "SIM-CLIENTS",
+        summary: "The seeded simulated clients (§10.3, §12.2 W36.1): a seed generates the same \
+                  plan of 1 to 8 clients with hot-key contention and the edge-case key and value \
+                  corpus, and driving it against the simulated five-node cluster gives the same \
+                  sends and outcomes every time, every write carrying a unique request ID and \
+                  every retry the same ID and command",
+        kind: Kind::TestGroup,
+        covers: &["F-6", "A-5", "P4"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["clients_tests::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.

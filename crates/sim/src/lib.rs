@@ -27,6 +27,9 @@
 //!   its restart and catch-up, an audit of every mirror; its report labels it a simulated
 //!   slice (P6).
 
+pub mod clients;
+#[cfg(test)]
+mod clients_tests;
 pub mod cluster;
 #[cfg(test)]
 mod cluster_tests;
@@ -45,6 +48,9 @@ pub mod slice;
 mod slice_tests;
 pub mod trace;
 
+pub use clients::{
+    ClientPlan, Clients, End, Intent, Outcome, POLL_MS, Plan, Planned, Profile, SentAttempt,
+};
 pub use cluster::{Answer, Cluster, ClusterError, Happening};
 pub use disk::{Crash, DiskHandle, Fill, SimDisk};
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};

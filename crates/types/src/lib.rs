@@ -51,6 +51,9 @@
 //!   and [`BoundedQueue`] and [`BoundedMap`] enforce them with typed refusals.
 //!   [`Config::exposure_warnings`] reports each non-loopback address (O-9).
 //! - **SHA-256** ([`Sha256`], D-75): in-crate, for the fingerprint and command digests.
+//! - **Client retry policy** ([`Retry`], §10.3, §8.7, §7.11): what a client does after each
+//!   answer to one logical operation, the same for the CLI and the simulated clients
+//!   (W36.1).
 //!
 //! This crate also owns [`invariant!`], the project's CD-7 assertion macro and the only
 //! sanctioned panic in first-party production code (CD-8).
@@ -78,6 +81,7 @@ mod log_index;
 mod mutation;
 mod outcome;
 mod range;
+mod retry;
 mod sha256;
 mod telemetry;
 
@@ -113,5 +117,8 @@ pub use log_index::{EntryIndex, LogIndex, Term, Version};
 pub use mutation::{ExpectedVersion, Mutation};
 pub use outcome::{Attempt, AttemptOutcome, Decision, LiveStateLimit, TerminalResult};
 pub use range::{MAX_SAFE_INTEGER, OutOfRange, Quantity};
+pub use retry::{
+    Exhausted, FIRST_BACKOFF_MS, Heard, MAX_BACKOFF_MS, Next, OpKind, Retry, RetryBounds,
+};
 pub use sha256::Sha256;
 pub use telemetry::{DroppedInput, LogEvent, LogLevel, Observation};

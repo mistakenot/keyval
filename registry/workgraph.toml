@@ -417,7 +417,7 @@ deps = ["W10", "W17"]
 reqs = ["§10.3"]
 area = ["sim"]
 milestone = "m4"
-accept = []
+accept = ["./dev check CLIENT-RETRY", "./dev check SIM-CLIENTS"]
 bead = "br-w36-workload-generator-4i9"
 
 [[item]]
