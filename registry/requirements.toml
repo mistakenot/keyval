@@ -315,7 +315,7 @@ title = "./dev status and ./dev doctor"
 [[requirement]]
 id = "O-9"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Loopback default addresses; a warning on non-loopback"
 
 # §6.8 Testability
