@@ -26,6 +26,7 @@ use types::{AttemptId, ClientOp, Config, Limit, NodeId, Response as CoreResponse
 
 use crate::api::{self, Attempt, Routed, View};
 use crate::http::{self, ReadError, Response};
+use crate::peer::Peers;
 use crate::runtime::{Busy, Node, Outputs};
 
 /// How long an idle keep-alive connection stays open.
@@ -50,10 +51,21 @@ impl Responders {
         Arc::new(Self::default())
     }
 
-    /// The runtime's outputs: each `Respond` completes its waiting attempt. Peer messages
-    /// have no transport yet (W21) and are dropped.
+    /// The runtime's outputs for a node without peers: each `Respond` completes its waiting
+    /// attempt, and a peer message, which a single voter never sends, is dropped.
     #[must_use]
     pub fn outputs(self: &Arc<Self>) -> Outputs {
+        self.outputs_to(|_, _| {})
+    }
+
+    /// The runtime's outputs: each `Respond` completes its waiting attempt, and each sealed
+    /// peer envelope goes to `send` (the peer transport's queues, W21.1).
+    #[must_use]
+    pub fn outputs_sending(self: &Arc<Self>, peers: Arc<Peers>) -> Outputs {
+        self.outputs_to(move |to, envelope| peers.send(to, envelope))
+    }
+
+    fn outputs_to(self: &Arc<Self>, send: impl FnMut(NodeId, Vec<u8>) + Send + 'static) -> Outputs {
         let responders = Arc::clone(self);
         Outputs {
             respond: Box::new(move |attempt, response| {
@@ -67,7 +79,7 @@ impl Responders {
                     let _ = answer.try_send(response);
                 }
             }),
-            send: Box::new(|_, _| {}),
+            send: Box::new(send),
         }
     }
 

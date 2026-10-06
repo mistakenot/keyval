@@ -43,8 +43,17 @@ pub fn scratch(name: &str) -> PathBuf {
 
 /// A one-voter config (node 1) in `dir`, whose relative data directory `node-1` resolves
 /// against `dir`, with `edit` applied to its text. Returns the file's path and the config.
+///
+/// The peer address is a fresh free port unless `edit` sets it: a node binds its peer
+/// address now (W21.1), so tests that start servers in parallel must not share the
+/// fixture's.
 pub fn one_voter(dir: &Path, edit: impl Fn(String) -> String) -> (PathBuf, Config) {
-    let text = edit(ONE_VOTER.replace("nodes/one-voter/1", "node-1"));
+    let peer = format!("127.0.0.1:{}", free_port());
+    let text = edit(
+        ONE_VOTER
+            .replace("nodes/one-voter/1", "node-1")
+            .replace("127.0.0.1:8101", &peer),
+    );
     write_config(dir, "one-voter.toml", &text)
 }
 

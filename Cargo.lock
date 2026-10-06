@@ -863,6 +863,7 @@ dependencies = [
  "journal",
  "jsonschema",
  "node",
+ "raft_adapter",
  "serde",
  "serde_json",
  "types",

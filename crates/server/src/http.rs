@@ -119,6 +119,20 @@ pub fn read_request(
     reader: &mut impl BufRead,
     continue_to: &mut impl Write,
 ) -> Result<Request, ReadError> {
+    read_request_limited(reader, continue_to, MAX_BODY_BYTES)
+}
+
+/// [`read_request`] with a body limit of `max_body` bytes instead of [`MAX_BODY_BYTES`]: the
+/// peer channel carries envelopes up to a journal frame, which exceed the client limit.
+///
+/// # Errors
+///
+/// [`ReadError`] when the connection closed, failed, or carried a malformed request.
+pub fn read_request_limited(
+    reader: &mut impl BufRead,
+    continue_to: &mut impl Write,
+    max_body: usize,
+) -> Result<Request, ReadError> {
     let head = read_head(reader)?;
     let text = String::from_utf8(head)
         .map_err(|_| ReadError::Malformed("the head is not UTF-8".to_owned()))?;
@@ -193,7 +207,7 @@ pub fn read_request(
             ));
         }
     };
-    if length > MAX_BODY_BYTES {
+    if length > max_body {
         request.body = Body::TooLarge;
         request.close = true;
         return Ok(request);

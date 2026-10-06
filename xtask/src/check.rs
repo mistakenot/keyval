@@ -1993,6 +1993,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 5,
     },
+    CheckDef {
+        id: "PEER-TRANSPORT",
+        summary: "The HTTP peer transport (§8.2, §7.11, W21.1): every node serves POST /raft on its peer address, taking only well-formed posts that name a sender (400 without, 404 and 405 for other paths and methods, 413 past the envelope limit) and handing the body to the core, whose W13 codec alone judges the envelope; each peer has one bounded send queue (64 messages, 8 MiB) that drops and counts what does not fit; three real processes elect a leader and replicate a write through it. Real processes on loopback: test evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["F-7", "A-1", "A-3", "P3"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &["peer::tests::", "transport_tests::"],
+        },
+        min_cases: 7,
+    },
 ];
 
 /// Outcome of one requested check.

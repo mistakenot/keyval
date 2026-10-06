@@ -2,7 +2,7 @@
 //! loads the configuration and prints; [`server::init`] and [`server::run`] do the work,
 //! and [`server::output`] shapes what is printed.
 
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::json;
 use server::logs::base;
 use server::output::{Code, Command as Which, ErrorReport, InitReport};
+use server::peer::{Peers, serve_peers};
 use server::runtime::{Options, start};
 use server::serve::{Responders, serve};
 use types::{Config, InstanceId, LogLevel, NodeId};
@@ -125,6 +126,22 @@ fn init(config: &Path, node: u64, instance: &str, json: bool) -> ExitCode {
     }
 }
 
+/// Listens on `address`, or reports why not as the `role` address's refusal.
+fn bind(
+    address: SocketAddr,
+    role: &str,
+    json: bool,
+    data_dir: &Path,
+) -> Result<TcpListener, ExitCode> {
+    TcpListener::bind(address).map_err(|err| {
+        let message = format!("cannot listen on the {role} address {address}: {err}");
+        fail(
+            json,
+            &ErrorReport::new(Which::Run, Code::Config, message, Some(data_dir)),
+        )
+    })
+}
+
 fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitCode {
     let setup = load(config).and_then(|config| Ok((config, node_id(node)?)));
     let (config, node) = match setup {
@@ -139,7 +156,10 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
     };
     let data_dir = prepared.data_dir.clone();
     let log_file = log_file.unwrap_or_else(|| data_dir.join("node.log"));
-    let Some(address) = config.node(node).map(types::NodeConfig::client_address) else {
+    let Some((address, peer_address)) = config
+        .node(node)
+        .map(|node_config| (node_config.client_address(), node_config.peer_address()))
+    else {
         return fail(
             json,
             &ErrorReport::new(
@@ -150,21 +170,25 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
             ),
         );
     };
-    let listener = match TcpListener::bind(address) {
-        Ok(listener) => listener,
-        Err(err) => {
-            let message = format!("cannot listen on the client address {address}: {err}");
-            return fail(
-                json,
-                &ErrorReport::new(Which::Run, Code::Config, message, Some(&data_dir)),
-            );
-        }
+    let (listener, peer_listener) = match (
+        bind(address, "client", json, &data_dir),
+        bind(peer_address, "peer", json, &data_dir),
+    ) {
+        (Ok(client), Ok(peer)) => (client, peer),
+        (Err(code), _) | (_, Err(code)) => return code,
     };
     let responders = Responders::new();
+    let peers = Peers::new(&config, node);
     let options = Options {
         log_file: log_file.clone(),
     };
-    let running = match start(prepared, &config, node, responders.outputs(), &options) {
+    let running = match start(
+        prepared,
+        &config,
+        node,
+        responders.outputs_sending(Arc::clone(&peers)),
+        &options,
+    ) {
         Ok(running) => running,
         Err(refusal) => return fail(json, &ErrorReport::start(&refusal, &data_dir)),
     };
@@ -175,6 +199,18 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
         running.log(record);
     }
     let running = Arc::new(running);
+    let started = serve_peers(peer_listener, Arc::clone(&running))
+        .and_then(|serving| peers.spawn(&running).map(|_| serving));
+    let peer_serving = match started {
+        Ok(serving) => serving,
+        Err(err) => {
+            let message = format!("cannot start the peer transport: {err}");
+            return fail(
+                json,
+                &ErrorReport::new(Which::Run, Code::Storage, message, Some(&data_dir)),
+            );
+        }
+    };
     let serving = match serve(listener, Arc::clone(&running), responders, &config) {
         Ok(serving) => serving,
         Err(err) => {
@@ -186,8 +222,9 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
         }
     };
     eprintln!(
-        "keyval-server: node {node} serving http://{} (data {}, log {})",
+        "keyval-server: node {node} serving http://{} and peers on {} (data {}, log {})",
         serving.address(),
+        peer_serving.address(),
         data_dir.display(),
         log_file.display()
     );

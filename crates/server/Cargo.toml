@@ -15,6 +15,7 @@ types = { workspace = true }
 journal = { workspace = true }
 fs_storage = { workspace = true }
 node = { workspace = true }
+raft_adapter = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

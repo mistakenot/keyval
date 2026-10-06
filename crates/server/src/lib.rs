@@ -29,6 +29,7 @@ pub mod init;
 pub mod io;
 pub mod logs;
 pub mod output;
+pub mod peer;
 pub mod query;
 pub mod run;
 pub mod runtime;
