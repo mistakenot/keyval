@@ -26,6 +26,8 @@
 //!   the `keyval-sim` binary: elect, PUT and GET, a follower crash with unsynced bytes and
 //!   its restart and catch-up, an audit of every mirror; its report labels it a simulated
 //!   slice (P6).
+//! - [`observe`]: the observation recording (W36.2): a run's client-side `keyval.observation/v1`
+//!   document built from the cluster's attempt log and the clients' sends and outcomes.
 
 pub mod clients;
 #[cfg(test)]
@@ -41,6 +43,9 @@ pub mod net;
 mod net_profile_tests;
 #[cfg(test)]
 mod net_tests;
+pub mod observe;
+#[cfg(test)]
+mod observe_tests;
 pub mod replay;
 pub mod scheduler;
 pub mod slice;
@@ -51,7 +56,7 @@ pub mod trace;
 pub use clients::{
     ClientPlan, Clients, End, Intent, Outcome, POLL_MS, Plan, Planned, Profile, SentAttempt,
 };
-pub use cluster::{Answer, Cluster, ClusterError, Happening};
+pub use cluster::{Answer, Cluster, ClusterError, Happening, Observed};
 pub use disk::{Crash, DiskHandle, Fill, SimDisk};
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};

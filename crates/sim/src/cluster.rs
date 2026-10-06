@@ -96,6 +96,11 @@ const DISK_LATENCY_US: (u64, u64) = (50, 500);
 /// A node's first tick follows its start by this long.
 const FIRST_TICK_US: u64 = 1;
 
+/// Observation entries kept per scheduled or dispatched event (CD-9): an event invokes at
+/// most one attempt, and generates or delivers the responses it carries, so a run's
+/// observation log stays within a few entries per event, and a fuller one fails the run.
+const OBSERVED_PER_EVENT: usize = 4;
+
 /// What happens at a scheduler event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Happening {
@@ -327,6 +332,61 @@ pub struct Answer {
     pub at: VirtualTime,
 }
 
+/// What the cluster saw of one client attempt, for the observation recording (W36.2).
+///
+/// It is the invocation at a node incarnation, the response that incarnation generated, and
+/// each copy of that response reaching its client or being lost. It records what happened on
+/// the simulated paths and claims nothing about the system (T-12).
+///
+/// Invariants: `seq` is the scheduler's dispatched-event count when it was recorded, and
+/// `at` the virtual time then, so both never decrease along [`Cluster::observed`]; an
+/// attempt is invoked once, before any other entry names it; `generation` is 1 for an
+/// incarnation's first response and strictly increases per incarnation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Observed {
+    /// The attempt reached `target`'s current incarnation (running or not).
+    Invoked {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The client.
+        client: ClientId,
+        /// The attempt.
+        attempt: AttemptId,
+        /// The node incarnation it was sent to.
+        target: NodeIncarnation,
+        /// What it asked.
+        op: ClientOp,
+    },
+    /// `from` generated the response to `attempt`.
+    Generated {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The attempt.
+        attempt: AttemptId,
+        /// The incarnation that answered.
+        from: NodeIncarnation,
+        /// Its response-generation order, from 1.
+        generation: u64,
+        /// The response.
+        response: Response,
+    },
+    /// One copy of the response reached its client, or was lost on the way.
+    Delivered {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The attempt.
+        attempt: AttemptId,
+        /// Whether the copy arrived.
+        delivered: bool,
+    },
+}
+
 /// A client attempt the cluster knows of: who made it, the request ID if it is an attempt
 /// of a write, and whether a response to it has reached the client.
 #[derive(Clone, Copy, Debug)]
@@ -470,6 +530,8 @@ struct Running {
     walked: LogIndex,
     /// The request IDs this incarnation has applied, each at its first index.
     seen: BoundedMap<RequestId, LogIndex>,
+    /// The responses this incarnation has generated (the observation's generation order).
+    responses: u64,
 }
 
 /// A node: its disk, its incarnation, and the core if it is running.
@@ -540,6 +602,7 @@ pub struct Cluster {
     asked: BoundedMap<AttemptId, Asked>,
     replies: BoundedMap<PacketId, Reply>,
     answers: BoundedQueue<Answer>,
+    observed: BoundedQueue<Observed>,
     executed: BoundedMap<RequestId, LogIndex>,
     crashes: BoundedQueue<(NodeId, Incarnation, Crash)>,
     next_attempt: u64,
@@ -593,6 +656,7 @@ impl Cluster {
             asked: BoundedMap::new(bound),
             replies: BoundedMap::new(bound),
             answers: BoundedQueue::with_items(bound),
+            observed: BoundedQueue::with_items(bound.saturating_mul(OBSERVED_PER_EVENT)),
             executed: BoundedMap::new(bound),
             crashes: BoundedQueue::with_items(bound),
             next_attempt: 1,
@@ -677,6 +741,7 @@ impl Cluster {
             mirror,
             walked: LogIndex::ZERO,
             seen: BoundedMap::new(bound),
+            responses: 0,
         });
         self.execute(node, effects)?;
         let at = self.after(FIRST_TICK_US);
@@ -732,6 +797,11 @@ impl Cluster {
             .running
             .as_ref()
             .map(|running| &running.ctl)
+    }
+
+    /// What the cluster saw of every client attempt so far, in order (W36.2).
+    pub fn observed(&self) -> impl Iterator<Item = &Observed> {
+        self.observed.iter()
     }
 
     /// `node`'s current incarnation.
@@ -1070,7 +1140,14 @@ impl Cluster {
                 (Endpoint::Client(_), _) => self.record(&record),
             },
             Arrival::Dropped(record) => {
-                self.replies.remove(&packet);
+                if let Some(reply) = self.replies.remove(&packet) {
+                    self.log_observed(|seq, at| Observed::Delivered {
+                        seq,
+                        at,
+                        attempt: reply.attempt,
+                        delivered: false,
+                    })?;
+                }
                 self.record(&record)
             }
             Arrival::Unknown => Ok(()),
@@ -1096,6 +1173,12 @@ impl Cluster {
                 result: response_bytes(&reply.response),
             })?;
         }
+        self.log_observed(|seq, at| Observed::Delivered {
+            seq,
+            at,
+            attempt: reply.attempt,
+            delivered: true,
+        })?;
         let answer = Answer {
             client: reply.client,
             attempt: reply.attempt,
@@ -1125,6 +1208,20 @@ impl Cluster {
             request,
             op: op_bytes(&op),
         })?;
+        if let Some(slot) = self.nodes.get(&node) {
+            let target = NodeIncarnation {
+                node,
+                incarnation: slot.incarnation,
+            };
+            self.log_observed(|seq, at| Observed::Invoked {
+                seq,
+                at,
+                client,
+                attempt,
+                target,
+                op: op.clone(),
+            })?;
+        }
         if self.running_incarnation(node).is_none() {
             self.trace.diagnostic(&format!(
                 "request {} of {client} lost: node {node} is down",
@@ -1195,6 +1292,24 @@ impl Cluster {
                         .map(|asked| asked.client)
                         .ok_or(ClusterError::UnknownAttempt { node, attempt })?;
                     let bytes = response_bytes(&response);
+                    let generated = self.nodes.get_mut(&node).and_then(|slot| {
+                        let incarnation = slot.incarnation;
+                        slot.running.as_mut().map(|running| {
+                            running.responses += 1;
+                            (incarnation, running.responses)
+                        })
+                    });
+                    if let Some((incarnation, generation)) = generated {
+                        let from = NodeIncarnation { node, incarnation };
+                        self.log_observed(|seq, at| Observed::Generated {
+                            seq,
+                            at,
+                            attempt,
+                            from,
+                            generation,
+                            response: response.clone(),
+                        })?;
+                    }
                     let reply = Reply {
                         client,
                         attempt,
@@ -1536,6 +1651,17 @@ impl Cluster {
 
     fn record(&mut self, record: &Record) -> Result<(), ClusterError> {
         self.trace.record(record).map_err(ClusterError::Trace)
+    }
+
+    /// Appends the observation `make` builds from the event count and the time now.
+    fn log_observed(
+        &mut self,
+        make: impl FnOnce(u64, VirtualTime) -> Observed,
+    ) -> Result<(), ClusterError> {
+        let entry = make(self.scheduler.dispatched().get(), self.now());
+        self.observed
+            .push(entry, 0)
+            .map_err(|_| self.full("observations"))
     }
 
     const fn full(&self, what: &'static str) -> ClusterError {

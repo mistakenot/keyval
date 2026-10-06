@@ -31,8 +31,17 @@
 //! time is over. Every choice comes from the clients stream, so a seed decides the whole
 //! workload (P4), and observing the run draws nothing.
 //!
+//! **The misuse stream (§10.3, W36.2).** Opt-in with [`Clients::with_misuse`]: after a
+//! logical write ends with an observed terminal result, a client may reuse its request ID once
+//! with a different command (a PUT or CAS becomes a DELETE, a DELETE becomes a PUT of the
+//! empty value), sent to the node that answered. The system must answer `request_id_conflict`
+//! with the original's index, and never execute it. A misuse attempt is flagged
+//! ([`SentAttempt::misuse`]), is never a logical write (it has no [`Outcome`] and counts in no
+//! operation's sends), and is never retried. With no misuse the stream draws nothing, so
+//! existing seeds keep their workloads.
+//!
 //! Every attempt sent is kept in [`Clients::sends`], and every logical operation's end in
-//! [`Clients::outcomes`], for the observation recording that builds on this (W36.2).
+//! [`Clients::outcomes`], for the observation recording ([`crate::observe`], W36.2).
 
 use std::collections::BTreeMap;
 
@@ -342,6 +351,9 @@ pub struct Outcome {
     pub end: End,
     /// When, in virtual milliseconds.
     pub at_ms: u64,
+    /// The attempt whose answer ended it, if an answer did: the evidence for a write's
+    /// resolution (§10.2). `None` when the retry bounds ran out on silence.
+    pub decided_by: Option<AttemptId>,
 }
 
 /// One attempt a client sent.
@@ -359,6 +371,9 @@ pub struct SentAttempt {
     pub at_ms: u64,
     /// What it asked: the operation itself, or a status lookup for the write.
     pub request: ClientOp,
+    /// Whether it is a misuse attempt: a request ID reused with a different command (§10.3).
+    /// A misuse attempt is never part of a logical write.
+    pub misuse: bool,
 }
 
 /// A logical operation in progress: its planned position, its exact request (fixed when it
@@ -368,6 +383,8 @@ struct Op {
     index: usize,
     request: ClientOp,
     retry: Retry,
+    /// The attempt whose answer the policy is following now.
+    answered: Option<AttemptId>,
 }
 
 impl Op {
@@ -419,7 +436,11 @@ pub struct Clients {
     now_ms: u64,
     sends: Vec<SentAttempt>,
     outcomes: Vec<Outcome>,
+    misuse_ppm: u32,
 }
+
+/// One in a million: the unit of a misuse rate.
+const MILLION: u64 = 1_000_000;
 
 impl Clients {
     /// The clients of `plan` against `config`'s voters, drawing their run-time choices from
@@ -443,7 +464,17 @@ impl Clients {
             now_ms: 0,
             sends: Vec::new(),
             outcomes: Vec::new(),
+            misuse_ppm: 0,
         }
+    }
+
+    /// These clients with the misuse stream on: each write that ends with a terminal result
+    /// is followed by one misuse attempt with probability `ppm` in a million (capped at all
+    /// of them).
+    #[must_use]
+    pub fn with_misuse(mut self, ppm: u32) -> Self {
+        self.misuse_ppm = ppm.min(1_000_000);
+        self
     }
 
     /// The plan.
@@ -558,6 +589,7 @@ impl Clients {
                 index,
                 request,
                 retry,
+                answered: None,
             };
             self.apply(cluster, at, op, next, None)?;
         }
@@ -627,9 +659,13 @@ impl Clients {
         at: usize,
         answer: Option<&Response>,
     ) -> Result<(), ClusterError> {
-        let Some(Running { mut op, .. }) = self.progress[at].running.take() else {
+        let Some(Running {
+            mut op, attempt, ..
+        }) = self.progress[at].running.take()
+        else {
             return Ok(());
         };
+        op.answered = answer.map(|_| attempt);
         let draw = self.rng.next_u64();
         let next = op.retry.heard(
             answer.map_or(Heard::Silence, Heard::Answer),
@@ -667,10 +703,10 @@ impl Clients {
                     "client {at}: operation {} ended done with no answer",
                     op.index
                 );
-                if let Some(response) = answer {
+                answer.map_or(Ok(()), |response| {
                     self.end(at, &op, End::Done(response.clone()));
-                }
-                Ok(())
+                    self.misuse(cluster, at, &op, response)
+                })
             }
             Next::Refused => {
                 self.end(at, &op, End::Refused);
@@ -712,6 +748,7 @@ impl Clients {
             node,
             at_ms,
             request,
+            misuse: false,
         });
         self.progress[at].running = Some(Running {
             op,
@@ -731,8 +768,93 @@ impl Clients {
             sends: op.retry.sends(),
             end,
             at_ms: self.now_ms,
+            decided_by: op.answered,
         });
         self.progress[at].ready_ms = self.now_ms;
+    }
+
+    /// After client `at`'s write `op` ended with `response`, maybe reuses its request ID with
+    /// a different command, once, with no retry (§10.3). Only an observed terminal result
+    /// earns a misuse attempt, so the system's answer is decided: `request_id_conflict`.
+    fn misuse(
+        &mut self,
+        cluster: &mut Cluster,
+        at: usize,
+        op: &Op,
+        response: &Response,
+    ) -> Result<(), ClusterError> {
+        let terminal = match response {
+            Response::Written { .. }
+            | Response::Status {
+                state: RequestState::Known(_),
+                ..
+            } => true,
+            Response::Status {
+                state: RequestState::Unknown,
+                ..
+            }
+            | Response::Conflict { .. }
+            | Response::Found { .. }
+            | Response::NotFound { .. }
+            | Response::Page(_)
+            | Response::Refused(_) => false,
+        };
+        let ClientOp::Write {
+            request_id,
+            mutation,
+        } = &op.request
+        else {
+            return Ok(());
+        };
+        if self.misuse_ppm == 0
+            || !terminal
+            || below(&mut self.rng, MILLION) >= u64::from(self.misuse_ppm)
+        {
+            return Ok(());
+        }
+        let other = match mutation {
+            Mutation::Put { key, .. } | Mutation::Cas { key, .. } => {
+                Mutation::Delete { key: key.clone() }
+            }
+            Mutation::Delete { key } => Mutation::Put {
+                key: key.clone(),
+                value: Value::EMPTY,
+            },
+        };
+        let answered_by = match response {
+            Response::Written { served_by, .. } | Response::Status { served_by, .. } => {
+                Some(served_by.node)
+            }
+            Response::Conflict { .. }
+            | Response::Found { .. }
+            | Response::NotFound { .. }
+            | Response::Page(_)
+            | Response::Refused(_) => None,
+        };
+        let node = answered_by
+            .filter(|node| self.nodes.contains(node))
+            .unwrap_or_else(|| self.nodes[pick(&mut self.rng, self.nodes.len())]);
+        let request = ClientOp::Write {
+            request_id: *request_id,
+            mutation: other,
+        };
+        let client = ClientId::new(u64::try_from(at).unwrap_or(u64::MAX));
+        let attempt = cluster.submit(
+            VirtualTime::from_micros(self.now_ms.saturating_mul(1_000)),
+            client,
+            node,
+            request.clone(),
+        )?;
+        self.sends.push(SentAttempt {
+            client,
+            op: op.index,
+            attempt,
+            node,
+            at_ms: self.now_ms,
+            request,
+            misuse: true,
+        });
+        Ok(())
     }
 
     /// What `response` to client `at`'s operation `op` tells it about the op's key's

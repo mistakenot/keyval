@@ -1148,3 +1148,15 @@ tier = "T0"
 run = "./dev check SIM-CLIENTS"
 min_cases = 7
 status = "implemented"
+
+[[check]]
+id = "SIM-OBSERVE"
+summary = "The observation recording and misuse stream (§10.2, §10.3, §12.2 W36.2): the cluster logs every client attempt's invocation, response and delivery, and a run's document is a valid keyval.observation/v1 that keeps the stream rules; the opt-in misuse stream reuses a request ID with a different command only after an observed terminal result, is answered request_id_conflict and is excluded from logical-write counts; a seed decides the document byte for byte"
+kind = "test_group"
+covers = ["F-6", "A-5", "P4"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check SIM-OBSERVE"
+min_cases = 5
+status = "implemented"

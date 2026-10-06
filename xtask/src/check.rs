@@ -1980,6 +1980,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "SIM-OBSERVE",
+        summary: "The observation recording and misuse stream (§10.2, §10.3, §12.2 W36.2): the cluster logs every client attempt's invocation, response and delivery, and a run's document is a valid keyval.observation/v1 that keeps the stream rules; the opt-in misuse stream reuses a request ID with a different command only after an observed terminal result, is answered request_id_conflict and is excluded from logical-write counts; a seed decides the document byte for byte",
+        kind: Kind::TestGroup,
+        covers: &["F-6", "A-5", "P4"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["observe_tests::"],
+        },
+        min_cases: 5,
+    },
 ];
 
 /// Outcome of one requested check.

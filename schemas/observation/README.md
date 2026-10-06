@@ -181,8 +181,10 @@ the tests check that they do:
 ## Producers
 
 The simulation's recorders (W17's harness, W36's workload recording) write this
-document, and their tests validate real output against the schema (O-6). No producer
-exists yet, so the fixtures stand in until then. Change the schema in the same commit as
+document, and their tests validate real output against the schema (O-6). W36.2's
+`sim::observe::document` is the first producer: it records the client side of a run (phase,
+invoke, response, delivery and resolution records, with `faults` empty and `overflowed`
+empty); the node-side records wait for W40 and W43. The fixtures remain oracles beside it. Change the schema in the same commit as
 its producers. A change that breaks a reader (a field renamed, removed or retyped, or a
 value no longer allowed) bumps the version. Never edit a fixture to make a test pass:
 fixtures are oracles (P9), and a change to one is reviewed like a change to a checker.
