@@ -1172,3 +1172,15 @@ tier = "T0"
 run = "./dev check PEER-TRANSPORT"
 min_cases = 7
 status = "implemented"
+
+[[check]]
+id = "DEMO-M1"
+summary = "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the tracker export (an item is implemented exactly when its bead is closed), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic; the end-to-end run is test evidence, not proof"
+kind = "test_group"
+covers = ["G1", "P6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEMO-M1"
+min_cases = 11
+status = "implemented"

@@ -2006,6 +2006,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 7,
     },
+    CheckDef {
+        id: "DEMO-M1",
+        summary: "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the tracker export (an item is implemented exactly when its bead is closed), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic; the end-to-end run is test evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["G1", "P6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["demo::tests::"],
+        },
+        min_cases: 11,
+    },
 ];
 
 /// Outcome of one requested check.

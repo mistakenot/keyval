@@ -240,7 +240,7 @@ deps = ["W17", "W18"]
 reqs = ["G1"]
 area = ["xtask (demo)"]
 milestone = "m1"
-accept = []
+accept = ["./dev check DEMO-M1"]
 bead = "br-w19-m1-owner-demo-ddm"
 
 [[item]]

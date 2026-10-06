@@ -52,6 +52,7 @@ const IDS: &[&str] = &[
     crate::steplog::SCHEMA,
     crate::traceability::SCHEMA,
     crate::sim::SCHEMA,
+    crate::demo::SCHEMA,
 ];
 
 /// The file stem for an identifier: `keyval.dev.<name>/v<n>` becomes `<name>.v<n>`.
@@ -178,6 +179,7 @@ mod tests {
     use crate::closure::CloseReport;
     use crate::commit::{self, CommitKind, CommitReport, GateRun, Outcome as CommitOutcome};
     use crate::commit::{GateCall, Ports, Request, Reservation};
+    use crate::demo;
     use crate::doctor::{self, Expect, Need, Probe, ToolSpec, ToolStatus};
     use crate::gate::{self, Context, GateTier, Step as GateStep, Tree, TreeSource, Verdict};
     use crate::git::{Git, fixture};
@@ -921,6 +923,61 @@ mod tests {
         incomplete.trace.complete = false;
         incomplete.facts.restarted = None;
         validators.assert_matches(&incomplete, "an incomplete run");
+    }
+
+    #[test]
+    fn demo_reports_match_their_schema() {
+        let validators = Validators::load();
+        let mut log = StepLog::new("demo m1", None, false).unwrap();
+        let step = |log: &mut StepLog, name: &str, observed: Result<String, String>| {
+            let step = steplog::Step {
+                name,
+                action: "an action",
+                expected: "what it expects",
+                rerun: "./dev demo m1 --assert",
+            };
+            log.record(step, observed, std::time::Duration::from_millis(5))
+                .unwrap_or_else(|failed| *failed.record)
+        };
+        let passed = step(&mut log, "build", Ok("built".to_owned()));
+        let failed = step(&mut log, "init", Err("refused".to_owned()));
+        let report = |ok: bool, steps: Vec<steplog::StepRecord>| demo::DemoReport {
+            schema: demo::SCHEMA,
+            ok,
+            label: demo::LABEL,
+            milestone: "m1",
+            assert: true,
+            build: Some(demo::Build {
+                id: format!("sha256:{}", "ab".repeat(32)),
+                tree: "1".repeat(40),
+                dirty: false,
+            }),
+            run_dir: ".local/demo/m1/run".to_owned(),
+            steps,
+            sim: Some(demo::SimPair {
+                first: "34ec631c053276db".to_owned(),
+                second: "34ec631c053276db".to_owned(),
+            }),
+            items: vec![demo::ItemStatus {
+                id: "W18".to_owned(),
+                title: "Production root".to_owned(),
+                milestone: "m1".to_owned(),
+                implemented: true,
+            }],
+            commands: vec!["./dev sim run --seed 42 --profile slice".to_owned()],
+            limitations: demo::LIMITATIONS.to_vec(),
+            step_log: ".local/demo/m1/run/steps.jsonl".to_owned(),
+        };
+        validators.assert_matches(&report(true, vec![passed.clone()]), "a passing demo");
+        validators.assert_matches(
+            &report(false, vec![passed.clone(), failed]),
+            "a failed demo",
+        );
+        let mut early = report(false, vec![passed]);
+        early.build = None;
+        early.sim = None;
+        early.items = Vec::new();
+        validators.assert_matches(&early, "a demo that stopped before it identified the build");
     }
 
     #[test]

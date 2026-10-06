@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/demo.v1.schema.json",
+  "title": "keyval.dev.demo/v1",
+  "description": "The report of `./dev demo m1` (xtask/src/demo.rs `DemoReport`; PLAN.md §11.6, §12.2 W19): what ran, step by step, the two simulated runs' trace hashes, the work items implemented and pending, the commands that repeat each part, and the visible limitations. A passing demo has no failed step.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "label",
+    "milestone",
+    "assert",
+    "build",
+    "run_dir",
+    "steps",
+    "sim",
+    "items",
+    "commands",
+    "limitations",
+    "step_log"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.demo/v1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "Whether every step passed."
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the demo is and is not (P6)."
+    },
+    "milestone": {
+      "const": "m1"
+    },
+    "assert": {
+      "type": "boolean",
+      "description": "Whether it ran without pausing."
+    },
+    "build": {
+      "description": "The build the demo ran; null if it was not identified.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "tree",
+            "dirty"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "tree": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "dirty": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "run_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "step.v1.schema.json"
+      }
+    },
+    "sim": {
+      "description": "The two simulated runs' trace hashes; null if both did not run.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "first",
+            "second"
+          ],
+          "properties": {
+            "first": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            },
+            "second": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            }
+          }
+        }
+      ]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "milestone",
+          "implemented"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^W[0-9]+$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "milestone": {
+            "type": "string",
+            "pattern": "^m[0-5]$"
+          },
+          "implemented": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "step_log": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "if": {
+    "required": [
+      "ok"
+    ],
+    "properties": {
+      "ok": {
+        "const": true
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "steps": {
+        "not": {
+          "contains": {
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "const": "failed"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

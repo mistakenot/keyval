@@ -1,0 +1,81 @@
+{
+  "rule": "a demo that is ok has no failed step",
+  "error_at": "/steps",
+  "instance": {
+    "schema": "keyval.dev.demo/v1",
+    "ok": true,
+    "label": "M1 owner demo: one real keyval node on this machine (a 1-voter cluster) and the five-node simulated slice; not a multi-node cluster",
+    "milestone": "m1",
+    "assert": true,
+    "build": {
+      "id": "sha256:7012cf42dd3329ca0063c42a019370b90ba33b6a2ff60728232619cb3d97d6a0",
+      "tree": "1911ddd6673eb9b5a77941ce070d4315bfdc7eef",
+      "dirty": true
+    },
+    "run_dir": "/data/projects/keyval/.local/demo/m1/20261006T170206Z-2804100",
+    "steps": [
+      {
+        "schema": "keyval.dev.step/v1",
+        "flow": "demo m1",
+        "step": "build",
+        "action": "cargo build -p server -p sim (local)",
+        "expected": "both binaries build",
+        "observed": "keyval-server and keyval-sim built (/data/tmp/cargo-target/debug/keyval-server)",
+        "outcome": "passed",
+        "duration_ms": 118,
+        "rerun": null
+      },
+      {
+        "schema": "keyval.dev.step/v1",
+        "flow": "demo m1",
+        "step": "build-id",
+        "action": "the gate's build ID over HEAD^{tree}",
+        "expected": "a build ID",
+        "observed": "build sha256:7012cf42dd3329ca0063c42a019370b90ba33b6a2ff60728232619cb3d97d6a0 of tree 1911ddd6673eb9b5a77941ce070d4315bfdc7eef, with a dirty working tree",
+        "outcome": "failed",
+        "duration_ms": 106,
+        "rerun": "./dev demo m1 --assert"
+      }
+    ],
+    "sim": {
+      "first": "34ec631c053276db",
+      "second": "34ec631c053276db"
+    },
+    "items": [
+      {
+        "id": "W01",
+        "title": "Bootstrap: workspace, pinned toolchain, `./dev` (doctor, check, gate fast), lint policy, AGENTS.md (§11.5), DEPENDENCIES.md, beads init",
+        "milestone": "m0",
+        "implemented": true
+      },
+      {
+        "id": "W02",
+        "title": "Raft library determinism spike",
+        "milestone": "m0",
+        "implemented": true
+      },
+      {
+        "id": "W03",
+        "title": "Complete `api/openapi.yaml` per §8, with fixtures",
+        "milestone": "m0",
+        "implemented": true
+      }
+    ],
+    "commands": [
+      "/data/tmp/cargo-target/debug/keyval-server init --config /data/projects/keyval/.local/demo/m1/20261006T170206Z-2804100/one-voter.toml --node 1 --instance 1758f086f2c93b2ceed73d5076b0e4e8",
+      "/data/tmp/cargo-target/debug/keyval-server run --config /data/projects/keyval/.local/demo/m1/20261006T170206Z-2804100/one-voter.toml --node 1",
+      "curl -s -X PUT 'http://127.0.0.1:37459/v1/kv?key=demo/m1' -H 'Idempotency-Key: <32 hex digits>' -H 'Content-Type: application/json' -d '{\"value\":\"…\"}'",
+      "curl -s 'http://127.0.0.1:37459/v1/kv?key=demo/m1'",
+      "curl -s 'http://127.0.0.1:37459/v1/cluster'",
+      "./dev sim run --seed 42 --profile slice"
+    ],
+    "limitations": [
+      "one real node only: a real multi-node cluster needs peer transport (W21) and `./dev cluster` (W22), M2",
+      "the five-node run is the deterministic simulator (`keyval-sim`), not five processes",
+      "the HTTP API serves PUT and GET of a key, health and /v1/cluster; DELETE, CAS, SCAN and the status lookup over HTTP are pending",
+      "no TLS and no authentication: the node listens on loopback only",
+      "the build ID covers the committed tree; a dirty working tree is reported, not hashed"
+    ],
+    "step_log": "/data/projects/keyval/.local/demo/m1/20261006T170206Z-2804100/steps.jsonl"
+  }
+}

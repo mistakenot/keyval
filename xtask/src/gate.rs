@@ -1587,7 +1587,7 @@ fn member_count(root: &Path) -> Result<u64, String> {
     Ok(u64::try_from(metadata.members().len()).unwrap_or(u64::MAX))
 }
 
-fn build_inputs(root: &Path) -> Result<BuildInputs, String> {
+pub fn build_inputs(root: &Path) -> Result<BuildInputs, String> {
     let output = |mut cmd: Command| -> Result<String, String> {
         cmd.current_dir(root);
         let shown = format!("{cmd:?}");

@@ -13,6 +13,7 @@ mod check;
 mod clock;
 mod closure;
 mod commit;
+mod demo;
 mod doctor;
 #[cfg(test)]
 mod fixture_lists;
@@ -191,6 +192,24 @@ enum Command {
         #[command(subcommand)]
         action: SimAction,
     },
+    /// Owner demos (§11.6): orchestrate what exists and say honestly what is pending (P6).
+    Demo {
+        #[command(subcommand)]
+        action: DemoAction,
+    },
+}
+
+/// `./dev demo` actions.
+#[derive(Clone, Debug, Subcommand)]
+enum DemoAction {
+    /// The M1 owner demo (§12.2 W19): one real node serves PUT and GET across a kill and
+    /// restart, the simulated slice runs twice with identical trace hashes, and what is
+    /// implemented and pending is printed.
+    M1 {
+        /// Never pause between parts; every step is asserted (a failed step exits 1).
+        #[arg(long)]
+        assert: bool,
+    },
 }
 
 /// `./dev sim` actions.
@@ -325,6 +344,15 @@ fn run(cli: Cli) -> Status {
         Command::Beads { action } => run_beads(&root, format, action),
         Command::Report { report } => run_report(&root, format, report),
         Command::Sim { action } => run_sim(&root, format, action),
+        Command::Demo { action } => match action {
+            DemoAction::M1 { assert } => {
+                let options = demo::Options {
+                    assert,
+                    progress: format == Format::Human,
+                };
+                output::emit(format, &demo::run(&root, options))
+            }
+        },
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
