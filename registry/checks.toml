@@ -1186,6 +1186,18 @@ min_cases = 11
 status = "implemented"
 
 [[check]]
+id = "AUDIT-REPORTS"
+summary = "Every audit report under reports/audits/ (§11.9, W20) names its milestone, auditor, independence, tree ID and commit in a header, and every `## F-<n>` finding names a `Bead: <id>` the tracker export holds, so no finding goes unfiled; a report with no findings must say `Findings: none`, and a missing report, an unreadable export or a vacuous selection fails (P10). Checks the report's form and bead links, not the audit's judgement"
+kind = "static"
+covers = ["P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check AUDIT-REPORTS"
+min_cases = 30
+status = "implemented"
+
+[[check]]
 id = "CLUSTER-ROUTING"
 summary = "Five-process operation and write routing (F-7, §8.1, §8.4, W21.2): five real processes started from config/local.toml (distinct client and peer addresses and data directories) elect one leader and replicate a write to all five; a write to a follower is 307 with a typed not_leader body and one Location at the leader's client address carrying the same path and re-encoded key, and sending the same request ID there commits; a follower answers an applied request ID from its own history without redirecting and serves reads locally; with no quorum a write is 503 unavailable listing the five configured nodes and no Location; after the leader is killed the other four elect and redirect to the new one. Real processes on loopback: test evidence, not proof"
 kind = "test_group"

@@ -6,6 +6,7 @@
 
 mod accept;
 mod agents;
+mod audit_reports;
 mod beads;
 mod candidate;
 mod cargo;

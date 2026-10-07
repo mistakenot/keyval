@@ -250,7 +250,7 @@ deps = ["W19"]
 reqs = ["§11.9"]
 area = ["audit"]
 milestone = "m1"
-accept = []
+accept = ["./dev check AUDIT-REPORTS"]
 bead = "br-w20-m1-drift-audit-q5i"
 
 [[item]]

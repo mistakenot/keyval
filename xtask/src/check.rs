@@ -102,6 +102,9 @@ pub enum StaticCheck {
     Registry,
     /// The Raft spike's traces are byte-identical across fresh processes (W02.4).
     SpikeDeterminism,
+    /// Every audit report under `reports/audits/` names its tree and commit, and each of
+    /// its findings names a bead the tracker export holds (§11.9, W20).
+    AuditReports,
 }
 
 impl StaticCheck {
@@ -124,6 +127,7 @@ impl StaticCheck {
                 })
             }
             Self::SpikeDeterminism => crate::spike::check_spike(root),
+            Self::AuditReports => crate::audit_reports::check_audit_reports(root),
         }
     }
 
@@ -156,6 +160,7 @@ impl StaticCheck {
             Self::Workgraph => "WORKGRAPH",
             Self::Registry => "REGISTRY",
             Self::SpikeDeterminism => "SPIKE-DETERMINISM",
+            Self::AuditReports => "AUDIT-REPORTS",
         }
     }
 
@@ -173,6 +178,7 @@ impl StaticCheck {
             Self::Workgraph => "field(s)+edge(s)+rule(s)",
             Self::Registry => "row(s)+marker(s)+edge(s)",
             Self::SpikeDeterminism => "seed-process run(s)+control",
+            Self::AuditReports => "header(s)+finding(s)+bead(s)",
         }
     }
 }
@@ -2018,6 +2024,16 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["demo::tests::"],
         },
         min_cases: 11,
+    },
+    CheckDef {
+        id: "AUDIT-REPORTS",
+        summary: "Every audit report under reports/audits/ (§11.9, W20) names its milestone, auditor, independence, tree ID and commit in a header, and every `## F-<n>` finding names a `Bead: <id>` the tracker export holds, so no finding goes unfiled; a report with no findings must say `Findings: none`, and a missing report, an unreadable export or a vacuous selection fails (P10). Checks the report's form and bead links, not the audit's judgement",
+        kind: Kind::Static,
+        covers: &["P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::Static(StaticCheck::AuditReports),
+        min_cases: 30,
     },
     CheckDef {
         id: "CLUSTER-ROUTING",

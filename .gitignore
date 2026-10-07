@@ -75,4 +75,6 @@ gemini.mcp.json
 /.local/
 /artifacts/
 # reports/ is rendered on demand (./dev report traceability; §10.13), never committed.
-/reports/
+/reports/*
+# Audit reports are committed evidence (§11.9, W20: filed under reports/audits/).
+!/reports/audits/
