@@ -51,6 +51,26 @@ pub struct Claim {
 pub struct Invoked {
     /// Whether the attempt is a misuse attempt (a conflicting reuse of a request ID, §10.3).
     pub misuse: bool,
+    /// The logical write the attempt belongs to (a write's own request ID), or the write a
+    /// `status` lookup asks about; `None` for a read.
+    pub request_id: Option<RequestId>,
+    /// Whether the operation is a write (`put`, `delete` or `cas`).
+    pub write: bool,
+    /// The invoke record's position in `records`: event order, which `seq` and `time` do not
+    /// refine (several records share one step).
+    pub position: u64,
+}
+
+/// A `request_id_conflict` answer to a write: the client was told its request ID was already
+/// used by a different command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConflictClaim {
+    /// The attempt the answer is for.
+    pub attempt: u64,
+    /// The request ID it names.
+    pub request_id: RequestId,
+    /// The index it gives for the original execution.
+    pub original_index: Index,
 }
 
 /// One run's observations, as K-1 and K-2 need them.
@@ -66,8 +86,13 @@ pub struct History {
     pub invoked: BTreeMap<u64, Invoked>,
     /// Every terminal execution response, in record order.
     pub claims: Vec<Claim>,
+    /// The `request_id_conflict` answers, in record order.
+    pub conflicts: Vec<ConflictClaim>,
     /// The attempts that had at least one response copy delivered to their client.
     pub delivered: BTreeSet<u64>,
+    /// For each delivered attempt, the position in `records` of the first copy that reached
+    /// its client: when the client first observed the answer.
+    pub first_delivery: BTreeMap<u64, u64>,
     /// Each node's log at the end of the run, rebuilt from `recovered`, `append` and `truncate`.
     pub final_logs: BTreeMap<u64, BTreeMap<u64, LogEntry>>,
     /// The permanently lost nodes.
@@ -99,7 +124,9 @@ impl History {
             committed: Vec::new(),
             invoked: BTreeMap::new(),
             claims: Vec::new(),
+            conflicts: Vec::new(),
             delivered: BTreeSet::new(),
+            first_delivery: BTreeMap::new(),
             final_logs: BTreeMap::new(),
             lost: BTreeSet::new(),
         };
@@ -107,22 +134,23 @@ impl History {
             .as_array()
             .ok_or_else(|| CheckError::malformed("records", "not an array"))?;
         for (position, record) in records.iter().enumerate() {
-            history.record(record, &format!("records[{position}]"))?;
+            history.record(record, position as u64, &format!("records[{position}]"))?;
         }
         Ok(history)
     }
 
-    fn record(&mut self, record: &Value, at: &str) -> Result<(), CheckError> {
+    fn record(&mut self, record: &Value, position: u64, at: &str) -> Result<(), CheckError> {
         match str_field(record, at, "kind")? {
             "invoke" => {
                 let attempt = u64_field(record, at, "attempt")?;
-                let misuse = bool_field(record, at, "misuse")?;
-                self.invoked.insert(attempt, Invoked { misuse });
+                self.invoked.insert(attempt, invoked(record, position, at)?);
             }
             "response" => self.response(record, at)?,
             "delivery" => {
                 if bool_field(record, at, "delivered")? {
-                    self.delivered.insert(u64_field(record, at, "attempt")?);
+                    let attempt = u64_field(record, at, "attempt")?;
+                    self.delivered.insert(attempt);
+                    self.first_delivery.entry(attempt).or_insert(position);
                 }
             }
             "committed" => self.committed_record(record, at)?,
@@ -178,7 +206,23 @@ impl History {
         let outcome = field(record, at, "outcome")?;
         let at = format!("{at}.outcome");
         let claim = match str_field(record, &at, "op")? {
-            "put" | "delete" | "cas" => claim_of(outcome, &at, attempt, false)?,
+            "put" | "delete" | "cas" => {
+                if str_field(outcome, &at, "code")? == "request_id_conflict" {
+                    let original = opt_u64(outcome, &at, "original_index")?.ok_or_else(|| {
+                        CheckError::malformed(
+                            format!("{at}.original_index"),
+                            "request_id_conflict without an original index",
+                        )
+                    })?;
+                    self.conflicts.push(ConflictClaim {
+                        attempt,
+                        request_id: request_id(outcome, &at, "request_id")?,
+                        original_index: Index::new(original)
+                            .map_err(|error| bad(&at, "original_index", &error))?,
+                    });
+                }
+                claim_of(outcome, &at, attempt, false)?
+            }
             "status" => {
                 if str_field(outcome, &at, "code")? == "ok"
                     && str_field(outcome, &at, "state")? == "known"
@@ -227,6 +271,25 @@ impl History {
     pub fn recoverable(&self) -> impl Iterator<Item = u64> + '_ {
         self.voters.difference(&self.lost).copied()
     }
+}
+
+fn invoked(record: &Value, position: u64, at: &str) -> Result<Invoked, CheckError> {
+    let operation = field(record, at, "operation")?;
+    let operation_at = format!("{at}.operation");
+    let write = ["put", "delete", "cas"].contains(&str_field(operation, &operation_at, "op")?);
+    // A write carries its request ID at the top; a status lookup names the write in its
+    // operation; a read has none.
+    let id = field(record, at, "request_id")?
+        .as_str()
+        .or_else(|| operation.get("request_id").and_then(Value::as_str));
+    Ok(Invoked {
+        misuse: bool_field(record, at, "misuse")?,
+        request_id: id
+            .map(|id| RequestId::parse(id).map_err(|error| bad(at, "request_id", &error)))
+            .transpose()?,
+        write,
+        position,
+    })
 }
 
 /// A terminal execution outcome as a claim, or `None` for any other answer.

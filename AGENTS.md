@@ -332,7 +332,7 @@ output only together with its schema, and bump the version when the change break
   NODE-ATTEMPT-TABLE, APPLY-DELETE, STATE-SCAN, SERVER-INIT, APPLY-CAS, DIFFERENTIAL-SCAN,
   SERVER-RUNTIME, DIFFERENTIAL-DELETE-CAS, SIM-CLUSTER, SERVER-HTTP, REQUEST-STATUS,
   REQUEST-ID-RACE, SERVER-RESTART, HISTORY-ADMISSION, SIM-RUN, DEV-SIM,
-  CLIENT-RETRY, SIM-CLIENTS, SIM-OBSERVE, PEER-TRANSPORT, DEMO-M1, AUDIT-REPORTS, K-1, K-2, K-8, K-11, K-12. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
+  CLIENT-RETRY, SIM-CLIENTS, SIM-OBSERVE, PEER-TRANSPORT, DEMO-M1, AUDIT-REPORTS, K-1, K-2, K-8, K-11, K-12, K-3, K-4. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
   fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or

@@ -14,6 +14,7 @@ pub const B: &str = "000000000000000000000000000000a2";
 pub struct Doc {
     records: Vec<Value>,
     lost: Vec<u64>,
+    max_live_keys: u64,
 }
 
 impl Doc {
@@ -29,7 +30,14 @@ impl Doc {
         Self {
             records,
             lost: Vec::new(),
+            max_live_keys: 10_000,
         }
+    }
+
+    /// Lowers the live-key limit the document's manifest configures.
+    pub fn max_live_keys(&mut self, limit: u64) -> &mut Self {
+        self.max_live_keys = limit;
+        self
     }
 
     /// A document whose first entry is the leader's no-op, held by every voter.
@@ -128,6 +136,18 @@ impl Doc {
             .deliver(attempt)
     }
 
+    /// A delivered `status` lookup of `id` that finds the write's PUT result known.
+    pub fn status_known(&mut self, attempt: u64, id: &str, index: u64, version: u64) -> &mut Self {
+        self.records
+            .push(json!({"kind": "invoke", "seq": 5, "time": 5, "client": 1,
+            "attempt": attempt, "target": {"node": 1, "incarnation": 0},
+            "request_id": null, "misuse": false,
+            "operation": {"op": "status", "request_id": id}}));
+        let outcome = json!({"code": "ok", "state": "known",
+            "result": ok_put(id, index, version, true)});
+        self.respond(attempt, "status", outcome).deliver(attempt)
+    }
+
     pub fn history(&self) -> History {
         History::from_value(&self.value()).expect("fixture parses")
     }
@@ -135,7 +155,7 @@ impl Doc {
     pub fn value(&self) -> Value {
         json!({"schema": "keyval.observation/v1",
             "manifest": {"limits": {"max_key_bytes": 256, "max_value_bytes": 65536,
-                "max_live_keys": 10000, "max_live_bytes": 67_108_864,
+                "max_live_keys": self.max_live_keys, "max_live_bytes": 67_108_864,
                 "max_log_entries": 1_000_000, "max_history_bytes": 3_221_225_472_u64}},
             "voters": [1, 2, 3],
             "records": self.records.iter().cloned().chain(
@@ -180,6 +200,28 @@ pub fn version_mismatch(id: &str, index: u64, current: u64, replayed: bool) -> V
     out["index"] = json!(index);
     out["current_version"] = json!(current);
     out["replayed"] = json!(replayed);
+    out
+}
+
+/// A CAS command expecting `expected` (a version), as a `committed` record's `command`.
+pub fn cas(id: &str, key: &str, expected: u64, value: &str) -> Value {
+    json!({"request_id": id, "operation": {"op": "cas", "key": key,
+        "expected": {"kind": "version", "version": expected}, "value": value}})
+}
+
+/// A mismatch answer for a CAS on a key that is absent (`current_version: null`).
+pub fn version_mismatch_absent(id: &str, index: u64) -> Value {
+    let mut out = outcome("version_mismatch", id);
+    out["index"] = json!(index);
+    out["replayed"] = json!(false);
+    out
+}
+
+pub fn capacity_exceeded(id: &str, index: u64, limit: &str) -> Value {
+    let mut out = outcome("capacity_exceeded", id);
+    out["index"] = json!(index);
+    out["limit"] = json!(limit);
+    out["replayed"] = json!(false);
     out
 }
 

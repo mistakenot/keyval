@@ -1304,3 +1304,27 @@ tier = "T0"
 run = "./dev check SWARM-SCENARIO"
 min_cases = 31
 status = "implemented"
+
+[[check]]
+id = "K-3"
+summary = "Real-time order K-3 (§10.5, W38.2): over logical writes (attempts collapsed by request ID), a write invoked after another write's first terminal decision was delivered to a client executes at a larger log index, with indices taken from the reference model's replay of the committed log and never from a response; a retry returning its original smaller index never violates it, an undelivered answer is no observation, a delivered known status answer is, and a misuse attempt is neither an invocation nor an observation. Hand-made histories, each rule broken once: test evidence of the checker, not proof"
+kind = "test_group"
+covers = ["C-1"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check K-3"
+min_cases = 11
+status = "implemented"
+
+[[check]]
+id = "K-4"
+summary = "Model-replay results K-4 (§10.5, W38.2): replaying the committed log through the reference model reproduces every reported write result, namely the index, the version (DM-3), existed (F-3), a CAS mismatch with the correct current version or its absence (F-5), a CAS success against a model mismatch and the reverse, capacity outcomes and the limit hit (DM-6) and a result of the wrong kind, and a request_id_conflict names the first execution's index and answers only a conflicting reuse (F-6); status answers are judged like responses and misuse attempts are left to K-2. Hand-made histories, each rule broken once, with retries returning the original index as controls: test evidence of the checker, not proof"
+kind = "test_group"
+covers = ["C-1", "C-5", "F-1", "F-3", "F-5", "F-6", "DM-3", "DM-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check K-4"
+min_cases = 17
+status = "implemented"

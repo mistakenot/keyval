@@ -26,6 +26,33 @@ pub enum Kind {
     InconsistentResponses,
     /// K-2: a misuse attempt (a conflicting reuse) was answered as an execution.
     MisuseAnsweredAsExecution,
+    /// K-3: a logical write was invoked after another's first terminal decision was observed,
+    /// yet executed at a smaller or equal index.
+    RealTimeOrderViolated,
+    /// K-4: a reported write result has no first execution in the committed log.
+    ReportedWithoutCommand,
+    /// K-4: a reported write result gives an index other than the model's first execution.
+    ReportedIndexWrong,
+    /// K-4: a reported `version` is not the model's (DM-3).
+    ReportedVersionWrong,
+    /// K-4: a reported `existed` is not the model's (F-3).
+    ReportedExistedWrong,
+    /// K-4: a CAS reported success where the model mismatched, or the reverse (F-5).
+    ReportedCasOutcomeWrong,
+    /// K-4: a reported mismatch names a current version other than the model's (F-5).
+    ReportedCurrentVersionWrong,
+    /// K-4: a reported capacity outcome differs from the model's (DM-6).
+    ReportedCapacityWrong,
+    /// K-4: a reported result is of another kind than the model's (a PUT's set reported as a
+    /// delete, say).
+    ReportedDecisionWrong,
+    /// K-4: a `request_id_conflict` names an original index other than the first execution's
+    /// (F-6).
+    ConflictWrongOriginal,
+    /// K-4: a `request_id_conflict` for a request that never executed (F-6).
+    ConflictWithoutOriginal,
+    /// K-4: a `request_id_conflict` for an attempt that is not a conflicting reuse (F-6).
+    ConflictWithoutMisuse,
     /// K-8 election safety: two different nodes led one term.
     TwoLeadersInTerm,
     /// K-8 election safety: a node held votes for two different candidates in one term.
@@ -92,6 +119,18 @@ impl fmt::Display for Kind {
             Self::TwoFirstExecutions => "two_first_executions",
             Self::InconsistentResponses => "inconsistent_responses",
             Self::MisuseAnsweredAsExecution => "misuse_answered_as_execution",
+            Self::RealTimeOrderViolated => "real_time_order_violated",
+            Self::ReportedWithoutCommand => "reported_without_command",
+            Self::ReportedIndexWrong => "reported_index_wrong",
+            Self::ReportedVersionWrong => "reported_version_wrong",
+            Self::ReportedExistedWrong => "reported_existed_wrong",
+            Self::ReportedCasOutcomeWrong => "reported_cas_outcome_wrong",
+            Self::ReportedCurrentVersionWrong => "reported_current_version_wrong",
+            Self::ReportedCapacityWrong => "reported_capacity_wrong",
+            Self::ReportedDecisionWrong => "reported_decision_wrong",
+            Self::ConflictWrongOriginal => "conflict_wrong_original",
+            Self::ConflictWithoutOriginal => "conflict_without_original",
+            Self::ConflictWithoutMisuse => "conflict_without_misuse",
             Self::TwoLeadersInTerm => "two_leaders_in_term",
             Self::DoubleVote => "double_vote",
             Self::SameTermDifferentBytes => "same_term_different_bytes",
