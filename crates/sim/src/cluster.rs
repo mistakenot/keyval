@@ -73,9 +73,10 @@ use types::{
     Response, Role, StorageError, SyncSeq, Term, execute,
 };
 
-use crate::disk::{Crash, DiskHandle, SimDisk};
+use crate::disk::{Crash, DiskHandle, SimDisk, Survival};
 use crate::entropy::{MasterSeed, SplitMix64, Subsystem};
 use crate::god_view::{Changes, GodView, JournalView, NodeView};
+use crate::nemesis::{CrashPoint, Fault, MAX_LOST, NemesisError, Partition};
 use crate::net::{Arrival, NetConfig, NetError, Network, PacketId};
 use crate::scheduler::{
     Event, EventBudget, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step, VirtualTime,
@@ -151,6 +152,8 @@ pub enum Happening {
         /// The node.
         node: NodeId,
     },
+    /// A fault of the §9.1 vocabulary happens ([`crate::nemesis`]).
+    Inject(Fault),
 }
 
 impl Happening {
@@ -164,6 +167,7 @@ impl Happening {
             Self::Request { .. } => "request",
             Self::Crash { .. } => "crash",
             Self::Restart { .. } => "restart",
+            Self::Inject(_) => "fault",
         }
     }
 }
@@ -236,6 +240,8 @@ pub enum ClusterError {
     },
     /// An event could not be scheduled.
     Schedule(ScheduleError),
+    /// A fault could not be scheduled: the scenario asked for something §9.1 forbids.
+    Fault(NemesisError),
     /// The network refused a packet.
     Net(NetError),
     /// A step recorded more observations than its bound; the trace is incomplete.
@@ -272,6 +278,7 @@ impl fmt::Display for ClusterError {
             ),
             Self::UnknownNode { node } => write!(f, "node {node} is not in the cluster"),
             Self::Schedule(error) => write!(f, "schedule: {error}"),
+            Self::Fault(error) => write!(f, "fault: {error}"),
             Self::Net(error) => write!(f, "network: {error:?}"),
             Self::Trace(overflow) => write!(f, "trace: {overflow:?}"),
             Self::Incomplete {
@@ -308,6 +315,7 @@ impl ClusterError {
             | Self::IncarnationsExhausted { .. }
             | Self::UnknownNode { .. }
             | Self::Schedule(_)
+            | Self::Fault(_)
             | Self::Net(_)
             | Self::Trace(_)
             | Self::Incomplete { .. } => false,
@@ -539,6 +547,14 @@ struct Slot {
     disk: SimDisk,
     incarnation: Incarnation,
     running: Option<Running>,
+    /// The node is lost for good (§9.1): it never restarts.
+    lost: bool,
+    /// The node is stalled: its inputs wait in `held`.
+    paused: bool,
+    /// What reached the node while it was paused, in order.
+    held: BoundedQueue<Input>,
+    /// A crash armed to fire at the node's next sync.
+    armed: Option<(CrashPoint, Survival)>,
 }
 
 /// The trace's event kinds, made once.
@@ -547,7 +563,7 @@ struct Kinds(std::collections::BTreeMap<&'static str, Name>);
 impl Kinds {
     fn new() -> Option<Self> {
         let all = [
-            "tick", "persist", "complete", "arrive", "request", "crash", "restart",
+            "tick", "persist", "complete", "arrive", "request", "crash", "restart", "fault",
         ];
         let mut kinds = std::collections::BTreeMap::new();
         for kind in all {
@@ -605,6 +621,10 @@ pub struct Cluster {
     observed: BoundedQueue<Observed>,
     executed: BoundedMap<RequestId, LogIndex>,
     crashes: BoundedQueue<(NodeId, Incarnation, Crash)>,
+    /// The faults that have happened, in order, with when.
+    injected: BoundedQueue<(VirtualTime, Fault)>,
+    /// The nodes whose loss is scheduled or done, at most [`MAX_LOST`].
+    doomed: std::collections::BTreeSet<NodeId>,
     next_attempt: u64,
 }
 
@@ -659,6 +679,8 @@ impl Cluster {
             observed: BoundedQueue::with_items(bound.saturating_mul(OBSERVED_PER_EVENT)),
             executed: BoundedMap::new(bound),
             crashes: BoundedQueue::with_items(bound),
+            injected: BoundedQueue::with_items(bound),
+            doomed: std::collections::BTreeSet::new(),
             next_attempt: 1,
             config,
         };
@@ -671,6 +693,10 @@ impl Cluster {
                     disk,
                     incarnation: Incarnation::FIRST,
                     running: None,
+                    lost: false,
+                    paused: false,
+                    held: BoundedQueue::with_items(bound),
+                    armed: None,
                 },
             );
             cluster.boot(node)?;
@@ -915,6 +941,80 @@ impl Cluster {
         self.settle(restarted)
     }
 
+    /// Schedules `fault` (§9.1, [`crate::nemesis`]) at `at`. It is an event like any other, so
+    /// when it happens does not depend on how the run is split into `run_until` steps.
+    ///
+    /// # Errors
+    ///
+    /// [`ClusterError::Fault`] for a node outside the cluster or a loss past [`MAX_LOST`]
+    /// (nothing is scheduled), or [`ClusterError::Schedule`], also for a time before
+    /// [`Self::now`]. Any error marks the trace incomplete.
+    pub fn inject_at(&mut self, at: VirtualTime, fault: Fault) -> Result<(), ClusterError> {
+        let scheduled = self.vet(&fault).and_then(|()| {
+            let lost = match &fault {
+                Fault::Lose { node } => Some(*node),
+                Fault::Crash { .. }
+                | Fault::CrashAll { .. }
+                | Fault::Restart { .. }
+                | Fault::Pause { .. }
+                | Fault::Resume { .. }
+                | Fault::Partition(_)
+                | Fault::Cut { .. }
+                | Fault::Mend { .. }
+                | Fault::Heal
+                | Fault::Profiles { .. } => None,
+            };
+            self.schedule(at, None, Happening::Inject(fault))?;
+            if let Some(node) = lost {
+                self.doomed.insert(node);
+            }
+            Ok(())
+        });
+        self.settle(scheduled)
+    }
+
+    /// Arms a crash of `node` that fires when its running incarnation next syncs its
+    /// journal, at `point`, keeping `survival` of the unsynced bytes. The crash is a fault
+    /// like any other (see [`Self::faults`]); a crash or restart first disarms it. Arming
+    /// again replaces the earlier arming.
+    ///
+    /// # Errors
+    ///
+    /// [`ClusterError::Fault`] with [`NemesisError::UnknownNode`] for a node outside the
+    /// cluster.
+    pub fn arm(
+        &mut self,
+        node: NodeId,
+        point: CrashPoint,
+        survival: Survival,
+    ) -> Result<(), ClusterError> {
+        let slot = self
+            .nodes
+            .get_mut(&node)
+            .ok_or(ClusterError::Fault(NemesisError::UnknownNode { node }))?;
+        slot.armed = Some((point, survival));
+        Ok(())
+    }
+
+    /// The faults that have happened so far, in order, each with the virtual time it
+    /// happened at: scheduled ones when their events were handled, armed crashes when they
+    /// fired. A scenario asserts on this that its fault was not vacuous (W41).
+    pub fn faults(&self) -> impl Iterator<Item = &(VirtualTime, Fault)> {
+        self.injected.iter()
+    }
+
+    /// Whether `node` is paused now.
+    #[must_use]
+    pub fn is_paused(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|slot| slot.paused)
+    }
+
+    /// Whether `node` has been lost for good.
+    #[must_use]
+    pub fn is_lost(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|slot| slot.lost)
+    }
+
     /// Dispatches every event due by `at`, those the handling schedules meanwhile included,
     /// and then counts `at` as now. It only looks at the next event's time, drawing nothing
     /// and recording nothing of its own, so the run is the same however a driver splits it.
@@ -1062,8 +1162,9 @@ impl Cluster {
                 attempt,
                 op,
             } => self.request(*node, *client, *attempt, op.clone())?,
-            Happening::Crash { node } => self.crash(*node)?,
+            Happening::Crash { node } => self.crash(*node, Survival::Seeded)?,
             Happening::Restart { node } => self.restart(*node)?,
+            Happening::Inject(fault) => self.inject(fault)?,
         }
         self.observe()
     }
@@ -1078,7 +1179,9 @@ impl Cluster {
         if !current {
             return Ok(());
         }
-        self.step(node, Input::Tick)?;
+        if !slot.paused {
+            self.step(node, Input::Tick)?;
+        }
         let at = self.after(self.tick_us);
         self.schedule(at, Some(node), Happening::Tick { node })
     }
@@ -1232,16 +1335,163 @@ impl Cluster {
         self.step(node, Input::Client { attempt, op })
     }
 
+    /// Refuses a fault that names a node outside the cluster, or a loss past [`MAX_LOST`].
+    fn vet(&self, fault: &Fault) -> Result<(), ClusterError> {
+        let known = |node: NodeId| {
+            if self.nodes.contains_key(&node) {
+                Ok(())
+            } else {
+                Err(ClusterError::Fault(NemesisError::UnknownNode { node }))
+            }
+        };
+        match fault {
+            Fault::Crash { node, .. }
+            | Fault::Restart { node }
+            | Fault::Pause { node }
+            | Fault::Resume { node } => known(*node),
+            Fault::Lose { node } => {
+                known(*node)?;
+                if !self.doomed.contains(node) && self.doomed.len() >= MAX_LOST {
+                    return Err(ClusterError::Fault(NemesisError::TooManyLost {
+                        node: *node,
+                    }));
+                }
+                Ok(())
+            }
+            Fault::Cut { from, to } | Fault::Mend { from, to } => {
+                known(*from)?;
+                known(*to)
+            }
+            Fault::Partition(Partition::Groups(groups)) => {
+                groups.iter().flatten().try_for_each(|node| known(*node))
+            }
+            Fault::Partition(Partition::Cuts(cuts)) => cuts
+                .iter()
+                .try_for_each(|(from, to)| known(*from).and_then(|()| known(*to))),
+            Fault::CrashAll { .. } | Fault::Heal | Fault::Profiles { .. } => Ok(()),
+        }
+    }
+
+    /// Whether applying `fault` now changes anything: a crash of a node that is down, a
+    /// restart of one that runs or is lost, a pause of a node that cannot run and a resume
+    /// of one that is not paused do not, and are not counted as faults that happened.
+    fn changes_state(&self, fault: &Fault) -> bool {
+        let slot = |node: &NodeId| self.nodes.get(node);
+        match fault {
+            Fault::Crash { node, .. } => slot(node).is_some_and(|s| s.running.is_some()),
+            Fault::CrashAll { .. } => self.nodes.values().any(|s| s.running.is_some()),
+            Fault::Restart { node } => slot(node).is_some_and(|s| s.running.is_none() && !s.lost),
+            Fault::Lose { node } => slot(node).is_some_and(|s| !s.lost),
+            Fault::Pause { node } => slot(node).is_some_and(|s| s.running.is_some() && !s.paused),
+            Fault::Resume { node } => slot(node).is_some_and(|s| s.paused),
+            Fault::Partition(_)
+            | Fault::Cut { .. }
+            | Fault::Mend { .. }
+            | Fault::Heal
+            | Fault::Profiles { .. } => true,
+        }
+    }
+
+    /// Applies `fault` now.
+    fn inject(&mut self, fault: &Fault) -> Result<(), ClusterError> {
+        if !self.changes_state(fault) {
+            self.trace
+                .diagnostic(&format!("fault: {fault:?} has no effect now"));
+            return Ok(());
+        }
+        self.log_fault(fault.clone())?;
+        self.trace.diagnostic(&format!("fault: {fault:?}"));
+        match fault {
+            Fault::Crash { node, survival } => self.crash(*node, *survival),
+            Fault::CrashAll { survival } => {
+                let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
+                for node in &nodes {
+                    self.crash(*node, *survival)?;
+                }
+                Ok(())
+            }
+            Fault::Restart { node } => self.restart(*node),
+            Fault::Lose { node } => {
+                if let Some(slot) = self.nodes.get_mut(node) {
+                    slot.lost = true;
+                }
+                self.crash(*node, Survival::Seeded)
+            }
+            Fault::Pause { node } => {
+                if let Some(slot) = self.nodes.get_mut(node) {
+                    slot.paused = slot.running.is_some();
+                }
+                Ok(())
+            }
+            Fault::Resume { node } => self.resume(*node),
+            Fault::Partition(Partition::Groups(groups)) => {
+                let groups: Vec<&[NodeId]> = groups.iter().map(Vec::as_slice).collect();
+                self.net.links_mut().partition(&groups);
+                Ok(())
+            }
+            Fault::Partition(Partition::Cuts(cuts)) => {
+                for (from, to) in cuts {
+                    self.net.links_mut().cut(*from, *to);
+                }
+                Ok(())
+            }
+            Fault::Cut { from, to } => {
+                self.net.links_mut().cut(*from, *to);
+                Ok(())
+            }
+            Fault::Mend { from, to } => {
+                self.net.links_mut().heal(*from, *to);
+                Ok(())
+            }
+            Fault::Heal => {
+                self.net.links_mut().heal_all();
+                Ok(())
+            }
+            Fault::Profiles { peer, client } => {
+                self.net.set_profiles(*peer, *client);
+                Ok(())
+            }
+        }
+    }
+
+    /// `node` runs again after a pause, and takes what reached it meanwhile, in order.
+    fn resume(&mut self, node: NodeId) -> Result<(), ClusterError> {
+        let Some(slot) = self.nodes.get_mut(&node) else {
+            return Ok(());
+        };
+        if !slot.paused {
+            return Ok(());
+        }
+        slot.paused = false;
+        let mut held = Vec::new();
+        while let Some(input) = slot.held.pop() {
+            held.push(input);
+        }
+        held.into_iter()
+            .try_for_each(|input| self.step(node, input))
+    }
+
+    /// Notes that `fault` happened now.
+    fn log_fault(&mut self, fault: Fault) -> Result<(), ClusterError> {
+        let at = self.now();
+        self.injected
+            .push((at, fault), 0)
+            .map_err(|_| self.full("faults"))
+    }
+
     /// `node` crashes: the disk's crash model runs, and the incarnation is gone.
-    fn crash(&mut self, node: NodeId) -> Result<(), ClusterError> {
+    fn crash(&mut self, node: NodeId, survival: Survival) -> Result<(), ClusterError> {
         let Some(slot) = self.nodes.get_mut(&node) else {
             return Ok(());
         };
         if slot.running.is_none() {
             return Ok(());
         }
-        let kept = slot.disk.crash(&mut self.disk_rng);
+        let kept = slot.disk.crash_with(&mut self.disk_rng, survival);
         slot.running = None;
+        slot.paused = false;
+        slot.armed = None;
+        while slot.held.pop().is_some() {}
         let incarnation = slot.incarnation;
         self.trace
             .diagnostic(&format!("node {node} crashed: {kept:?}"));
@@ -1255,23 +1505,31 @@ impl Cluster {
         let Some(slot) = self.nodes.get_mut(&node) else {
             return Ok(());
         };
-        if slot.running.is_some() {
+        if slot.running.is_some() || slot.lost {
             return Ok(());
         }
         slot.incarnation = slot
             .incarnation
             .checked_next()
             .ok_or(ClusterError::IncarnationsExhausted { node })?;
+        slot.armed = None;
         self.boot(node)
     }
 
     /// Steps `input` into `node`'s core and executes its effects.
     fn step(&mut self, node: NodeId, input: Input) -> Result<(), ClusterError> {
-        let Some(running) = self
-            .nodes
-            .get_mut(&node)
-            .and_then(|slot| slot.running.as_mut())
-        else {
+        let Some(slot) = self.nodes.get_mut(&node) else {
+            return Ok(());
+        };
+        if slot.paused && slot.running.is_some() {
+            if slot.held.push(input, 0).is_err() {
+                self.trace.diagnostic(&format!(
+                    "node {node} is paused: an input is dropped, the held queue is full"
+                ));
+            }
+            return Ok(());
+        }
+        let Some(running) = slot.running.as_mut() else {
             return Ok(());
         };
         let effects = running.ctl.step(input);
@@ -1286,6 +1544,25 @@ impl Cluster {
                     self.send(node, Endpoint::Node(to), &bytes, None)?;
                 }
                 Effect::Respond { attempt, response } => {
+                    let reply_crash = match self.nodes.get_mut(&node) {
+                        Some(slot) => match slot.armed {
+                            Some((CrashPoint::BeforeReply, survival))
+                                if matches!(response, Response::Written { .. }) =>
+                            {
+                                slot.armed = None;
+                                Some(survival)
+                            }
+                            Some((CrashPoint::BeforeReply, _)) => None,
+                            Some((CrashPoint::BeforeSync | CrashPoint::AfterSync, _)) | None => {
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    if let Some(survival) = reply_crash {
+                        self.log_fault(Fault::Crash { node, survival })?;
+                        return self.crash(node, survival);
+                    }
                     let client = self
                         .asked
                         .get(&attempt)
@@ -1413,6 +1690,24 @@ impl Cluster {
         if slot.incarnation != incarnation {
             return Ok(());
         }
+        let armed = match effect {
+            Effect::Sync { .. } => match slot.armed {
+                Some((CrashPoint::BeforeSync | CrashPoint::AfterSync, _)) => slot.armed.take(),
+                Some((CrashPoint::BeforeReply, _)) | None => None,
+            },
+            Effect::SyncDir { .. }
+            | Effect::Append { .. }
+            | Effect::Truncate { .. }
+            | Effect::CreateJournal
+            | Effect::Send { .. }
+            | Effect::Respond { .. }
+            | Effect::Log(_)
+            | Effect::Observe(_) => None,
+        };
+        if let Some((CrashPoint::BeforeSync, survival)) = armed {
+            self.log_fault(Fault::Crash { node, survival })?;
+            return self.crash(node, survival);
+        }
         let Some(running) = slot.running.as_mut() else {
             return Ok(());
         };
@@ -1451,7 +1746,12 @@ impl Cluster {
             })?;
         }
         let latency = self.disk_latency();
-        self.completion(node, executed, latency)
+        self.completion(node, executed, latency)?;
+        if let Some((CrashPoint::AfterSync, survival)) = armed {
+            self.log_fault(Fault::Crash { node, survival })?;
+            self.crash(node, survival)?;
+        }
+        Ok(())
     }
 
     /// Schedules a storage effect's completion, if it has one, `latency` from now.

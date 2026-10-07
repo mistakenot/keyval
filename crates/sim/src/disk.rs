@@ -165,6 +165,28 @@ pub enum Fill {
     Garbage,
 }
 
+/// How much of a node's unsynced appended region a crash keeps.
+///
+/// [`Survival::Seeded`] is the crash model of §10.2 (DUR-9): the run's disk stream chooses.
+/// The others force one outcome, so a focused scenario (§9.1) can name the crash it needs
+/// instead of searching seeds for it. A forced outcome never changes what a seeded crash
+/// draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Survival {
+    /// The seed chooses: none, some or all, with a seed-chosen tail after a partial prefix.
+    Seeded,
+    /// None of the unsynced appended bytes survive.
+    Nothing,
+    /// A strict, non-empty prefix survives when the region is longer than one byte (a
+    /// mid-append crash); a region of at most one byte survives whole. Nothing follows it.
+    Partial,
+    /// A strict, non-empty prefix survives (as [`Survival::Partial`]) and garbage bytes
+    /// follow it up to the region's full extent.
+    PartialThenGarbage,
+    /// All of the unsynced appended bytes survive.
+    All,
+}
+
 /// What a crash kept, for the trace and the tests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Crash {
@@ -215,6 +237,45 @@ fn surviving_prefix(rng: &mut SplitMix64, len: usize) -> usize {
     }
 }
 
+/// The surviving prefix of an unsynced region of `len` bytes, and what follows it, as
+/// `survival` says.
+fn chosen(rng: &mut SplitMix64, len: usize, survival: Survival) -> (usize, Fill) {
+    let strict = |rng: &mut SplitMix64| {
+        if len > 1 {
+            1 + usize::try_from(below(rng, u64::try_from(len - 1).unwrap_or(u64::MAX))).unwrap_or(0)
+        } else {
+            len
+        }
+    };
+    match survival {
+        Survival::Seeded => {
+            let prefix = surviving_prefix(rng, len);
+            let fill = if prefix < len {
+                match below(rng, 3) {
+                    0 => Fill::None,
+                    1 => Fill::Zeros,
+                    _ => Fill::Garbage,
+                }
+            } else {
+                Fill::None
+            };
+            (prefix, fill)
+        }
+        Survival::Nothing => (0, Fill::None),
+        Survival::All => (len, Fill::None),
+        Survival::Partial => (strict(rng), Fill::None),
+        Survival::PartialThenGarbage => {
+            let prefix = strict(rng);
+            let fill = if prefix < len {
+                Fill::Garbage
+            } else {
+                Fill::None
+            };
+            (prefix, fill)
+        }
+    }
+}
+
 impl SimDisk {
     /// A new, empty data directory.
     #[must_use]
@@ -259,6 +320,12 @@ impl SimDisk {
     /// The node crashes: every handle dies, the lock is freed, and the journal becomes
     /// what the crash model keeps, chosen by `rng` (the run's disk stream).
     pub fn crash(&self, rng: &mut SplitMix64) -> Crash {
+        self.crash_with(rng, Survival::Seeded)
+    }
+
+    /// [`Self::crash`], with `survival` choosing what the appended region keeps. An
+    /// unsynced truncation's fate is still the seed's.
+    pub fn crash_with(&self, rng: &mut SplitMix64, survival: Survival) -> Crash {
         let mut state = self.0.borrow_mut();
         let state = &mut *state;
         state.generation += 1;
@@ -276,16 +343,7 @@ impl SimDisk {
         let truncated = keep < state.durable.len();
         let truncation_survived = !truncated || below(rng, 2) == 0;
         let (prefix, fill) = if truncation_survived {
-            let prefix = surviving_prefix(rng, region.len());
-            let fill = if prefix < region.len() {
-                match below(rng, 3) {
-                    0 => Fill::None,
-                    1 => Fill::Zeros,
-                    _ => Fill::Garbage,
-                }
-            } else {
-                Fill::None
-            };
+            let (prefix, fill) = chosen(rng, region.len(), survival);
             state.durable.truncate(keep);
             state
                 .durable
@@ -843,6 +901,90 @@ mod tests {
                 written,
                 "rule: a lost truncation writes nothing; a kept one writes only the surviving \
                  appends; seed={seed} {crash:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_survival_outcomes_hold_for_every_seed_and_seeded_is_unchanged() {
+        let head = pattern(1, 100);
+        let tail = pattern(7, 64);
+        for seed in 0..64 {
+            let crash_with = |survival| {
+                let (disk, mut handle) = synced(&head);
+                handle.append(&tail).unwrap();
+                let crash = disk.crash_with(&mut SplitMix64::new(seed), survival);
+                (crash, disk.journal().unwrap())
+            };
+            let (nothing, journal) = crash_with(Survival::Nothing);
+            assert_eq!(
+                (nothing.clone(), journal),
+                (
+                    Crash::Kept {
+                        truncation: None,
+                        prefix: count(0),
+                        region: count(64),
+                        fill: Fill::None,
+                        len: count(100),
+                    },
+                    head.clone()
+                ),
+                "rule: Survival::Nothing keeps the synced journal only; seed={seed}"
+            );
+            let (all, journal) = crash_with(Survival::All);
+            assert!(
+                matches!(&all, Crash::Kept { prefix, region, fill: Fill::None, .. }
+                    if prefix == region)
+                    && journal[100..] == tail,
+                "rule: Survival::All keeps the whole append; seed={seed} {all:?}"
+            );
+            let (partial, journal) = crash_with(Survival::Partial);
+            let Crash::Kept {
+                prefix, fill, len, ..
+            } = partial
+            else {
+                panic!("rule: Partial keeps the journal; seed={seed} {partial:?}");
+            };
+            let prefix = usize::try_from(prefix.get()).unwrap();
+            assert!(
+                0 < prefix
+                    && prefix < 64
+                    && fill == Fill::None
+                    && len == count(100 + prefix)
+                    && journal[100..] == tail[..prefix],
+                "rule: Partial keeps a strict non-empty prefix of the append; seed={seed} \
+                 prefix={prefix}"
+            );
+            let (torn, journal) = crash_with(Survival::PartialThenGarbage);
+            let Crash::Kept {
+                prefix, fill, len, ..
+            } = torn
+            else {
+                panic!("rule: PartialThenGarbage keeps the journal; seed={seed} {torn:?}");
+            };
+            let prefix = usize::try_from(prefix.get()).unwrap();
+            assert!(
+                0 < prefix
+                    && prefix < 64
+                    && fill == Fill::Garbage
+                    && len == count(164)
+                    && journal[100..100 + prefix] == tail[..prefix],
+                "rule: a garbage tail follows the prefix up to the region's extent; seed={seed} \
+                 prefix={prefix}"
+            );
+            let seeded = {
+                let (disk, mut handle) = synced(&head);
+                handle.append(&tail).unwrap();
+                disk.crash(&mut SplitMix64::new(seed))
+            };
+            let via_with = {
+                let (disk, mut handle) = synced(&head);
+                handle.append(&tail).unwrap();
+                disk.crash_with(&mut SplitMix64::new(seed), Survival::Seeded)
+            };
+            assert_eq!(
+                seeded, via_with,
+                "rule: Survival::Seeded is exactly the seeded crash model; seed={seed}"
             );
         }
     }

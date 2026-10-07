@@ -1455,6 +1455,31 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 8,
     },
     CheckDef {
+        id: "SIM-FAULTS",
+        summary: "the full §9.1 fault vocabulary on the real five-node simulated cluster \
+                  (W37.1): crash keeping nothing, a prefix, a garbage tail or everything of \
+                  the unsynced bytes; crashes armed before a sync, after a sync (its \
+                  completion reaching the next incarnation as a stale one) and before a \
+                  client reply (a retry replays the committed result); an all-node crash; \
+                  the loss of each of the ten node pairs and a refused third loss; symmetric \
+                  3/2, 4/1 and 2/2/1 partitions, directed cycles and one-way cuts; lost and \
+                  duplicated client responses and peer messages, delay and reordering; a \
+                  leader paused past an election timeout; a crash clearing a pause; \
+                  scheduled faults giving one trace however the run is polled; and refusal \
+                  of faults naming unknown nodes or past times. Faults that change state are \
+                  logged only when they do (a crash of a down node is not a fault that \
+                  happened). Simulation evidence from one fixed seed per scenario, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-3", "P3"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["nemesis_tests::"],
+        },
+        min_cases: 31,
+    },
+    CheckDef {
         id: "MODEL-SPEC",
         summary: "the reference model server, run as its own binary over real HTTP, \
                   answers every operation with a status the spec declares (or 405/415 \

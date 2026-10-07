@@ -17,6 +17,8 @@
 //! - [`net`]: the simulated network: seeded per-message delay, loss and duplication on
 //!   peer links and client paths, a directed link matrix for partitions, and bounded link
 //!   queues, carrying the same sealed peer envelopes as production (§9.1, W16).
+//! - [`nemesis`]: the fault vocabulary of §9.1 (W37.1): crash points, permanent loss, pauses,
+//!   partitions and link profiles as values the cluster schedules as events.
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
@@ -38,6 +40,9 @@ mod cluster_tests;
 pub mod disk;
 pub mod entropy;
 pub mod god_view;
+pub mod nemesis;
+#[cfg(test)]
+mod nemesis_tests;
 pub mod net;
 #[cfg(test)]
 mod net_profile_tests;
@@ -57,9 +62,10 @@ pub use clients::{
     ClientPlan, Clients, End, Intent, Outcome, POLL_MS, Plan, Planned, Profile, SentAttempt,
 };
 pub use cluster::{Answer, Cluster, ClusterError, Happening, Observed};
-pub use disk::{Crash, DiskHandle, Fill, SimDisk};
+pub use disk::{Crash, DiskHandle, Fill, SimDisk, Survival};
 pub use entropy::{MasterSeed, NodeStreams, SplitMix64, Subsystem};
 pub use god_view::{Changes, GodView, JournalView, NodeView};
+pub use nemesis::{CrashPoint, Fault, MAX_LOST, NemesisError, Partition};
 pub use net::{
     Arrival, Delivery, DropReason, LinkMatrix, LinkProfile, NetConfig, NetCounts, Network,
     PacketId, Ppm, QueueBound, Sent,
