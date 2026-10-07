@@ -1208,3 +1208,15 @@ tier = "T0"
 run = "./dev check CLUSTER-ROUTING"
 min_cases = 4
 status = "implemented"
+
+[[check]]
+id = "ENVELOPE-IDENTITY"
+summary = "Peer-envelope identity on a real node's peer address (§8.2, W21.3): an envelope with another cluster instance ID, protocol version, semantic fingerprint, a sender that is not the node it came from, is outside the voter set or is the receiver itself, or another destination is dropped and counted (one input_dropped log record each) while a matching envelope from a configured voter logs no drop; each forged envelope is also opened by a local codec of the same identity, which names the one reason it is refused for. The node does not yet report drop counts by reason (those are PEER-ENVELOPE's). Real processes on loopback: test evidence, not proof"
+kind = "test_group"
+covers = ["F-7", "A-3", "O-5"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check ENVELOPE-IDENTITY"
+min_cases = 2
+status = "implemented"

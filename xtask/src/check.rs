@@ -2048,6 +2048,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 4,
     },
+    CheckDef {
+        id: "ENVELOPE-IDENTITY",
+        summary: "Peer-envelope identity on a real node's peer address (§8.2, W21.3): an envelope with another cluster instance ID, protocol version, semantic fingerprint, a sender that is not the node it came from, is outside the voter set or is the receiver itself, or another destination is dropped and counted (one input_dropped log record each) while a matching envelope from a configured voter logs no drop; each forged envelope is also opened by a local codec of the same identity, which names the one reason it is refused for. The node does not yet report drop counts by reason (those are PEER-ENVELOPE's). Real processes on loopback: test evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["F-7", "A-3", "O-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &["identity_tests::"],
+        },
+        min_cases: 2,
+    },
 ];
 
 /// Outcome of one requested check.
