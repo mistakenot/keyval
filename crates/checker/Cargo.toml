@@ -1,0 +1,17 @@
+[package]
+name = "checker"
+version = "0.1.0"
+description = "keyval history checkers: K-1 to K-12 as independent oracles over the observation schema keyval.observation/v1 (test oracle, PLAN.md §10.5, T-12)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No production crate, by design: an oracle depends on none (T-12). The checkers read the
+# documented observation schema and replay committed commands through the reference model
+# (oracle -> oracle, DEP-RULE); serde_json reads the document.
+[dependencies]
+model = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

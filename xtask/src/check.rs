@@ -2061,6 +2061,32 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 2,
     },
+    CheckDef {
+        id: "K-1",
+        summary: "History checker K-1, durability (§10.5, W38.1): every success-acknowledged write (a terminal ok whose response reached its client) has its first execution, taken from the reference model's replay of the committed log, at its reported index with its reported version or existed, and every recoverable node's final log, rebuilt from recovered, append and truncate records, holds that entry's bytes at that index; a later legitimate overwrite passes, and a lost acknowledged write, a wrong index or effect, and an entry missing from or different on a recoverable node each fail. Hand-made histories and the two keyval.observation/v1 fixture runs: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-2", "DUR-1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k1::tests::"],
+        },
+        min_cases: 19,
+    },
+    CheckDef {
+        id: "K-2",
+        summary: "History checker K-2, exactly-once (§10.5, W38.1): every terminal execution response for a request ID (ok, version_mismatch or capacity_exceeded, a write's own or inside a known status answer) reports the index and decision of the one first execution the reference model's replay of the committed log gives it; two first executions, responses that disagree, an execution with no committed command and a conflicting reuse answered as an execution each fail, while request_id_conflict answers, replays and a second copy of the command in the log pass. Hand-made histories and the two keyval.observation/v1 fixture runs: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-6", "F-6", "DM-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k2::tests::"],
+        },
+        min_cases: 10,
+    },
 ];
 
 /// Outcome of one requested check.
