@@ -18,7 +18,13 @@
 //! Every step is a `keyval.dev.step/v1` record, to stderr and to the run directory's
 //! `steps.jsonl`; the first failed step ends the demo, which exits 1 (W01.6). Without
 //! `--assert` the demo pauses between its parts when stdin is a terminal; with it, it never
-//! pauses (check DEMO-M1 runs it so).
+//! pauses.
+//!
+//! **What is gated (br-fhk3, M1 audit F-01).** Check DEMO-M1 gates the demo's logic only:
+//! its tests never call [`run`]. The end-to-end run (`./dev demo m1 --assert`) is a manual
+//! run, not a gated check: it needs git over the live checkout and a full build of the
+//! server and the simulator, which the git-isolated gate candidate cannot give it. Its
+//! evidence is the run directory under `.local/demo/m1/`, test evidence and not proof.
 //!
 //! **The node's process.** The receipt (`node-1.pid.json`) exists exactly while its PID is a
 //! child this module has not reaped, so the kernel cannot have recycled it: a kill signals
@@ -252,7 +258,7 @@ fn milestones(items: &[ItemStatus]) -> Vec<String> {
 /// How the demo runs.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Never pause; check DEMO-M1 runs it so.
+    /// Never pause (the end-to-end run is manual; see the module docs).
     pub assert: bool,
     /// Whether its progress also goes to stdout as it happens (human mode).
     pub progress: bool,

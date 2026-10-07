@@ -1187,7 +1187,7 @@ status = "implemented"
 
 [[check]]
 id = "DEMO-M1"
-summary = "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the tracker export (an item is implemented exactly when its bead is closed), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic; the end-to-end run is test evidence, not proof"
+summary = "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the tracker export (an item is implemented exactly when its bead is closed), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic only: no test calls `run`, and the end-to-end `./dev demo m1 --assert` run is manual and not gated (br-fhk3), so it is test evidence from a manual run, not proof"
 kind = "test_group"
 covers = ["G1", "P6"]
 api = []
