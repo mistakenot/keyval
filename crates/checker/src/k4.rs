@@ -133,7 +133,7 @@ fn conflicts(
 }
 
 /// How a reported decision differs from the model's, or `None` if it does not.
-fn differs(expected: Decision, reported: Decision) -> Option<Kind> {
+pub fn differs(expected: Decision, reported: Decision) -> Option<Kind> {
     match (expected, reported) {
         (Decision::Set { version: a }, Decision::Set { version: b }) => {
             (a != b).then_some(Kind::ReportedVersionWrong)

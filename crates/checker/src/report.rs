@@ -104,6 +104,19 @@ pub enum Kind {
     WriteNotResolved,
     /// K-12: a logical write has more than one resolution.
     WriteResolvedTwice,
+    /// K-10: the run is incomplete (an unresolved or unresolvable write, or a run that
+    /// overflowed, exhausted its budget or broke its scenario envelope): never a pass.
+    HistoryIncomplete,
+    /// K-10: two logical writes report the same index.
+    IndexCollision,
+    /// K-10: a reported index no log could hold (beyond the configured log capacity).
+    IndexOutOfRange,
+    /// K-10: one logical write's observations disagree with each other.
+    ObservationsDisagree,
+    /// K-10: a write's resolution contradicts what clients observed of it.
+    ResolutionContradicted,
+    /// K-10: no placement of the writes within their intervals follows the index order.
+    NoLinearization,
 }
 
 impl fmt::Display for Kind {
@@ -156,6 +169,12 @@ impl fmt::Display for Kind {
             Self::AbsenceWithoutEvidence => "absence_without_evidence",
             Self::WriteNotResolved => "write_not_resolved",
             Self::WriteResolvedTwice => "write_resolved_twice",
+            Self::HistoryIncomplete => "history_incomplete",
+            Self::IndexCollision => "index_collision",
+            Self::IndexOutOfRange => "index_out_of_range",
+            Self::ObservationsDisagree => "observations_disagree",
+            Self::ResolutionContradicted => "resolution_contradicted",
+            Self::NoLinearization => "no_linearization",
         })
     }
 }

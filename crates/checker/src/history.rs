@@ -346,7 +346,7 @@ fn claim_of(
     }))
 }
 
-fn command_of(command: &Value, at: &str) -> Result<Command, CheckError> {
+pub fn command_of(command: &Value, at: &str) -> Result<Command, CheckError> {
     let operation = field(command, at, "operation")?;
     let at_op = format!("{at}.operation");
     let key = || -> Result<Key, CheckError> {

@@ -15,6 +15,7 @@ pub struct Doc {
     records: Vec<Value>,
     lost: Vec<u64>,
     max_live_keys: u64,
+    complete: bool,
 }
 
 impl Doc {
@@ -31,6 +32,7 @@ impl Doc {
             records,
             lost: Vec::new(),
             max_live_keys: 10_000,
+            complete: true,
         }
     }
 
@@ -104,11 +106,49 @@ impl Doc {
     }
 
     pub fn invoke(&mut self, attempt: u64, request_id: &str, misuse: bool) -> &mut Self {
+        self.invoke_op(
+            attempt,
+            request_id,
+            misuse,
+            json!({"op": "put", "key": "k", "value": "v"}),
+        )
+    }
+
+    /// An invocation of any write `operation`.
+    pub fn invoke_op(
+        &mut self,
+        attempt: u64,
+        request_id: &str,
+        misuse: bool,
+        operation: impl Into<Value>,
+    ) -> &mut Self {
         self.records
             .push(json!({"kind": "invoke", "seq": 5, "time": 5, "client": 1,
             "attempt": attempt, "target": {"node": 1, "incarnation": 0},
             "request_id": request_id, "misuse": misuse,
-            "operation": {"op": "put", "key": "k", "value": "v"}}));
+            "operation": operation.into()}));
+        self
+    }
+
+    /// A logical write's resolution: `resolved` is the schema word, `index` set exactly when it
+    /// executed.
+    pub fn resolve(
+        &mut self,
+        request_id: &str,
+        resolved: &str,
+        index: Option<u64>,
+        evidence: &[u64],
+    ) -> &mut Self {
+        self.records.push(
+            json!({"kind": "resolution", "seq": 9, "time": 9, "request_id": request_id,
+            "resolved": resolved, "index": index, "evidence": evidence}),
+        );
+        self
+    }
+
+    /// Marks the run incomplete, as a run that overflowed or ran out of budget is.
+    pub fn incomplete(&mut self) -> &mut Self {
+        self.complete = false;
         self
     }
 
@@ -153,7 +193,9 @@ impl Doc {
     }
 
     pub fn value(&self) -> Value {
-        json!({"schema": "keyval.observation/v1",
+        json!({"schema": "keyval.observation/v1", "complete": self.complete, "overflowed": [],
+            "event_budget": {"used": 0, "exhausted": false},
+            "scenario": {"status": "valid", "violated": null},
             "manifest": {"limits": {"max_key_bytes": 256, "max_value_bytes": 65536,
                 "max_live_keys": self.max_live_keys, "max_live_bytes": 67_108_864,
                 "max_log_entries": 1_000_000, "max_history_bytes": 3_221_225_472_u64}},

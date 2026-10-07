@@ -2207,6 +2207,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 17,
     },
+    CheckDef {
+        id: "K-10",
+        summary: "Black-box linearizability witness K-10 (§10.5, W38.3): from client observations alone (invoke, delivered response, delivery, resolution; never committed or other god-view records), attempts collapse by request ID with misuse attempts and their conflict answers excluded, reported indices are an untrusted candidate order (collisions, disagreeing answers, a resolution that contradicts the clients and indices beyond the log capacity are rejected), the reference model runs in that order and every reported decision is compared, and a greedy earliest-placement pass places each write between its first invocation and its first delivered terminal decision (an undelivered response or a later replay closes nothing); an unresolved or unresolvable write, or an incomplete run, fails (P10). Hand-made histories, each rule broken once, a protected negative-history corpus and a 10,000-operation fixture: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-1", "C-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k10::tests::"],
+        },
+        min_cases: 26,
+    },
 ];
 
 /// Outcome of one requested check.
