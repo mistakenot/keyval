@@ -439,6 +439,10 @@ pub struct Clients {
     misuse_ppm: u32,
 }
 
+/// How long, in virtual milliseconds, a run lets in-flight misuse attempts land once every
+/// client has finished.
+const DRAIN_MS: u64 = 5_000;
+
 /// One in a million: the unit of a misuse rate.
 const MILLION: u64 = 1_000_000;
 
@@ -523,6 +527,16 @@ impl Clients {
             self.hear_answers(cluster)?;
             self.hear_silences(cluster)?;
             self.start_ready(cluster)?;
+        }
+        if self.misuse_ppm > 0 {
+            // A misuse attempt sent by the last operation is still in flight: let it land,
+            // so the stream records its invocation and its answer (W36.2 review).
+            let end = cluster
+                .now()
+                .as_micros()
+                .saturating_add(DRAIN_MS * 1_000)
+                .min(until.as_micros());
+            cluster.run_until(VirtualTime::from_micros(end))?;
         }
         Ok(())
     }

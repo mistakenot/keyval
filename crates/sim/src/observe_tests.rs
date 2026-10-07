@@ -270,29 +270,45 @@ fn the_stream_rules_hold_for_a_real_run() {
     }
 }
 
+/// The first record of `kind` for `attempt` with `delivered` as given (`None`: any).
+fn position(
+    records: &[Value],
+    kind_wanted: &str,
+    attempt: u64,
+    delivered: Option<bool>,
+) -> Option<usize> {
+    records.iter().position(|record| {
+        kind(record) == kind_wanted
+            && record["attempt"].as_u64() == Some(attempt)
+            && delivered.is_none_or(|wanted| record["delivered"] == Value::Bool(wanted))
+    })
+}
+
 #[test]
 fn misuse_follows_a_terminal_result_is_a_conflict_and_is_no_logical_write() {
+    let mut misused = 0;
     let mut conflicts = 0;
     for seed in 0..SEEDS {
         let (clients, cluster, config, meta) = run(seed, ALWAYS);
         let document = observe::document(&cluster, &clients, &config, &meta).unwrap();
         let records = records(&document);
-        let misuse: Vec<&Value> = records
-            .iter()
-            .filter(|record| kind(record) == "invoke" && record["misuse"] == Value::Bool(true))
-            .collect();
-        assert!(
-            !misuse.is_empty(),
-            "rule: with every terminal write followed by a misuse attempt, a run has some; \
-             seed={seed}"
-        );
         let resolutions: BTreeMap<&str, &Value> = records
             .iter()
             .filter(|record| kind(record) == "resolution")
             .map(|record| (record["request_id"].as_str().unwrap(), record))
             .collect();
-        for invoke in &misuse {
+        let mut once = BTreeSet::new();
+        for invoke in records
+            .iter()
+            .filter(|record| kind(record) == "invoke" && record["misuse"] == Value::Bool(true))
+        {
+            misused += 1;
             let id = invoke["request_id"].as_str().unwrap();
+            let attempt = invoke["attempt"].as_u64().unwrap();
+            assert!(
+                once.insert(id),
+                "rule: a misuse attempt is never retried, so a request ID has one; seed={seed} id={id}"
+            );
             let original = resolutions
                 .get(id)
                 .unwrap_or_else(|| panic!("rule: a misuse reuses a logical write's ID; {invoke}"));
@@ -300,53 +316,51 @@ fn misuse_follows_a_terminal_result_is_a_conflict_and_is_no_logical_write() {
                 original["resolved"], "executed",
                 "rule: misuse follows an observed terminal result (§10.3); seed={seed} id={id}"
             );
-            let attempt = invoke["attempt"].as_u64().unwrap();
-            let original_attempts: Vec<&Value> = records
-                .iter()
-                .filter(|record| {
-                    kind(record) == "invoke"
-                        && record["misuse"] == Value::Bool(false)
-                        && record["request_id"] == invoke["request_id"]
-                })
-                .collect();
             let decided = original["evidence"][0].as_u64().unwrap();
+            let decided_invoke = &records[position(records, "invoke", decided, None).unwrap()];
+            let own_write = decided_invoke["misuse"] == Value::Bool(false)
+                && decided_invoke["request_id"].as_str() == Some(id);
+            let own_status = decided_invoke["operation"]["op"] == "status"
+                && decided_invoke["operation"]["request_id"].as_str() == Some(id);
             assert!(
-                original_attempts
-                    .iter()
-                    .any(|record| record["attempt"].as_u64() == Some(decided)),
-                "rule: the original's evidence is one of its own attempts; seed={seed} id={id}"
+                own_write || own_status,
+                "rule: the evidence is one of the write's own attempts or its status lookup; \
+                 seed={seed} id={id} {decided_invoke}"
             );
-            let sent = records
-                .iter()
-                .position(|record| record["attempt"].as_u64() == Some(attempt))
-                .unwrap();
-            let answered = records
-                .iter()
-                .position(|record| kind(record) == "response" && record["attempt"] == decided)
-                .unwrap();
+            let heard = position(records, "delivery", decided, Some(true)).unwrap_or_else(|| {
+                panic!("rule: the evidence reached its client; seed={seed} id={id}")
+            });
+            let sent = position(records, "invoke", attempt, None).unwrap();
             assert!(
-                answered < sent,
-                "rule: a misuse attempt is invoked after the original's terminal response; \
-                 seed={seed} id={id}"
+                heard < sent,
+                "rule: a misuse is invoked after the client OBSERVED the terminal result, its \
+                 delivery (§10.3); seed={seed} id={id}"
             );
-            let response = records
+            let original_command = records.iter().find(|record| {
+                kind(record) == "invoke"
+                    && record["misuse"] == Value::Bool(false)
+                    && record["request_id"] == invoke["request_id"]
+            });
+            assert_ne!(
+                original_command.map(|record| &record["operation"]),
+                Some(&invoke["operation"]),
+                "rule: a misuse attempt carries a different command (§10.3); seed={seed} id={id}"
+            );
+            if let Some(response) = records
                 .iter()
-                .find(|record| kind(record) == "response" && record["attempt"] == attempt);
-            if let Some(response) = response {
+                .find(|record| kind(record) == "response" && record["attempt"] == attempt)
+            {
                 let outcome = &response["outcome"];
-                assert_ne!(
-                    outcome["code"], "ok",
-                    "rule: a different command under a used request ID never executes (§7.5 \
-                     step 3); seed={seed} {response}"
+                assert_eq!(
+                    outcome["code"], "request_id_conflict",
+                    "rule: a different command under a used request ID is answered \
+                     request_id_conflict and never executes (§7.5 step 3); seed={seed} {response}"
                 );
-                if outcome["code"] == "request_id_conflict" {
-                    conflicts += 1;
-                    assert_eq!(
-                        outcome["original_index"], original["index"],
-                        "rule: the conflict names the original's index (§8.4); seed={seed} \
-                         id={id}"
-                    );
-                }
+                conflicts += 1;
+                assert_eq!(
+                    outcome["original_index"], original["index"],
+                    "rule: the conflict names the original's index (§8.4); seed={seed} id={id}"
+                );
             }
         }
         let logical_writes = clients
@@ -361,10 +375,104 @@ fn misuse_follows_a_terminal_result_is_a_conflict_and_is_no_logical_write() {
         );
     }
     assert!(
-        conflicts > 0,
-        "rule: some misuse attempt reaches the node that answered and is answered \
-         request_id_conflict; conflicts={conflicts}"
+        misused > 0 && conflicts * 2 >= misused,
+        "rule: most misuse attempts reach the node that answered and are answered \
+         request_id_conflict; misused={misused} conflicts={conflicts}"
     );
+}
+
+#[test]
+fn every_lost_response_is_recorded_as_a_lost_delivery() {
+    let mut lost = 0;
+    for seed in 0..SEEDS {
+        let document = document(seed, 0);
+        let records = records(&document);
+        lost += records
+            .iter()
+            .filter(|record| {
+                kind(record) == "delivery" && record["delivered"] == Value::Bool(false)
+            })
+            .count();
+    }
+    assert!(
+        lost > 0,
+        "rule: with 5% client-path loss some responses are lost, and a loss is a delivery \
+         record with delivered=false (README); lost={lost}"
+    );
+}
+
+#[test]
+fn a_phase_follows_every_record_made_before_its_mark() {
+    for seed in 0..2 {
+        let config = run_config();
+        let master = MasterSeed::new(seed);
+        let net = NetConfig {
+            peer: LinkProfile::reliable(500),
+            client: LinkProfile::reliable(300),
+            queue: QueueBound::of(&config),
+            max_in_flight: EventBudget::DEFAULT,
+        };
+        let mut cluster = Cluster::new(config.clone(), master, net, EventBudget::DEFAULT).unwrap();
+        let mut stream = master.stream(Subsystem::Clients);
+        let plan = Plan::generate(&mut stream, config.key_value_limits(), Profile::PutGet);
+        let mut clients = Clients::new(plan, &config, stream);
+        let mut marks = vec![Mark::of(&cluster)];
+        for seconds in [1, 2, 3, RUN_SECONDS] {
+            clients
+                .run(&mut cluster, VirtualTime::from_micros(seconds * 1_000_000))
+                .unwrap();
+            marks.push(Mark::of(&cluster));
+        }
+        let meta = Meta {
+            seed,
+            scenario_version: 1,
+            profile: "put-get".to_owned(),
+            build_id: "test-build".to_owned(),
+            prng: "splitmix64".to_owned(),
+            max_events: EventBudget::DEFAULT.get(),
+            chaos_ticks: 1,
+            heal_budget_ticks: 1,
+            quiet_ticks: 1,
+            phases: Phases {
+                setup: marks[0],
+                baseline: marks[1],
+                chaos: marks[2],
+                heal: marks[3],
+                check: marks[4],
+            },
+        };
+        let document = observe::document(&cluster, &clients, &config, &meta).unwrap();
+        let records = records(&document);
+        assert!(
+            marks.windows(2).all(|pair| pair[0].seq < pair[1].seq),
+            "rule: the test's marks are distinct mid-run points; seed={seed} marks={marks:?}"
+        );
+        for (position, record) in records.iter().enumerate() {
+            if kind(record) != "phase" {
+                continue;
+            }
+            let name = record["phase"].as_str().unwrap();
+            let mark = match name {
+                "setup" => marks[0],
+                "baseline" => marks[1],
+                "chaos" => marks[2],
+                "heal" => marks[3],
+                _ => marks[4],
+            };
+            for (other, record) in records.iter().enumerate() {
+                if kind(record) == "phase" || kind(record) == "resolution" {
+                    continue;
+                }
+                let seq = record["seq"].as_u64().unwrap();
+                assert!(
+                    (other < position) == (seq <= mark.seq),
+                    "rule: a phase marked after N events follows every record of those events \
+                     and precedes later ones (§10.2); seed={seed} phase={name} mark={mark:?} \
+                     record {other} (seq {seq}) vs phase at {position}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

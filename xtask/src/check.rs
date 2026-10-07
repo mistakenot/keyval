@@ -1991,7 +1991,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["observe_tests::"],
         },
-        min_cases: 5,
+        min_cases: 7,
     },
     CheckDef {
         id: "PEER-TRANSPORT",

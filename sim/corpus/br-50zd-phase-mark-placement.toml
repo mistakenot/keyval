@@ -1,0 +1,12 @@
+# Regression case (PLAN.md §10.9, rule 9). Append-only (P9).
+bead = "br-50zd"
+checker = "SIM-OBSERVE"
+date = "2026-10-07"
+build = "parent e50ee11 plus the br-50zd work commit"
+failure = "a phase record was placed one event too early: it did not follow every record with seq <= its mark"
+scenario = "PUT/GET clients over reliable client links, run in stages to 1 s, 2 s, 3 s and 240 s so the phase marks are distinct mid-run points"
+seeds = [0, 1]
+rerun = "./dev check SIM-OBSERVE --case a_phase_follows_every_record_made_before_its_mark"
+shrunk = false
+non_vacuity = "reverting the phase placement fix made this test fail"
+claim_class = "simulation evidence, not proof"

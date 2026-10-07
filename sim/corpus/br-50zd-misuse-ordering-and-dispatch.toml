@@ -1,0 +1,11 @@
+# Regression case (PLAN.md §10.9, rule 9). Append-only (P9).
+bead = "br-50zd"
+checker = "SIM-OBSERVE"
+date = "2026-10-07"
+build = "parent e50ee11 plus the br-50zd work commit"
+failure = "misuse was ordered against the response rather than the client-observed delivery, was not required to be request_id_conflict, and a trailing misuse attempt was never dispatched before the run ended"
+scenario = "PUT/GET clients, 5% loss, 2% duplication, 1 KiB values, 240 s, misuse at 1,000,000 ppm, seeds 0..4"
+seeds = [0, 1, 2, 3]
+rerun = "./dev check SIM-OBSERVE --case misuse_follows_a_terminal_result_is_a_conflict_and_is_no_logical_write"
+shrunk = false
+claim_class = "simulation evidence, not proof"

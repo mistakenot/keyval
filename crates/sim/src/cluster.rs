@@ -1487,6 +1487,15 @@ impl Cluster {
         for record in &sent.records {
             self.record(record)?;
         }
+        if let (Some(reply), Some(_)) = (reply, sent.dropped) {
+            // No copy of this response is in flight, so it is lost here and now.
+            self.log_observed(|seq, at| Observed::Delivered {
+                seq,
+                at,
+                attempt: reply.attempt,
+                delivered: false,
+            })?;
+        }
         for (at, packet) in sent.arrivals {
             if let Some(reply) = reply {
                 self.replies

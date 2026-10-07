@@ -1158,7 +1158,7 @@ api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check SIM-OBSERVE"
-min_cases = 5
+min_cases = 7
 status = "implemented"
 
 [[check]]

@@ -59,8 +59,10 @@ impl Mark {
     }
 }
 
-/// When each run phase began (§10.2), in order. A phase begins before the first record whose
-/// `seq` reaches its mark's.
+/// When each run phase began (§10.2), in order.
+///
+/// A phase begins before the first record whose `seq` exceeds its mark's: a mark taken after
+/// N events follows every record of those N events, whose `seq` is at most N.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Phases {
     /// Setup.
@@ -390,7 +392,13 @@ fn outcome(attempt: AttemptId, op: &ClientOp, response: &Response) -> Result<Val
         (ClientOp::Write { request_id, .. }, Response::Refused(refusal)) => {
             Ok(refused_write(request_id, *refusal).json())
         }
-        (ClientOp::Write { .. }, _) => Err(wrong("a write's response of another kind")),
+        (
+            ClientOp::Write { .. },
+            Response::Found { .. }
+            | Response::NotFound { .. }
+            | Response::Page(_)
+            | Response::Status { .. },
+        ) => Err(wrong("a write's response of another kind")),
         (
             ClientOp::Get { .. },
             Response::Found {
@@ -423,8 +431,28 @@ fn outcome(attempt: AttemptId, op: &ClientOp, response: &Response) -> Result<Val
                 "lifecycle": lifecycle,
             }))
         }
-        (ClientOp::Get { .. }, _) => Err(wrong("a GET's response of another kind")),
-        (ClientOp::Scan { .. }, Response::Page(page)) => {
+        (
+            ClientOp::Get { .. },
+            Response::Written { .. }
+            | Response::Conflict { .. }
+            | Response::Page(_)
+            | Response::Status { .. },
+        ) => Err(wrong("a GET's response of another kind")),
+        (ClientOp::Scan { .. }, response) => scan_outcome(attempt, response),
+        (ClientOp::Status { request_id }, response) => {
+            status_outcome(attempt, request_id, response)
+        }
+    }
+}
+
+/// The outcome of `response` to a SCAN (§8.3).
+fn scan_outcome(attempt: AttemptId, response: &Response) -> Result<Value, ObserveError> {
+    let wrong = |what| ObserveError::Unrepresentable {
+        attempt: attempt.get(),
+        what,
+    };
+    match response {
+        Response::Page(page) => {
             let items: Vec<Value> = page.items().iter().map(item).collect();
             Ok(json!({
                 "code": "ok",
@@ -435,7 +463,7 @@ fn outcome(attempt: AttemptId, op: &ClientOp, response: &Response) -> Result<Val
                 "lifecycle": null,
             }))
         }
-        (ClientOp::Scan { .. }, Response::Refused(refusal)) => {
+        Response::Refused(refusal) => {
             let (code, lifecycle) =
                 read_refusal(*refusal).ok_or_else(|| wrong("a refusal a SCAN cannot get"))?;
             Ok(json!({
@@ -447,10 +475,11 @@ fn outcome(attempt: AttemptId, op: &ClientOp, response: &Response) -> Result<Val
                 "lifecycle": lifecycle,
             }))
         }
-        (ClientOp::Scan { .. }, _) => Err(wrong("a SCAN's response of another kind")),
-        (ClientOp::Status { request_id }, response) => {
-            status_outcome(attempt, request_id, response)
-        }
+        Response::Written { .. }
+        | Response::Conflict { .. }
+        | Response::Found { .. }
+        | Response::NotFound { .. }
+        | Response::Status { .. } => Err(wrong("a SCAN's response of another kind")),
     }
 }
 
@@ -717,9 +746,7 @@ pub fn document(
     let mut ordered: Vec<(u64, u64, Value)> = Vec::new();
     for entry in cluster.observed() {
         let (seq, time, value) = record(entry, &invoked, &sent)?;
-        while let Some((mark, phase)) = phases
-            .next_if(|(mark, phase)| (*mark, phase["time"].as_u64().unwrap_or(0)) <= (seq, time))
-        {
+        while let Some((mark, phase)) = phases.next_if(|(mark, _)| *mark < seq) {
             let at = phase["time"].as_u64().unwrap_or(0);
             ordered.push((mark, at, phase));
         }
