@@ -1062,7 +1062,7 @@ api = []
 class = "invariant"
 tier = "T0"
 run = "./dev check SERVER-HTTP"
-min_cases = 18
+min_cases = 21
 status = "implemented"
 
 [[check]]

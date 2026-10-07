@@ -1834,7 +1834,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "serve::tests::",
             ],
         },
-        min_cases: 18,
+        min_cases: 21,
     },
     CheckDef {
         id: "REQUEST-STATUS",

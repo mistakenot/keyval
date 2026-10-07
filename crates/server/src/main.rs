@@ -14,7 +14,7 @@ use server::logs::base;
 use server::output::{Code, Command as Which, ErrorReport, InitReport};
 use server::peer::{Peers, serve_peers};
 use server::runtime::{Options, start};
-use server::serve::{Responders, serve};
+use server::serve::{Responders, exit_on_halt, serve};
 use types::{Config, InstanceId, LogLevel, NodeId};
 
 /// One keyval node.
@@ -231,12 +231,7 @@ fn run(config: &Path, node: u64, log_file: Option<PathBuf>, json: bool) -> ExitC
     // The process lives as long as the node: a panic on any of its threads (the HTTP accept
     // thread included) halts it, and the process then exits rather than serve half-alive
     // (CD-7, br-7tjt). The halt is in the node's log too.
-    let halt = running.wait_halted();
-    eprintln!(
-        "keyval-server: node {node} halted: the {} thread panicked: {}",
-        halt.thread, halt.message
-    );
-    ExitCode::from(1)
+    ExitCode::from(exit_on_halt(&running, node, &mut std::io::stderr()))
 }
 
 fn main() -> ExitCode {

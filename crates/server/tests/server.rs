@@ -771,17 +771,21 @@ mod serve_tests {
 
     // check: SERVER-HTTP
 
-    use std::io::{BufReader, Write};
+    use std::io::{self, BufReader, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
     use serde_json::{Value as Json, json};
     use server::init::init;
     use server::run::prepare;
-    use server::runtime::{Options, start};
-    use server::serve::{Responders, Serving, serve};
+    use server::runtime::{Node, Options, start};
+    use server::serve::{
+        ACCEPT_BACKOFF_MAX, ACCEPT_BACKOFF_MIN, Accept, HALT_EXIT_STATUS, Responders, Serving,
+        accept_backoff, exit_on_halt, serve, serve_on,
+    };
     use types::Config;
 
     use crate::support::{
@@ -1053,6 +1057,146 @@ mod serve_tests {
              request ID, a write without an Idempotency-Key is 400 without one, DELETE is 405 \
              until W27, malformed HTTP is 400 and closes the connection, every refusal is \
              no-store, and a kept-alive connection serves the next request (§8.1, §8.4)"
+        );
+    }
+
+    /// An initialised, started node that is not yet served.
+    fn started_node(dir: &Path) -> (Config, Arc<Node>, Arc<Responders>) {
+        let (config, _) = config(dir);
+        init(&config, node(1), instance()).unwrap();
+        let prepared = prepare(&config, node(1)).unwrap();
+        let responders = Responders::new();
+        let running = start(
+            prepared,
+            &config,
+            node(1),
+            responders.outputs(),
+            &Options {
+                log_file: dir.join("node.log"),
+            },
+        )
+        .unwrap();
+        (config, Arc::new(running), responders)
+    }
+
+    /// A connection source whose `accept()` fails every time, counting its calls.
+    struct Failing(Arc<AtomicU64>);
+
+    impl Accept for Failing {
+        fn accept(&self) -> io::Result<TcpStream> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::other("fixture: persistent accept error"))
+        }
+    }
+
+    /// A connection source whose `accept()` panics.
+    struct Panicking;
+
+    impl Accept for Panicking {
+        fn accept(&self) -> io::Result<TcpStream> {
+            panic!("fixture: accept panics");
+        }
+    }
+
+    #[test]
+    fn accept_backoff_doubles_to_its_cap() {
+        let pauses: Vec<Duration> = [1, 2, 3, 7, 8, 100, u32::MAX]
+            .into_iter()
+            .map(accept_backoff)
+            .collect();
+        assert_eq!(
+            pauses,
+            vec![
+                ACCEPT_BACKOFF_MIN,
+                ACCEPT_BACKOFF_MIN * 2,
+                ACCEPT_BACKOFF_MIN * 4,
+                ACCEPT_BACKOFF_MIN * 64,
+                ACCEPT_BACKOFF_MAX,
+                ACCEPT_BACKOFF_MAX,
+                ACCEPT_BACKOFF_MAX,
+            ],
+            "rule: the pause after n failures in a row doubles from the minimum and never \
+             exceeds the cap (br-4ova, CD-9); failures 1,2,3,7,8,100,max"
+        );
+        assert_eq!(
+            accept_backoff(0),
+            ACCEPT_BACKOFF_MIN,
+            "rule: even a zero count (never used) yields the minimum pause"
+        );
+    }
+
+    #[test]
+    fn persistent_accept_error_backs_off_instead_of_spinning() {
+        let dir = scratch("accept-error-backoff");
+        let (config, running, responders) = started_node(&dir);
+        let calls = Arc::new(AtomicU64::new(0));
+        let address = SocketAddr::from(([127, 0, 0, 1], free_port()));
+        let serving = serve_on(
+            Failing(Arc::clone(&calls)),
+            address,
+            running,
+            responders,
+            &config,
+        )
+        .unwrap();
+        // Wait for the 8th failure: the loop is then in a pause of 640 ms or more (1 s cap).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while serving.accept_errors() < 8 {
+            assert!(
+                Instant::now() < deadline,
+                "fixture: eight accept errors within 10 s; counted={}",
+                serving.accept_errors()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (counted, made) = (serving.accept_errors(), calls.load(Ordering::SeqCst));
+        let stopped = Instant::now();
+        let running = serving.stop(Duration::from_secs(5)).unwrap();
+        let stop_took = stopped.elapsed();
+        if let Ok(running) = Arc::try_unwrap(running) {
+            running.shutdown().unwrap();
+        }
+        // Eight failures take about 1.3 s of pauses (10+20+...+640 ms); a spin makes millions.
+        assert!(
+            (8..=10).contains(&made) && counted <= made && made <= counted + 1,
+            "rule: a persistent accept() error is retried after growing pauses and counted, \
+             not spun on (br-4ova); calls={made} counted={counted}"
+        );
+        assert!(
+            stop_took < Duration::from_millis(300),
+            "rule: stop interrupts a backing-off accept loop within a slice, not the 640 ms+ \
+             pause it is in (br-4ova); took {stop_took:?}"
+        );
+    }
+
+    #[test]
+    fn accept_panic_halts_the_node_and_the_process_exits_with_status_1() {
+        let dir = scratch("accept-panic-halt");
+        let (config, running, responders) = started_node(&dir);
+        let address = SocketAddr::from(([127, 0, 0, 1], free_port()));
+        let serving = serve_on(
+            Panicking,
+            address,
+            Arc::clone(&running),
+            responders,
+            &config,
+        )
+        .unwrap();
+        let mut report = Vec::new();
+        let status = exit_on_halt(&running, node(1), &mut report);
+        let report = String::from_utf8(report).unwrap();
+        drop(serving);
+        if let Ok(running) = Arc::try_unwrap(running) {
+            // The halted node's own shutdown may report the halt: only the exit status counts.
+            let _ = running.shutdown();
+        }
+        assert!(
+            status == HALT_EXIT_STATUS
+                && HALT_EXIT_STATUS == 1
+                && report.contains("keyval-accept")
+                && report.contains("fixture: accept panics"),
+            "rule: a panic on the accept thread halts the node and the process exits with \
+             status 1, naming the thread (br-4ova, br-7tjt); status={status} report={report:?}"
         );
     }
 }

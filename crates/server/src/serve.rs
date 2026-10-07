@@ -12,6 +12,11 @@
 //!   waiting attempt per connection (no pipelining), are bounded too. A connection past
 //!   the bound is answered `429 busy` and closed.
 //! - An idle connection closes after [`IDLE_TIMEOUT`].
+//! - A failing `accept()` is retried after a pause that doubles from [`ACCEPT_BACKOFF_MIN`]
+//!   to at most [`ACCEPT_BACKOFF_MAX`] and resets on the next success, so a persistent
+//!   error (for example no file descriptors left) costs about a hundred cheap wakeups a second
+//!   (it polls the stop flag every 10 ms), not a spin.
+//!   Each failure is counted in [`Serving::accept_errors`] (a saturating `u64`).
 
 use std::collections::BTreeMap;
 use std::io::{self, BufReader};
@@ -36,6 +41,31 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// answering a write `unknown_outcome` and a read `unavailable`. The core answers every
 /// attempt it took by its deadline (§7.8); this only guards against a stopped node.
 const ANSWER_SLACK: Duration = Duration::from_secs(5);
+
+/// The pause after the first failed `accept()`; it doubles with each further failure in a row.
+pub const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(10);
+
+/// The longest pause between failed `accept()` calls.
+pub const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
+
+/// How often a backing-off accept loop looks at the stop flag.
+const ACCEPT_BACKOFF_SLICE: Duration = Duration::from_millis(10);
+
+/// A source of client connections: the listener, or a stand-in that fails on demand.
+pub trait Accept: Send + 'static {
+    /// Waits for the next connection.
+    ///
+    /// # Errors
+    ///
+    /// The operating system's error, which may persist (no descriptors left, say).
+    fn accept(&self) -> io::Result<TcpStream>;
+}
+
+impl Accept for TcpListener {
+    fn accept(&self) -> io::Result<TcpStream> {
+        Self::accept(self).map(|(stream, _)| stream)
+    }
+}
 
 /// The attempts waiting for the core's answer, by attempt ID.
 #[derive(Debug, Default)]
@@ -121,6 +151,8 @@ struct Shared {
     max_connections: usize,
     connections: AtomicUsize,
     stop: AtomicBool,
+    /// Failed `accept()` calls so far.
+    accept_errors: AtomicU64,
 }
 
 /// A running server.
@@ -143,6 +175,23 @@ pub fn serve(
     config: &Config,
 ) -> io::Result<Serving> {
     let address = listener.local_addr()?;
+    serve_on(listener, address, node, responders, config)
+}
+
+/// Serves the client API on connections from `acceptor`, reporting `address` as where it
+/// listens: [`serve`] with the connection source replaceable, so a test can make `accept()`
+/// fail or panic.
+///
+/// # Errors
+///
+/// The operating system's error if the accept thread cannot be had.
+pub fn serve_on<A: Accept>(
+    acceptor: A,
+    address: SocketAddr,
+    node: Arc<Node>,
+    responders: Arc<Responders>,
+    config: &Config,
+) -> io::Result<Serving> {
     let tick = Duration::from_millis(config.tick_ms());
     let deadline =
         tick.saturating_mul(u32::try_from(config.write_deadline().get()).unwrap_or(u32::MAX));
@@ -155,6 +204,7 @@ pub fn serve(
             .unwrap_or(usize::MAX),
         connections: AtomicUsize::new(0),
         stop: AtomicBool::new(false),
+        accept_errors: AtomicU64::new(0),
     });
     // Under the node's watch: a dead accept thread halts the node rather than leave it
     // serving no one (br-7tjt).
@@ -162,7 +212,7 @@ pub fn serve(
         let accepting = Arc::clone(&shared);
         shared
             .node
-            .spawn_watched("keyval-accept", move || accept_loop(&listener, &accepting))?
+            .spawn_watched("keyval-accept", move || accept_loop(&acceptor, &accepting))?
     };
     Ok(Serving {
         address,
@@ -176,6 +226,12 @@ impl Serving {
     #[must_use]
     pub const fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// How many `accept()` calls have failed so far.
+    #[must_use]
+    pub fn accept_errors(&self) -> u64 {
+        self.shared.accept_errors.load(Ordering::SeqCst)
     }
 
     /// Waits until the server stops (it never does on its own).
@@ -210,14 +266,62 @@ impl Serving {
     }
 }
 
-fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
-    for stream in listener.incoming() {
+/// The process's exit status when the node halts.
+pub const HALT_EXIT_STATUS: u8 = 1;
+
+/// Blocks until the node halts and returns the process's exit status.
+///
+/// A panic on any watched thread of `node` (the accept thread included) halts it. The report
+/// goes to `out`, and the process then stops rather than serve half-alive (CD-7, br-7tjt).
+pub fn exit_on_halt(running: &Node, node: NodeId, out: &mut impl io::Write) -> u8 {
+    let halt = running.wait_halted();
+    let _ = writeln!(
+        out,
+        "keyval-server: node {node} halted: the {} thread panicked: {}",
+        halt.thread, halt.message
+    );
+    HALT_EXIT_STATUS
+}
+
+/// The pause after `failures` failed `accept()` calls in a row (at least one): doubling from
+/// [`ACCEPT_BACKOFF_MIN`], never above [`ACCEPT_BACKOFF_MAX`].
+#[must_use]
+pub fn accept_backoff(failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(16);
+    ACCEPT_BACKOFF_MIN
+        .saturating_mul(1 << doublings)
+        .min(ACCEPT_BACKOFF_MAX)
+}
+
+/// Sleeps for `pause`, or until the server is told to stop.
+fn pause_unless_stopped(shared: &Shared, pause: Duration) {
+    let mut left = pause;
+    while !left.is_zero() && !shared.stop.load(Ordering::SeqCst) {
+        let slice = left.min(ACCEPT_BACKOFF_SLICE);
+        thread::sleep(slice);
+        left = left.saturating_sub(slice);
+    }
+}
+
+fn accept_loop<A: Accept>(acceptor: &A, shared: &Arc<Shared>) {
+    let mut failures: u32 = 0;
+    loop {
+        let stream = acceptor.accept();
         if shared.stop.load(Ordering::SeqCst) {
             return;
         }
         let Ok(stream) = stream else {
+            // Counted, and retried after a growing pause: a persistent error must not spin.
+            failures = failures.saturating_add(1);
+            let _ = shared
+                .accept_errors
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    Some(count.saturating_add(1))
+                });
+            pause_unless_stopped(shared, accept_backoff(failures));
             continue;
         };
+        failures = 0;
         if shared.connections.fetch_add(1, Ordering::SeqCst) >= shared.max_connections {
             shared.connections.fetch_sub(1, Ordering::SeqCst);
             let mut refusal = api::busy_connection();
