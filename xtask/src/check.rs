@@ -2151,6 +2151,36 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 25,
     },
+    CheckDef {
+        id: "SWARM-SCENARIO",
+        summary: "swarm configurations and scenario files (W37.2, §9.1, §9.4, §10.4, \
+                  T-10): each seed draws a non-empty subset of the nine fault types \
+                  and an intensity, with a no-fault control and a manifest record \
+                  that reads back; generated schedules are only self-undoing \
+                  episodes (crash and restart, pause and resume, partition and heal, \
+                  cut and mend, a network fault and the healthy profile), at most \
+                  two nodes lost, no network episodes overlapping, no conflicting \
+                  steps at one instant and every step before chaos ends, so three \
+                  voters are up, recovered and connected on links within 50 ms when \
+                  chaos ends (400 seeds, two workloads; 150 seeds run to the end of \
+                  chaos and judged on the real cluster); a hand-edited file is \
+                  refused as malformed (unknown fields, bad keys, values, IDs) or as \
+                  scenario invalid (§10.16: unbounded chaos or steps, a plan clients \
+                  would not generate, steps whose same-instant order could matter, \
+                  nodes left down or paused, links left cut or slow); and a file \
+                  reads back to its scenario and reproduces its seed's run exactly \
+                  (same trace hash). Armed crash points are not in the file. \
+                  Simulation evidence from a few hundred seeds, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-10"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["swarm_tests::", "scenario_tests::"],
+        },
+        min_cases: 31,
+    },
 ];
 
 /// Outcome of one requested check.

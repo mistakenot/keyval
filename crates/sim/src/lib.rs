@@ -19,6 +19,9 @@
 //!   queues, carrying the same sealed peer envelopes as production (§9.1, W16).
 //! - [`nemesis`]: the fault vocabulary of §9.1 (W37.1): crash points, permanent loss, pauses,
 //!   partitions and link profiles as values the cluster schedules as events.
+//! - [`swarm`] and [`scenario`]: swarm configurations (a non-empty fault subset and an
+//!   intensity per seed, plus the no-fault control) and the scenario a seed generates inside
+//!   the §9.4 healthy envelope, with its human-readable scenario file (W37.2, T-10).
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
@@ -52,10 +55,16 @@ pub mod observe;
 #[cfg(test)]
 mod observe_tests;
 pub mod replay;
+pub mod scenario;
+#[cfg(test)]
+mod scenario_tests;
 pub mod scheduler;
 pub mod slice;
 #[cfg(test)]
 mod slice_tests;
+pub mod swarm;
+#[cfg(test)]
+mod swarm_tests;
 pub mod trace;
 
 pub use clients::{
