@@ -2048,7 +2048,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["demo::tests::"],
         },
-        min_cases: 11,
+        min_cases: 12,
     },
     CheckDef {
         id: "AUDIT-REPORTS",

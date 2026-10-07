@@ -85,6 +85,10 @@ pub const LIMITATIONS: &[&str] = &[
      the status lookup over HTTP are pending",
     "no TLS and no authentication: the node listens on loopback only",
     "the build ID covers the committed tree; a dirty working tree is reported, not hashed",
+    "kill evidence is process-crash only: a SIGKILL ends the process but the page cache \
+     survives, so it does not show durability across power loss (D-46, §10.17)",
+    "equal trace hashes are a 64-bit FNV-1a comparison, not a byte comparison of the traces \
+     (`crates/sim/src/trace.rs`)",
 ];
 
 /// One work item and whether its bead is closed.
@@ -1337,6 +1341,25 @@ bead = ""
             report(false).render_human().ends_with("M1 demo: FAILED"),
             "rule: a failed demo says so last"
         );
+    }
+
+    #[test]
+    fn the_limitations_admit_process_crash_only_kills_and_hash_only_comparison() {
+        let text = report(true).render_human();
+        for wanted in [
+            "kill evidence is process-crash only",
+            "page cache survives",
+            "64-bit FNV-1a comparison, not a byte comparison",
+        ] {
+            assert!(
+                LIMITATIONS.iter().any(|line| line.contains(wanted)),
+                "rule: LIMITATIONS says {wanted:?} (P6, §11.6, M1 audit F-03); limitations={LIMITATIONS:?}"
+            );
+            assert!(
+                text.contains(wanted),
+                "rule: the human report prints the limitation {wanted:?} (P6, §11.6); text={text}"
+            );
+        }
     }
 
     #[cfg(unix)]
