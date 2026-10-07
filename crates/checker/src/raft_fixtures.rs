@@ -4,7 +4,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::godview::{Event, GodView, NodeState, Process, Role, Stamped};
+use crate::godview::{
+    Durable, Event, GodView, NodeState, Obligation, Process, Released, Role, Stamped, SyncState,
+};
 use crate::history::LogEntry;
 
 /// The payload digest the fixtures give an entry.
@@ -152,6 +154,64 @@ impl Run {
             log: Vec::new(),
             durable_term,
             durable_vote,
+        })
+    }
+
+    /// A sync of node `node`'s incarnation 0, as of its log and hard state now, requested and
+    /// then completed in the same step.
+    pub fn synced(
+        &mut self,
+        node: u64,
+        id: u64,
+        term: u64,
+        vote: Option<u64>,
+        last: (u64, u64),
+    ) -> &mut Self {
+        self.sync_record(node, id, SyncState::Requested, term, vote, last);
+        self.sync_record(node, id, SyncState::Completed, term, vote, last)
+    }
+
+    /// One `sync` record of node `node`'s incarnation 0.
+    pub fn sync_record(
+        &mut self,
+        node: u64,
+        id: u64,
+        state: SyncState,
+        term: u64,
+        vote: Option<u64>,
+        (last_index, last_term): (u64, u64),
+    ) -> &mut Self {
+        self.push(Event::Sync {
+            node,
+            incarnation: 0,
+            id,
+            state,
+            covers: Durable {
+                term,
+                vote,
+                last_index,
+                last_term,
+            },
+        })
+    }
+
+    /// A release by node `node`'s incarnation 0.
+    pub fn release(
+        &mut self,
+        node: u64,
+        what: Released,
+        hard_state: Option<(u64, Option<u64>)>,
+        (last_index, last_term): (u64, u64),
+    ) -> &mut Self {
+        self.push(Event::Release {
+            node,
+            incarnation: 0,
+            what,
+            requires: Obligation {
+                hard_state,
+                last_index,
+                last_term,
+            },
         })
     }
 

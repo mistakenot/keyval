@@ -48,6 +48,35 @@ pub enum Kind {
     ConflictingCertificates,
     /// K-8: a `committed` record names an entry no commit certificate supports.
     CommittedWithoutCertificate,
+    /// K-11: a vote was granted before its term and vote were durable (B-02).
+    VoteBeforeSync,
+    /// K-11: an append was acknowledged before its term, vote and entries were durable (B-03).
+    AckBeforeSync,
+    /// K-11: a client success was released before the entries it rests on were durable.
+    SuccessBeforeSync,
+    /// K-11: a read was published before the log it was served from was durable.
+    ReadBeforeSync,
+    /// K-11: a replica accepted an entry before it was durable.
+    AcceptBeforeSync,
+    /// K-12: a response after submission says `not_submitted`, or a never-submitted attempt
+    /// says `submitted` (B-15).
+    WrongAttemptState,
+    /// K-12: a response after submission reports a failure it cannot know (B-15).
+    GuessedFailureAfterSubmission,
+    /// K-12: an `unknown_outcome` for an attempt that was never submitted.
+    UnknownOutcomeWithoutSubmission,
+    /// K-12: an attempt was answered more than once.
+    SecondResponse,
+    /// K-12: a `status` answer whose state and result disagree.
+    StatusContradictsItself,
+    /// K-12: a write resolved as absent that has a submitted attempt or a stored result.
+    AbsenceContradicted,
+    /// K-12: a write resolved as not executed without `unknown` evidence on every lookup.
+    AbsenceWithoutEvidence,
+    /// K-12: a logical write has no resolution.
+    WriteNotResolved,
+    /// K-12: a logical write has more than one resolution.
+    WriteResolvedTwice,
 }
 
 impl fmt::Display for Kind {
@@ -74,6 +103,20 @@ impl fmt::Display for Kind {
             Self::StateDigestDiverges => "state_digest_diverges",
             Self::ConflictingCertificates => "conflicting_certificates",
             Self::CommittedWithoutCertificate => "committed_without_certificate",
+            Self::VoteBeforeSync => "vote_before_sync",
+            Self::AckBeforeSync => "ack_before_sync",
+            Self::SuccessBeforeSync => "success_before_sync",
+            Self::ReadBeforeSync => "read_before_sync",
+            Self::AcceptBeforeSync => "accept_before_sync",
+            Self::WrongAttemptState => "wrong_attempt_state",
+            Self::GuessedFailureAfterSubmission => "guessed_failure_after_submission",
+            Self::UnknownOutcomeWithoutSubmission => "unknown_outcome_without_submission",
+            Self::SecondResponse => "second_response",
+            Self::StatusContradictsItself => "status_contradicts_itself",
+            Self::AbsenceContradicted => "absence_contradicted",
+            Self::AbsenceWithoutEvidence => "absence_without_evidence",
+            Self::WriteNotResolved => "write_not_resolved",
+            Self::WriteResolvedTwice => "write_resolved_twice",
         })
     }
 }

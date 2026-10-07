@@ -2125,6 +2125,32 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 33,
     },
+    CheckDef {
+        id: "K-11",
+        summary: "Persistence ordering K-11 (§10.5, W40.2): on the trace, every vote grant, append acknowledgement, client success, published read and acceptance rests only on durability a completed sync already provided, namely the term and vote and the entries and never the commit index; a sync covers the log as of its request, a stale completion covers nothing (B-17) and a truncation uncovers a replaced entry until a later sync. Hand-made five-voter traces with each release broken once (B-02, B-03), the two keyval.observation/v1 fixture runs as controls and mutated copies that fail: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["DUR-1", "DUR-2", "C-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k11::tests::"],
+        },
+        min_cases: 24,
+    },
+    CheckDef {
+        id: "K-12",
+        summary: "Unknown-outcome honesty K-12 (§10.5, W40.2): after submission a write is answered a terminal decision or unknown_outcome and never a guessed failure (not_leader, busy, unavailable, recovering, history_full), not_submitted names only an attempt never submitted (a dropped proposal retracts its submission, an attached attempt counts as submitted), an attempt gets one response, a status answer never contradicts itself, every logical write has exactly one resolution, and a write resolved not_executed or refused has no decision or stored result and, after a submission, rests on unknown status lookups only. Hand-made traces with each rule broken once (B-15), the two keyval.observation/v1 fixture runs as controls and mutated copies that fail: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["A-5", "P8", "F-10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k12::tests::"],
+        },
+        min_cases: 25,
+    },
 ];
 
 /// Outcome of one requested check.

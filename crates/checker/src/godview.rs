@@ -56,6 +56,54 @@ pub struct NodeState {
     pub digest: String,
 }
 
+/// Where a sync stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncState {
+    /// Asked for: covers the log as it was now.
+    Requested,
+    /// Done: what it covered is on disk.
+    Completed,
+    /// Completed for a request of an earlier incarnation: covers nothing (B-17).
+    Stale,
+}
+
+/// What a sync covers, or a node recovers with: the hard state and the log's end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Durable {
+    /// The term.
+    pub term: u64,
+    /// The vote in that term.
+    pub vote: Option<u64>,
+    /// The last log index.
+    pub last_index: u64,
+    /// The term of the entry at `last_index`, 0 for an empty log.
+    pub last_term: u64,
+}
+
+/// What a release has to find already durable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Obligation {
+    /// The term and vote that must be durable (term, vote), if the release depends on them.
+    pub hard_state: Option<(u64, Option<u64>)>,
+    /// The log must be durable up to this index.
+    pub last_index: u64,
+    /// The term of the entry at `last_index`.
+    pub last_term: u64,
+}
+
+/// What a node released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Released {
+    /// A vote grant.
+    VoteGrant,
+    /// An append acknowledgement.
+    AppendAck,
+    /// A client success for an attempt.
+    ClientSuccess(u64),
+    /// A published read for an attempt.
+    PublishedRead(u64),
+}
+
 /// One god-view observation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -98,6 +146,30 @@ pub enum Event {
         acceptance_term: u64,
         /// SHA-256 of the entry's payload bytes, as the document writes it.
         digest: String,
+    },
+    /// A sync obligation changed state on a node incarnation.
+    Sync {
+        /// The node.
+        node: u64,
+        /// The node's incarnation.
+        incarnation: u64,
+        /// The sync's ID, unique in the run.
+        id: u64,
+        /// The state the sync reached.
+        state: SyncState,
+        /// The durable state the sync covers.
+        covers: Durable,
+    },
+    /// A node released a vote, an acknowledgement, a success or a read.
+    Release {
+        /// The node.
+        node: u64,
+        /// The node's incarnation.
+        incarnation: u64,
+        /// What was released.
+        what: Released,
+        /// What had to be durable first.
+        requires: Obligation,
     },
     /// The harness's own certificate computation committed an entry.
     Committed {
@@ -217,6 +289,8 @@ fn event_of(record: &Value, at: &str) -> Result<Option<Event>, CheckError> {
                 digest: str_field(record, at, "payload_digest")?.to_owned(),
             }
         }
+        "sync" => sync_event(record, at)?,
+        "release" => release_event(record, at)?,
         "committed" => Event::Committed {
             index: u64_field(record, at, "index")?,
             term: u64_field(record, at, "term")?,
@@ -248,6 +322,75 @@ fn event_of(record: &Value, at: &str) -> Result<Option<Event>, CheckError> {
         },
         _ => return Ok(None),
     }))
+}
+
+fn sync_event(record: &Value, at: &str) -> Result<Event, CheckError> {
+    let at_node = field(record, at, "at")?;
+    let at_node_path = format!("{at}.at");
+    Ok(Event::Sync {
+        node: u64_field(at_node, &at_node_path, "node")?,
+        incarnation: u64_field(at_node, &at_node_path, "incarnation")?,
+        id: u64_field(record, at, "sync")?,
+        state: match str_field(record, at, "state")? {
+            "requested" => SyncState::Requested,
+            "completed" => SyncState::Completed,
+            "stale" => SyncState::Stale,
+            other => return Err(unknown(at, "state", other)),
+        },
+        covers: durable_of(field(record, at, "covers")?, &format!("{at}.covers"))?,
+    })
+}
+
+fn release_event(record: &Value, at: &str) -> Result<Event, CheckError> {
+    let at_node = field(record, at, "at")?;
+    let at_node_path = format!("{at}.at");
+    let attempt = opt_u64(record, at, "attempt")?;
+    let requires = field(record, at, "requires")?;
+    let requires_at = format!("{at}.requires");
+    let hard_state = field(requires, &requires_at, "hard_state")?;
+    let hard_state = if hard_state.is_null() {
+        None
+    } else {
+        let hard_at = format!("{requires_at}.hard_state");
+        Some((
+            u64_field(hard_state, &hard_at, "term")?,
+            opt_u64(hard_state, &hard_at, "vote")?,
+        ))
+    };
+    Ok(Event::Release {
+        node: u64_field(at_node, &at_node_path, "node")?,
+        incarnation: u64_field(at_node, &at_node_path, "incarnation")?,
+        what: released_of(str_field(record, at, "what")?, attempt, at)?,
+        requires: Obligation {
+            hard_state,
+            last_index: u64_field(requires, &requires_at, "last_index")?,
+            last_term: u64_field(requires, &requires_at, "last_term")?,
+        },
+    })
+}
+
+fn durable_of(value: &Value, at: &str) -> Result<Durable, CheckError> {
+    Ok(Durable {
+        term: u64_field(value, at, "term")?,
+        vote: opt_u64(value, at, "vote")?,
+        last_index: u64_field(value, at, "last_index")?,
+        last_term: u64_field(value, at, "last_term")?,
+    })
+}
+
+fn released_of(what: &str, attempt: Option<u64>, at: &str) -> Result<Released, CheckError> {
+    let attempt_of = || {
+        attempt.ok_or_else(|| {
+            CheckError::malformed(format!("{at}.attempt"), format!("{what} names no attempt"))
+        })
+    };
+    Ok(match what {
+        "vote_grant" => Released::VoteGrant,
+        "append_ack" => Released::AppendAck,
+        "client_success" => Released::ClientSuccess(attempt_of()?),
+        "published_read" => Released::PublishedRead(attempt_of()?),
+        other => return Err(unknown(at, "what", other)),
+    })
 }
 
 fn unknown(at: &str, name: &str, value: &str) -> CheckError {

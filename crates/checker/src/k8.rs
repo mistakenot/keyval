@@ -195,6 +195,8 @@ impl Judge {
                 payload,
             } => self.committed(*index, *term, payload, at),
             Event::State { node, state } => self.state(*node, state, at),
+            // Persistence ordering is K-11's: K-8 reads neither syncs nor releases.
+            Event::Sync { .. } | Event::Release { .. } => {}
         }
         Ok(())
     }
