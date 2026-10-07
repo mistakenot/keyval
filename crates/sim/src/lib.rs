@@ -54,6 +54,9 @@ mod net_tests;
 pub mod observe;
 #[cfg(test)]
 mod observe_tests;
+pub mod phases;
+#[cfg(test)]
+mod phases_tests;
 pub mod replay;
 pub mod scenario;
 #[cfg(test)]

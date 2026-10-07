@@ -978,18 +978,47 @@ impl Scenario {
     /// [`ScenarioError::Setup`] if `config` does not have voters 1 to 5;
     /// [`ScenarioError::Cluster`] if the cluster cannot be built or a step cannot be queued.
     pub fn start(&self, config: &Config) -> Result<(Cluster, Clients), ScenarioError> {
+        let (mut cluster, clients) = self.begin(config)?;
+        self.inject_faults(&mut cluster, VirtualTime::ZERO)?;
+        Ok((cluster, clients))
+    }
+
+    /// The cluster and clients of this scenario with no fault scheduled, so a driver can run a
+    /// baseline first and schedule the faults with [`Self::inject_faults`] when chaos begins
+    /// (W37.3).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::start`], except for the steps.
+    pub fn begin(&self, config: &Config) -> Result<(Cluster, Clients), ScenarioError> {
         let voters: Vec<u64> = config.voters().map(NodeId::get).collect();
         if voters != (1..=VOTERS).collect::<Vec<_>>() {
             return Err(ScenarioError::Setup("the scenario drives voters 1 to 5"));
         }
         let seed = self.seed();
-        let mut cluster = Cluster::new(
+        let cluster = Cluster::new(
             config.clone(),
             seed,
             Self::net_config(config)?,
             EventBudget::DEFAULT,
         )
         .map_err(ScenarioError::Cluster)?;
+        let clients = Clients::new(self.plan.clone(), config, seed.stream(Subsystem::Clients));
+        Ok((cluster, clients))
+    }
+
+    /// Schedules every step of the schedule on `cluster`, each `offset` after its own time:
+    /// chaos begins at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// [`ScenarioError::Invalid`] for a step that is not a fault; [`ScenarioError::Cluster`]
+    /// if a step cannot be queued (also for a time before the cluster's now).
+    pub fn inject_faults(
+        &self,
+        cluster: &mut Cluster,
+        offset: VirtualTime,
+    ) -> Result<(), ScenarioError> {
         for timed in &self.faults {
             let fault = timed.step.fault().map_err(|error| {
                 ScenarioError::Invalid(Violation::BadStep {
@@ -998,11 +1027,13 @@ impl Scenario {
                 })
             })?;
             cluster
-                .inject_at(VirtualTime::from_micros(timed.at_ms * MS), fault)
+                .inject_at(
+                    VirtualTime::from_micros(offset.as_micros() + timed.at_ms * MS),
+                    fault,
+                )
                 .map_err(ScenarioError::Cluster)?;
         }
-        let clients = Clients::new(self.plan.clone(), config, seed.stream(Subsystem::Clients));
-        Ok((cluster, clients))
+        Ok(())
     }
 
     /// The scenario file's text: pretty-printed JSON, ending in a newline.

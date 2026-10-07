@@ -2220,6 +2220,35 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 26,
     },
+    CheckDef {
+        id: "RUN-PHASES",
+        summary: "run phases and heal protocol (W37.3, §10.2, §10.4, §9.4, A-4): a \
+                  scenario run elects a leader and completes baseline writes before \
+                  any fault is scheduled, runs chaos for the scenario's length with \
+                  its faults offset to chaos's start, then heals: armed crash points \
+                  are disarmed, paused nodes resume, crashed recoverable nodes \
+                  restart, links and profiles are restored, clients start nothing \
+                  new and resolve every outstanding logical write by retrying under \
+                  its own request ID among the recoverable nodes, one uniquely \
+                  identified PUT is written as the catch-up marker, and the heal \
+                  waits until every recoverable node has applied it, within 600 \
+                  ticks; the heal injects no fault beyond its restores, never edits \
+                  a log, forces an election, teleports state or drops a request, and \
+                  a heal that uses its budget is reported as stalled with its stage, \
+                  never as an error; a scenario that would lose a quorum cannot be \
+                  built; the same seed reproduces the run, its phase marks and its \
+                  heal exactly, and the run's observation document builds. \
+                  Simulation evidence from a few dozen seeds, not proof",
+        kind: Kind::TestGroup,
+        covers: &["A-4"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["phases_tests::"],
+        },
+        min_cases: 14,
+    },
 ];
 
 /// Outcome of one requested check.

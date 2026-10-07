@@ -996,6 +996,15 @@ impl Cluster {
         Ok(())
     }
 
+    /// Disarms every armed crash: the heal stops injecting faults, and an armed crash that
+    /// fired later would be one (§10.2). Returns how many nodes were armed.
+    pub fn disarm_all(&mut self) -> usize {
+        self.nodes
+            .values_mut()
+            .filter_map(|slot| slot.armed.take())
+            .count()
+    }
+
     /// The faults that have happened so far, in order, each with the virtual time it
     /// happened at: scheduled ones when their events were handled, armed crashes when they
     /// fired. A scenario asserts on this that its fault was not vacuous (W41).

@@ -437,6 +437,8 @@ pub struct Clients {
     sends: Vec<SentAttempt>,
     outcomes: Vec<Outcome>,
     misuse_ppm: u32,
+    /// Writes whose retry bounds ran out, each with its client, awaiting [`Self::resume_parked`].
+    parked: Vec<(usize, Op)>,
 }
 
 /// How long, in virtual milliseconds, a run lets in-flight misuse attempts land once every
@@ -469,7 +471,124 @@ impl Clients {
             sends: Vec::new(),
             outcomes: Vec::new(),
             misuse_ppm: 0,
+            parked: Vec::new(),
         }
+    }
+
+    /// Holds every client of the plan back: none starts an operation until
+    /// [`Self::release_plan`]. Clients added later are not held.
+    pub fn hold_plan(&mut self) {
+        for progress in &mut self.progress {
+            progress.ready_ms = u64::MAX;
+        }
+    }
+
+    /// Lets the plan's clients start, their think times counted from `now_ms`.
+    pub fn release_plan(&mut self, now_ms: u64) {
+        self.now_ms = self.now_ms.max(now_ms);
+        let planned = self.plan.clients.len().min(self.progress.len());
+        for progress in self.progress.iter_mut().take(planned) {
+            if progress.ready_ms == u64::MAX {
+                progress.ready_ms = now_ms;
+            }
+        }
+    }
+
+    /// Adds a client with `ops`, starting at `now_ms`, and returns it. Its operations are
+    /// recorded with the plan's, so the run's observation covers them.
+    pub fn add_client(&mut self, ops: Vec<Planned>, now_ms: u64) -> ClientId {
+        let client = ClientId::new(u64::try_from(self.progress.len()).unwrap_or(u64::MAX));
+        self.progress.push(Progress {
+            ready_ms: now_ms,
+            ..Progress::default()
+        });
+        self.plan.clients.push(ClientPlan { client, ops });
+        client
+    }
+
+    /// Makes every retry sequence started from now on choose among `nodes` only; sequences
+    /// already running keep theirs. The heal uses it to point resumed writes and the marker at
+    /// the nodes that can still answer (§10.2). `nodes` must be voters of the cluster.
+    pub fn retry_among(&mut self, nodes: &[NodeId]) {
+        let chosen: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .copied()
+            .filter(|node| nodes.contains(node))
+            .collect();
+        types::invariant!(
+            !chosen.is_empty(),
+            "CLIENTS-NODES",
+            "a client needs a node to retry on: asked for {nodes:?} among {:?}",
+            self.nodes
+        );
+        self.nodes = chosen;
+    }
+
+    /// Stops every client starting operations: each plan keeps only the operations already
+    /// started, so those in flight run to their ends and nothing new begins (§10.2: client
+    /// writes stop at the heal).
+    pub fn stop_starting(&mut self) {
+        for (plan, progress) in self.plan.clients.iter_mut().zip(&self.progress) {
+            plan.ops.truncate(progress.next);
+        }
+    }
+
+    /// How many operations are waiting on an attempt now.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.progress
+            .iter()
+            .filter(|progress| progress.running.is_some())
+            .count()
+    }
+
+    /// How many writes ended unresolved (their retry bounds ran out) and have not been
+    /// resumed.
+    #[must_use]
+    pub const fn parked(&self) -> usize {
+        self.parked.len()
+    }
+
+    /// Resumes parked writes: each idle client with a parked write retries it with a fresh
+    /// retry sequence, the same request ID and the same command (§10.2's heal). The write's
+    /// unresolved outcome is superseded by the one its resumed sequence reaches. Returns how
+    /// many were resumed; the others wait until their client is idle again.
+    ///
+    /// # Errors
+    ///
+    /// [`ClusterError`] from scheduling the attempts.
+    pub fn resume_parked(&mut self, cluster: &mut Cluster) -> Result<usize, ClusterError> {
+        self.now_ms = self.now_ms.max(cluster.now().as_micros() / 1_000);
+        let mut resumed = 0;
+        for at in 0..self.progress.len() {
+            if self.progress[at].running.is_some() {
+                continue;
+            }
+            let Some(position) = self.parked.iter().position(|(client, _)| *client == at) else {
+                continue;
+            };
+            let (_, parked) = self.parked.remove(position);
+            let client = ClientId::new(u64::try_from(at).unwrap_or(u64::MAX));
+            if let Some(ended) = self
+                .outcomes
+                .iter()
+                .position(|outcome| outcome.client == client && outcome.op == parked.index)
+            {
+                self.outcomes.remove(ended);
+            }
+            let first = self.nodes[pick(&mut self.rng, self.nodes.len())];
+            let (retry, next) =
+                Retry::start(self.bounds, OpKind::Write, &self.nodes, first, self.now_ms);
+            let op = Op {
+                retry,
+                answered: None,
+                ..parked
+            };
+            self.apply(cluster, at, op, next, None)?;
+            resumed += 1;
+        }
+        Ok(resumed)
     }
 
     /// These clients with the misuse stream on: each write that ends with a terminal result
@@ -728,6 +847,17 @@ impl Clients {
             }
             Next::Unresolved(exhausted) => {
                 self.end(at, &op, End::Unresolved(exhausted));
+                if op.request_id().is_some() {
+                    self.parked.push((at, op));
+                    // CD-9: each planned write parks at most once at a time.
+                    let planned: usize = self.plan.clients.iter().map(|plan| plan.ops.len()).sum();
+                    types::invariant!(
+                        self.parked.len() <= planned,
+                        "CLIENTS-PARKED-BOUND",
+                        "parked writes {} exceed the {planned} planned operations",
+                        self.parked.len()
+                    );
+                }
                 Ok(())
             }
         }
