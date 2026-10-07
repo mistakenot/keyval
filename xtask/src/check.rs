@@ -2019,6 +2019,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 11,
     },
+    CheckDef {
+        id: "CLUSTER-ROUTING",
+        summary: "Five-process operation and write routing (F-7, §8.1, §8.4, W21.2): five real processes started from config/local.toml (distinct client and peer addresses and data directories) elect one leader and replicate a write to all five; a write to a follower is 307 with a typed not_leader body and one Location at the leader's client address carrying the same path and re-encoded key, and sending the same request ID there commits; a follower answers an applied request ID from its own history without redirecting and serves reads locally; with no quorum a write is 503 unavailable listing the five configured nodes and no Location; after the leader is killed the other four elect and redirect to the new one. Real processes on loopback: test evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["F-7", "A-1", "A-3", "O-5"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "server",
+            filters: &["routing_tests::"],
+        },
+        min_cases: 4,
+    },
 ];
 
 /// Outcome of one requested check.
