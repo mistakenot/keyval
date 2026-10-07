@@ -20,7 +20,8 @@ use crate::entropy::SplitMix64;
 /// row each).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FaultKind {
-    /// A node crashes and restarts, keeping a seed-chosen part of its unsynced bytes.
+    /// A node crashes and restarts, keeping a seed-chosen part of its unsynced bytes. The
+    /// crash is timed, or armed at a crash point (before a sync, after a sync, before a reply).
     CrashRestart,
     /// Every node crashes at once and restarts, disks intact.
     AllNodeCrash,

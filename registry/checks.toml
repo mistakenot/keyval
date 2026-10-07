@@ -1302,7 +1302,7 @@ api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check SWARM-SCENARIO"
-min_cases = 31
+min_cases = 35
 status = "implemented"
 
 [[check]]

@@ -954,6 +954,7 @@ impl Cluster {
             let lost = match &fault {
                 Fault::Lose { node } => Some(*node),
                 Fault::Crash { .. }
+                | Fault::Arm { .. }
                 | Fault::CrashAll { .. }
                 | Fault::Restart { .. }
                 | Fault::Pause { .. }
@@ -975,7 +976,8 @@ impl Cluster {
 
     /// Arms a crash of `node` that fires when its running incarnation next syncs its
     /// journal, at `point`, keeping `survival` of the unsynced bytes. The crash is a fault
-    /// like any other (see [`Self::faults`]); a crash or restart first disarms it. Arming
+    /// like any other (see [`Self::faults`]); a crash first disarms it, and so does a restart,
+    /// even of a running node. Arming
     /// again replaces the earlier arming.
     ///
     /// # Errors
@@ -1355,6 +1357,7 @@ impl Cluster {
         };
         match fault {
             Fault::Crash { node, .. }
+            | Fault::Arm { node, .. }
             | Fault::Restart { node }
             | Fault::Pause { node }
             | Fault::Resume { node } => known(*node),
@@ -1387,7 +1390,9 @@ impl Cluster {
     fn changes_state(&self, fault: &Fault) -> bool {
         let slot = |node: &NodeId| self.nodes.get(node);
         match fault {
-            Fault::Crash { node, .. } => slot(node).is_some_and(|s| s.running.is_some()),
+            Fault::Crash { node, .. } | Fault::Arm { node, .. } => {
+                slot(node).is_some_and(|s| s.running.is_some())
+            }
             Fault::CrashAll { .. } => self.nodes.values().any(|s| s.running.is_some()),
             Fault::Restart { node } => slot(node).is_some_and(|s| s.running.is_none() && !s.lost),
             Fault::Lose { node } => slot(node).is_some_and(|s| !s.lost),
@@ -1403,14 +1408,33 @@ impl Cluster {
 
     /// Applies `fault` now.
     fn inject(&mut self, fault: &Fault) -> Result<(), ClusterError> {
+        if let Fault::Restart { node } = fault
+            && let Some(slot) = self.nodes.get_mut(node)
+            && slot.running.is_some()
+        {
+            // A restart of a running node boots nothing, but it still ends an armed crash that
+            // has not fired: the scenario's Restart closes the episode that armed it (T-10).
+            slot.armed = None;
+        }
         if !self.changes_state(fault) {
             self.trace
                 .diagnostic(&format!("fault: {fault:?} has no effect now"));
             return Ok(());
         }
+        if let Fault::Arm {
+            node,
+            point,
+            survival,
+        } = fault
+        {
+            // Arming is not a fault that happened: the crash logs itself when it fires.
+            self.trace.diagnostic(&format!("fault: {fault:?}"));
+            return self.arm(*node, *point, *survival);
+        }
         self.log_fault(fault.clone())?;
         self.trace.diagnostic(&format!("fault: {fault:?}"));
         match fault {
+            Fault::Arm { .. } => Ok(()),
             Fault::Crash { node, survival } => self.crash(*node, *survival),
             Fault::CrashAll { survival } => {
                 let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();

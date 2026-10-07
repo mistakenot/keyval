@@ -140,6 +140,18 @@ pub enum Fault {
         /// What its disk keeps.
         survival: Survival,
     },
+    /// `node` is armed to crash at `point`, keeping `survival` of its unsynced bytes, as
+    /// [`crate::Cluster::arm`] does. Arming is not a fault that happened: the crash is,
+    /// when it fires (once, or never if the node crashes, restarts or is disarmed first).
+    /// It does nothing if the node is down or lost.
+    Arm {
+        /// The node.
+        node: NodeId,
+        /// Where the crash fires.
+        point: CrashPoint,
+        /// What its disk keeps.
+        survival: Survival,
+    },
     /// Every running node crashes at once, each keeping `survival` (all-node crash).
     CrashAll {
         /// What each disk keeps.

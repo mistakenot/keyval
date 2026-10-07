@@ -2179,7 +2179,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["swarm_tests::", "scenario_tests::"],
         },
-        min_cases: 31,
+        min_cases: 35,
     },
     CheckDef {
         id: "K-3",

@@ -115,7 +115,35 @@ fn chaos_runs_for_the_scenarios_length_at_an_offset() {
         "rule: the baseline takes virtual time before chaos begins"
     );
     let offset = finished.phases.chaos.at.as_micros();
+    let fired = |wanted: NodeId| {
+        finished.cluster.faults().any(|(_, fault)| match fault {
+            Fault::Crash { node, .. } => *node == wanted,
+            _ => false,
+        })
+    };
     for timed in scenario.faults() {
+        // The latest crash or arming of `node` before this step: a restart closing an arming
+        // is a no-op when it never fired, so it is not logged.
+        let closes_arm = |wanted: NodeId| {
+            let mut last_is_arm = false;
+            for other in scenario.faults() {
+                if other.at_ms >= timed.at_ms {
+                    break;
+                }
+                match other.step {
+                    Step::Arm { node, .. } if node == wanted => last_is_arm = true,
+                    Step::Crash { node, .. } if node == wanted => last_is_arm = false,
+                    _ => {}
+                }
+            }
+            last_is_arm
+        };
+        match timed.step {
+            // Arming is not a fault that happened: its crash is logged when it fires.
+            Step::Arm { .. } => continue,
+            Step::Restart { node } if closes_arm(node) && !fired(node) => continue,
+            _ => {}
+        }
         let wanted = offset + timed.at_ms * 1_000;
         assert!(
             finished

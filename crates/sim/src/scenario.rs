@@ -9,8 +9,9 @@
 //! W37.3's).
 //!
 //! **The healthy envelope by construction (§9.4).** [`Scenario::generate`] draws faults only
-//! as *episodes* that undo themselves before the chaos phase ends: a crash is followed by its
-//! restart, a pause by its resume, a partition or cut by a heal or mend, a network fault by
+//! as *episodes* that undo themselves before the chaos phase ends: a crash (a timed one, or an
+//! armed crash point that fires on a state, at most once) is followed by its restart, which
+//! also disarms an armed crash that has not fired, a pause by its resume, a partition or cut by a heal or mend, a network fault by
 //! the healthy profile. At most two nodes are lost for good, so three voters are up, recovered
 //! and mutually connected when chaos ends, on links that deliver within 50 ms. The workload
 //! is at most [`MAX_CLIENTS`] logical writes outstanding, one per client. [`validate`] states
@@ -35,11 +36,13 @@
 //!
 //! **Scope of reproduction (T-10).** A file reproduces its seed's run when read by the same
 //! build under the same configuration with the same driver: it records the plan, the swarm
-//! and every scheduled step, not the configuration or the driver's own choices. It cannot
-//! express *armed* crash points (`Cluster::arm`: before a sync, after a sync, before a
-//! reply), which fire on a state and not at a time, so a run that arms them is not
-//! reproduced by its file alone (a `discovered` bead tracks the extension, which also needs
-//! a rule for disarming them when chaos ends).
+//! and every scheduled step, not the configuration or the driver's own choices. An *armed*
+//! crash point (`Cluster::arm`: before a sync, after a sync, before a reply) is a step like
+//! any other (`"fault": "arm"`, with its `node`, `point` and `survival`): it fires on a state
+//! and not at a time, at most once, and a restart of the node, running or not, disarms it, so
+//! [`validate`] requires a restart after every arm. A file with armed crashes therefore
+//! reproduces its run. Arming is not logged as a fault; the crash is, when it fires. Armed
+//! crashes of overlapping episodes on one node can cancel one another (a restart disarms).
 //!
 //! A file is read back with [`Scenario::parse`], which checks every key and value against the
 //! configured limits and every rule above, so a hand-edited file cannot smuggle in a state
@@ -58,7 +61,7 @@ use crate::clients::{
 use crate::cluster::{Cluster, ClusterError};
 use crate::disk::Survival;
 use crate::entropy::{MasterSeed, SplitMix64, Subsystem};
-use crate::nemesis::{Fault, MAX_LOST, NemesisError, Partition};
+use crate::nemesis::{CrashPoint, Fault, MAX_LOST, NemesisError, Partition};
 use crate::net::{LinkProfile, NetConfig, Ppm, QueueBound};
 use crate::scheduler::{EventBudget, VirtualTime};
 use crate::swarm::{FaultKind, Intensity, Swarm};
@@ -184,6 +187,17 @@ pub enum Step {
         /// What its disk keeps.
         survival: Survival,
     },
+    /// `node` is armed to crash at `point`, keeping `survival` of its unsynced bytes: the crash
+    /// fires when the node next reaches that point, once, or never (a crash, a restart or the
+    /// heal disarms it). It does nothing to a node that is down.
+    Arm {
+        /// The node.
+        node: NodeId,
+        /// Where the crash fires.
+        point: CrashPoint,
+        /// What its disk keeps.
+        survival: Survival,
+    },
     /// Every running node crashes at once.
     CrashAll {
         /// What each disk keeps.
@@ -266,6 +280,15 @@ impl Step {
                 node: *node,
                 survival: *survival,
             },
+            Self::Arm {
+                node,
+                point,
+                survival,
+            } => Fault::Arm {
+                node: *node,
+                point: *point,
+                survival: *survival,
+            },
             Self::CrashAll { survival } => Fault::CrashAll {
                 survival: *survival,
             },
@@ -299,7 +322,7 @@ impl Step {
     #[must_use]
     pub const fn kind(&self) -> Option<FaultKind> {
         match self {
-            Self::Crash { .. } => Some(FaultKind::CrashRestart),
+            Self::Crash { .. } | Self::Arm { .. } => Some(FaultKind::CrashRestart),
             Self::CrashAll { .. } => Some(FaultKind::AllNodeCrash),
             Self::Lose { .. } => Some(FaultKind::PermanentLoss),
             Self::Pause { .. } => Some(FaultKind::Pause),
@@ -563,6 +586,7 @@ impl Step {
     fn resources(&self) -> Vec<Resource> {
         match self {
             Self::Crash { node, .. }
+            | Self::Arm { node, .. }
             | Self::Restart { node }
             | Self::Lose { node }
             | Self::Pause { node }
@@ -588,6 +612,7 @@ impl Step {
             Self::Restart { .. } | Self::Resume { .. } | Self::Mend { .. } | Self::Heal => true,
             Self::Net { peer, client } => *peer == HEALTHY_PEER && *client == HEALTHY_CLIENT,
             Self::Crash { .. }
+            | Self::Arm { .. }
             | Self::CrashAll { .. }
             | Self::Lose { .. }
             | Self::Pause { .. }
@@ -627,6 +652,9 @@ const fn check_enabled(swarm: Swarm, at_ms: u64, step: &Step) -> Result<(), Viol
 struct Replay {
     nodes: Vec<NodeId>,
     down: BTreeSet<NodeId>,
+    /// Nodes with an armed crash that a restart has not yet disarmed: it may have fired, so
+    /// the node must be restarted before chaos ends.
+    armed: BTreeSet<NodeId>,
     paused: BTreeSet<NodeId>,
     lost: BTreeSet<NodeId>,
     cut: BTreeSet<(NodeId, NodeId)>,
@@ -641,6 +669,7 @@ impl Replay {
                 .filter_map(|raw| NodeId::new(raw).ok())
                 .collect(),
             down: BTreeSet::new(),
+            armed: BTreeSet::new(),
             paused: BTreeSet::new(),
             lost: BTreeSet::new(),
             cut: BTreeSet::new(),
@@ -669,6 +698,15 @@ impl Replay {
                     self.down.insert(node);
                     self.paused.remove(&node);
                 }
+                self.armed.remove(&node);
+            }
+            // An armed crash may fire at any later time or never: the node is left armed
+            // until a restart disarms it, and chaos may not end while it is.
+            Step::Arm { node, .. } => {
+                let node = self.known(*node)?;
+                if !self.down.contains(&node) && !self.lost.contains(&node) {
+                    self.armed.insert(node);
+                }
             }
             Step::CrashAll { .. } => {
                 for node in &self.nodes {
@@ -677,17 +715,20 @@ impl Replay {
                     }
                 }
                 self.paused.clear();
+                self.armed.clear();
             }
             Step::Restart { node } => {
                 let node = self.known(*node)?;
                 if !self.lost.contains(&node) {
                     self.down.remove(&node);
                 }
+                self.armed.remove(&node);
             }
             Step::Lose { node } => {
                 let node = self.known(*node)?;
                 self.lost.insert(node);
                 self.down.insert(node);
+                self.armed.remove(&node);
                 self.paused.remove(&node);
                 if self.lost.len() > MAX_LOST {
                     return Err(Violation::TooManyLost {
@@ -752,11 +793,9 @@ impl Replay {
 
     /// The state when chaos ends must be healthy.
     fn settled(&self) -> Result<(), Violation> {
-        if let Some(node) = self
-            .nodes
-            .iter()
-            .find(|node| self.down.contains(node) && !self.lost.contains(node))
-        {
+        if let Some(node) = self.nodes.iter().find(|node| {
+            (self.down.contains(node) || self.armed.contains(node)) && !self.lost.contains(node)
+        }) {
             return Err(Violation::NodeLeftDown { node: node.get() });
         }
         if let Some(node) = self.paused.iter().next() {
@@ -1227,7 +1266,21 @@ fn episode(
     let node = live[pick(rng, live.len())];
     match kind {
         FaultKind::CrashRestart => {
-            push(start, Step::Crash { node, survival });
+            // Every fourth start time keeps the timed crash; the others arm a crash point
+            // (state-triggered: lost and stale sync completions, a reply never sent). The
+            // choice reads values already drawn, so no other draw moves.
+            let arm = POINTS.get(usize::try_from(start % 4).unwrap_or(POINTS.len()));
+            match arm {
+                Some(point) => push(
+                    start,
+                    Step::Arm {
+                        node,
+                        point: *point,
+                        survival,
+                    },
+                ),
+                None => push(start, Step::Crash { node, survival }),
+            }
             push(end, Step::Restart { node });
         }
         FaultKind::AllNodeCrash => {
@@ -1363,6 +1416,28 @@ const fn healthy() -> Step {
 
 // ---- the file's JSON ----
 
+const fn point_name(point: CrashPoint) -> &'static str {
+    match point {
+        CrashPoint::BeforeSync => "before_sync",
+        CrashPoint::AfterSync => "after_sync",
+        CrashPoint::BeforeReply => "before_reply",
+    }
+}
+
+fn point_of(name: &str) -> Result<CrashPoint, ScenarioError> {
+    POINTS
+        .into_iter()
+        .find(|point| point_name(*point) == name)
+        .ok_or_else(|| malformed(format!("unknown crash point {name:?}")))
+}
+
+/// The crash points an armed crash can name, in file order.
+const POINTS: [CrashPoint; 3] = [
+    CrashPoint::BeforeSync,
+    CrashPoint::AfterSync,
+    CrashPoint::BeforeReply,
+];
+
 const fn survival_name(survival: Survival) -> &'static str {
     match survival {
         Survival::Seeded => "seeded",
@@ -1391,6 +1466,16 @@ fn timed_to_json(timed: &Timed) -> Value {
         Step::Crash { node: n, survival } => {
             put("fault", json!("crash"));
             put("node", node(n));
+            put("survival", json!(survival_name(*survival)));
+        }
+        Step::Arm {
+            node: n,
+            point,
+            survival,
+        } => {
+            put("fault", json!("arm"));
+            put("node", node(n));
+            put("point", json!(point_name(*point)));
             put("survival", json!(survival_name(*survival)));
         }
         Step::CrashAll { survival } => {
@@ -1463,6 +1548,7 @@ fn timed_from_json(value: &Value) -> Result<Timed, ScenarioError> {
     let fault = str_of(value, "fault", "fault")?;
     let fields: &[&str] = match fault {
         "crash" => &["at_ms", "fault", "node", "survival"],
+        "arm" => &["at_ms", "fault", "node", "point", "survival"],
         "crash_all" => &["at_ms", "fault", "survival"],
         "restart" | "lose" | "pause" | "resume" => &["at_ms", "fault", "node"],
         "partition" => &["at_ms", "fault", "groups"],
@@ -1476,6 +1562,11 @@ fn timed_from_json(value: &Value) -> Result<Timed, ScenarioError> {
         "crash" => Step::Crash {
             node: node("node")?,
             survival: survival_of(str_of(value, "survival", "crash")?)?,
+        },
+        "arm" => Step::Arm {
+            node: node("node")?,
+            point: point_of(str_of(value, "point", "arm")?)?,
+            survival: survival_of(str_of(value, "survival", "arm")?)?,
         },
         "crash_all" => Step::CrashAll {
             survival: survival_of(str_of(value, "survival", "crash_all")?)?,

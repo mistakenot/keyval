@@ -15,7 +15,7 @@ use types::{Config, KeyValueLimits, NodeId};
 use crate::clients::{Plan, Profile};
 use crate::disk::Survival;
 use crate::entropy::MasterSeed;
-use crate::nemesis::MAX_LOST;
+use crate::nemesis::{CrashPoint, MAX_LOST};
 use crate::scenario::{
     EPISODE_MS, HEALTHY_CLIENT, HEALTHY_PEER, LEAD_MS, LinkSpec, SCHEMA, Scenario, ScenarioError,
     Step, Timed, VOTERS, Violation, validate,
@@ -158,7 +158,9 @@ fn every_fault_type_is_scheduled_by_some_seed_and_undone() {
                 injected.insert(kind);
             }
             match &step.step {
-                Step::Crash { survival, .. } | Step::CrashAll { survival } => {
+                Step::Crash { survival, .. }
+                | Step::Arm { survival, .. }
+                | Step::CrashAll { survival } => {
                     crashes_with_every_survival.insert(format!("{survival:?}"));
                 }
                 Step::Partition { groups } => {
@@ -1219,5 +1221,173 @@ fn a_scan_range_and_page_size_survive_the_file() {
     assert_eq!(
         read, scenario,
         "rule: a scan's bounds and page size are in the file, so it reproduces the run"
+    );
+}
+
+fn arm(n: u64, point: CrashPoint, at: u64) -> Timed {
+    timed(
+        at,
+        Step::Arm {
+            node: node(n),
+            point,
+            survival: Survival::Nothing,
+        },
+    )
+}
+
+#[test]
+fn every_crash_point_is_armed_by_some_seed_and_survives_the_file() {
+    let mut points = BTreeSet::new();
+    for seed in 0..SEEDS {
+        let scenario = generated(seed, Profile::PutGet);
+        let mut armed = false;
+        for step in scenario.faults() {
+            if let Step::Arm { point, .. } = step.step {
+                points.insert(format!("{point:?}"));
+                armed = true;
+            }
+        }
+        if armed {
+            let read = Scenario::parse(&scenario.to_text(), limits()).unwrap();
+            assert_eq!(
+                read, scenario,
+                "rule: an armed crash is in the file and reads back (T-10); seed={seed}"
+            );
+        }
+    }
+    assert_eq!(
+        points.len(),
+        3,
+        "rule: swarm campaigns arm BeforeSync, AfterSync and BeforeReply (§9.1); seen={points:?}"
+    );
+}
+
+#[test]
+fn an_arm_step_is_judged_like_a_crash() {
+    assert_eq!(
+        judge(
+            10_000,
+            &[arm(2, CrashPoint::AfterSync, 1_000), restart(2, 5_000)]
+        ),
+        Ok(()),
+        "rule: an armed crash with its restart is inside the envelope"
+    );
+    assert_eq!(
+        judge(10_000, &[arm(9, CrashPoint::BeforeSync, 1_000)]),
+        Err(Violation::UnknownNode { node: 9 }),
+        "rule: arming a node that is not a voter is refused"
+    );
+    let only_pauses = Swarm::Faulty {
+        faults: FaultSet::new(&[FaultKind::Pause]).unwrap(),
+        intensity: Intensity::Low,
+    };
+    assert!(
+        matches!(
+            validate(
+                only_pauses,
+                10_000,
+                &[arm(2, CrashPoint::BeforeReply, 1_000)],
+                &plan()
+            ),
+            Err(Violation::DisabledFault {
+                kind: FaultKind::CrashRestart,
+                ..
+            })
+        ),
+        "rule: an armed crash is a crash-restart fault, so a swarm without it refuses it"
+    );
+    assert!(
+        matches!(
+            validate(
+                Swarm::Control,
+                10_000,
+                &[arm(2, CrashPoint::BeforeReply, 1_000)],
+                &plan()
+            ),
+            Err(Violation::ControlInjects { .. })
+        ),
+        "rule: the control injects nothing, armed crashes included"
+    );
+}
+
+#[test]
+fn an_armed_crash_fires_and_its_file_reproduces_the_run() {
+    let faults: Vec<Timed> = (1..=5)
+        .map(|n| arm(n, CrashPoint::BeforeSync, 1_000))
+        .chain((1..=5).map(|n| restart(n, 8_000)))
+        .collect();
+    let scenario =
+        Scenario::from_parts(1, everything(), Profile::PutGet, 10_000, faults, plan()).unwrap();
+    let from_file = Scenario::parse(&scenario.to_text(), limits()).unwrap();
+    assert_eq!(
+        from_file, scenario,
+        "rule: the arming steps are in the file"
+    );
+    let (original, _) = run(&scenario);
+    let (replayed, _) = run(&from_file);
+    let mut crashed = false;
+    for (_, fault) in original.faults() {
+        if let crate::nemesis::Fault::Crash { .. } = fault {
+            crashed = true;
+        }
+    }
+    assert!(
+        crashed,
+        "rule: an armed crash fires from the scenario's own step and logs a crash"
+    );
+    assert_eq!(
+        replayed.trace().hash(),
+        original.trace().hash(),
+        "rule: a file with armed crashes reproduces its run's trace hash (T-10)"
+    );
+}
+
+#[test]
+fn an_armed_crash_must_be_closed_by_a_restart_and_a_bad_arm_line_is_malformed() {
+    assert_eq!(
+        judge(10_000, &[arm(2, CrashPoint::AfterSync, 1_000)]),
+        Err(Violation::NodeLeftDown { node: 2 }),
+        "rule: an armed crash may have fired, so chaos cannot end with it unclosed"
+    );
+    assert_eq!(
+        judge(
+            10_000,
+            &[
+                arm(2, CrashPoint::AfterSync, 1_000),
+                restart(2, 3_000),
+                arm(2, CrashPoint::BeforeSync, 4_000),
+            ]
+        ),
+        Err(Violation::NodeLeftDown { node: 2 }),
+        "rule: a restart closes only the arming before it"
+    );
+    let scenario = Scenario::from_parts(
+        1,
+        everything(),
+        Profile::PutGet,
+        10_000,
+        vec![arm(2, CrashPoint::BeforeReply, 1_000), restart(2, 5_000)],
+        plan(),
+    )
+    .unwrap();
+    let text = scenario.to_text();
+    let first_fault = |mutate: &dyn Fn(&mut Value)| {
+        let mut value: Value = serde_json::from_str(&text).unwrap();
+        mutate(&mut value["faults"][0]);
+        Scenario::parse(&value.to_string(), limits())
+    };
+    is_malformed(
+        &first_fault(&|f| f["point"] = Value::from("after_lunch")),
+        "an unknown crash point",
+    );
+    is_malformed(
+        &first_fault(&|f| {
+            f.as_object_mut().unwrap().remove("point");
+        }),
+        "an arm without its point",
+    );
+    is_malformed(
+        &first_fault(&|f| f["extra"] = Value::from(1)),
+        "an arm with an unknown key",
     );
 }
