@@ -12,7 +12,8 @@
 //! 3. runs `./dev sim run --seed 42 --profile slice` twice, each a fresh process, and checks
 //!    that the trace hashes are identical;
 //! 4. prints what is implemented and what is pending (P6), computed from the work graph and
-//!    the committed tracker export rather than written by hand, with the exact commands, the
+//!    the working-tree tracker export (`.beads/issues.jsonl`, which can be ahead of the
+//!    committed one) rather than written by hand, with the exact commands, the
 //!    build ID and the visible limitations (§11.6).
 //!
 //! Every step is a `keyval.dev.step/v1` record, to stderr and to the run directory's
@@ -78,8 +79,9 @@ const ONE_VOTER: &str = "config/fixtures/one-voter.toml";
 
 /// What the demo admits it cannot show yet (§11.6 "visible limitations").
 pub const LIMITATIONS: &[&str] = &[
-    "one real node only: a real multi-node cluster needs peer transport (W21) and `./dev \
-     cluster` (W22), M2",
+    "one real node only: the peer transport, five-process routing and envelope checks have \
+     landed (W21.1 to W21.3) but the W21 work item is still open and `./dev cluster` (W22) \
+     is pending, so this demo starts no multi-node cluster of real processes (M2)",
     "the five-node run is the deterministic simulator (`keyval-sim`), not five processes",
     "the HTTP API serves PUT and GET of a key, health and /v1/cluster; DELETE, CAS, SCAN and \
      the status lookup over HTTP are pending",
@@ -100,7 +102,7 @@ pub struct ItemStatus {
     pub title: String,
     /// Its milestone, e.g. `m1`.
     pub milestone: String,
-    /// Whether its bead is closed in the committed tracker export.
+    /// Whether its bead is closed in the working-tree tracker export.
     pub implemented: bool,
 }
 
@@ -937,7 +939,8 @@ fn read_receipt(path: &Path) -> Result<u64, String> {
 }
 
 /// The work items of `graph` (`registry/workgraph.toml`) with their milestones and titles,
-/// each implemented exactly when its bead is closed in `export` (the tracker export).
+/// each implemented exactly when its bead is closed in `export` (the tracker export the
+/// caller read: the demo passes the working-tree `.beads/issues.jsonl`, not the committed one).
 ///
 /// # Errors
 ///
@@ -1356,6 +1359,7 @@ bead = ""
             "kill evidence is process-crash only",
             "page cache survives",
             "64-bit FNV-1a comparison, not a byte comparison",
+            "starts no multi-node cluster of real processes",
         ] {
             assert!(
                 LIMITATIONS.iter().any(|line| line.contains(wanted)),

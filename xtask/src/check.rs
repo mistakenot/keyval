@@ -1696,7 +1696,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                   directory without creating it, no journal, an empty journal or an incomplete \
                   genesis, a held lock, another voter set or other semantic limits, and a \
                   damaged journal, modifying nothing; an initialised directory passes the \
-                  preflight holding the lock, and run then says it does not serve yet (W18.2); \
+                  preflight holding the lock, and run then goes on to start and serve the node (W18.2; judged by SERVER-RESTART, not here); \
                   the binary exits 0, 1 for a refusal and 2 for usage or configuration, its \
                   --json output conforming to keyval.server.init/v1 and keyval.server.error/v1",
         kind: Kind::TestGroup,
@@ -2039,7 +2039,7 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "DEMO-M1",
-        summary: "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the tracker export (an item is implemented exactly when its bead is closed), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic only: no test calls `run`, and the end-to-end `./dev demo m1 --assert` run is manual and not gated (br-fhk3), so it is test evidence from a manual run, not proof",
+        summary: "The M1 owner demo (§12.2 W19, P6): `./dev demo m1` derives implemented-versus-pending from the work graph and the working-tree tracker export, `.beads/issues.jsonl` (an item is implemented exactly when its bead is closed there), rewrites only the per-run lines of the one-voter fixture, signals a node only by its own pid receipt, parses HTTP responses strictly, and its report names the exact commands, build, visible limitations and, for a run that did not pass, says so last. Unit evidence for the demo's logic only: no test calls `run`, and the end-to-end `./dev demo m1 --assert` run is manual and not gated (br-fhk3), so it is test evidence from a manual run, not proof",
         kind: Kind::TestGroup,
         covers: &["G1", "P6"],
         class: ClaimClass::Invariant,
