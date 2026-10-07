@@ -26,6 +26,28 @@ pub enum Kind {
     InconsistentResponses,
     /// K-2: a misuse attempt (a conflicting reuse) was answered as an execution.
     MisuseAnsweredAsExecution,
+    /// K-8 election safety: two different nodes led one term.
+    TwoLeadersInTerm,
+    /// K-8 election safety: a node held votes for two different candidates in one term.
+    DoubleVote,
+    /// K-8 log matching: two logs hold different payload bytes under one index and term.
+    SameTermDifferentBytes,
+    /// K-8 log matching: two logs agree on an index and term but differ earlier.
+    PrefixDiffersUnderSameTerm,
+    /// K-8 leader append-only: a node removed log entries while it led.
+    LeaderTruncated,
+    /// K-8 leader completeness: a leader's log lacks an entry committed in an earlier term.
+    LeaderMissingCommitted,
+    /// K-8 state-machine safety: a node commits or applies past the certified prefix.
+    CommitBeyondCertificate,
+    /// K-8 state-machine safety: a node's log disagrees with a certified entry within its commit index.
+    NodeDivergesFromCertified,
+    /// K-8 state-machine safety: two nodes applied one index and hold different state digests.
+    StateDigestDiverges,
+    /// K-8: two different entries were certified at one index.
+    ConflictingCertificates,
+    /// K-8: a `committed` record names an entry no commit certificate supports.
+    CommittedWithoutCertificate,
 }
 
 impl fmt::Display for Kind {
@@ -41,6 +63,17 @@ impl fmt::Display for Kind {
             Self::TwoFirstExecutions => "two_first_executions",
             Self::InconsistentResponses => "inconsistent_responses",
             Self::MisuseAnsweredAsExecution => "misuse_answered_as_execution",
+            Self::TwoLeadersInTerm => "two_leaders_in_term",
+            Self::DoubleVote => "double_vote",
+            Self::SameTermDifferentBytes => "same_term_different_bytes",
+            Self::PrefixDiffersUnderSameTerm => "prefix_differs_under_same_term",
+            Self::LeaderTruncated => "leader_truncated",
+            Self::LeaderMissingCommitted => "leader_missing_committed",
+            Self::CommitBeyondCertificate => "commit_beyond_certificate",
+            Self::NodeDivergesFromCertified => "node_diverges_from_certified",
+            Self::StateDigestDiverges => "state_digest_diverges",
+            Self::ConflictingCertificates => "conflicting_certificates",
+            Self::CommittedWithoutCertificate => "committed_without_certificate",
         })
     }
 }
@@ -50,7 +83,8 @@ impl fmt::Display for Kind {
 pub struct Violation {
     /// The rule broken.
     pub kind: Kind,
-    /// The request ID concerned, as 32 hex characters.
+    /// The request ID concerned, as 32 hex characters; empty when the violation concerns no
+    /// request (K-8 judges nodes, terms and indices).
     pub request_id: String,
     /// The attempt whose response shows it, if one does.
     pub attempt: Option<u64>,

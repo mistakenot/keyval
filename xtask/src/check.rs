@@ -2112,6 +2112,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 10,
     },
+    CheckDef {
+        id: "K-8",
+        summary: "Raft safety K-8 (§10.5, W40.1): on the god view after every step, election safety (one leader per term, one vote per term; leaders of different terms may overlap), log matching on entry bytes and term, leader completeness at election, state-machine safety (commit and applied within the certified prefix, node logs agree with certified entries within commit, one state digest per applied index, one certificate per index) and leader append-only, with commitment decided by commit certificates recomputed from accept records (a majority accepting an entry in its own term; an old-term entry on a majority of disks is not committed by itself; certificates survive node loss). Hand-made five-voter god views, each property broken once, and the two keyval.observation/v1 fixture runs plus a mutated copy: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-1", "C-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k8::tests::"],
+        },
+        min_cases: 33,
+    },
 ];
 
 /// Outcome of one requested check.

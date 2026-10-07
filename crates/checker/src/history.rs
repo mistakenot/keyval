@@ -349,14 +349,14 @@ fn bad(at: &str, name: &str, error: &DataError) -> CheckError {
     CheckError::malformed(format!("{at}.{name}"), error.to_string())
 }
 
-fn log_entry(item: &Value, at: &str) -> Result<LogEntry, CheckError> {
+pub fn log_entry(item: &Value, at: &str) -> Result<LogEntry, CheckError> {
     Ok(LogEntry {
         term: u64_field(item, at, "term")?,
         payload: str_field(item, at, "payload")?.to_owned(),
     })
 }
 
-fn node_of(record: &Value, at: &str) -> Result<u64, CheckError> {
+pub fn node_of(record: &Value, at: &str) -> Result<u64, CheckError> {
     u64_field(field(record, at, "at")?, &format!("{at}.at"), "node")
 }
 
@@ -364,37 +364,41 @@ fn request_id(object: &Value, at: &str, name: &str) -> Result<RequestId, CheckEr
     RequestId::parse(str_field(object, at, name)?).map_err(|error| bad(at, name, &error))
 }
 
-fn field<'a>(object: &'a Value, at: &str, name: &str) -> Result<&'a Value, CheckError> {
+pub fn field<'a>(object: &'a Value, at: &str, name: &str) -> Result<&'a Value, CheckError> {
     object
         .get(name)
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "field absent".to_owned()))
 }
 
-fn str_field<'a>(object: &'a Value, at: &str, name: &str) -> Result<&'a str, CheckError> {
+pub fn str_field<'a>(object: &'a Value, at: &str, name: &str) -> Result<&'a str, CheckError> {
     field(object, at, name)?
         .as_str()
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "not a string"))
 }
 
-fn u64_field(object: &Value, at: &str, name: &str) -> Result<u64, CheckError> {
+pub fn u64_field(object: &Value, at: &str, name: &str) -> Result<u64, CheckError> {
     field(object, at, name)?
         .as_u64()
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "not an unsigned integer"))
 }
 
-fn bool_field(object: &Value, at: &str, name: &str) -> Result<bool, CheckError> {
+pub fn bool_field(object: &Value, at: &str, name: &str) -> Result<bool, CheckError> {
     field(object, at, name)?
         .as_bool()
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "not a boolean"))
 }
 
-fn array_field<'a>(object: &'a Value, at: &str, name: &str) -> Result<&'a Vec<Value>, CheckError> {
+pub fn array_field<'a>(
+    object: &'a Value,
+    at: &str,
+    name: &str,
+) -> Result<&'a Vec<Value>, CheckError> {
     field(object, at, name)?
         .as_array()
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "not an array"))
 }
 
-fn opt_u64(object: &Value, at: &str, name: &str) -> Result<Option<u64>, CheckError> {
+pub fn opt_u64(object: &Value, at: &str, name: &str) -> Result<Option<u64>, CheckError> {
     let value = field(object, at, name)?;
     if value.is_null() {
         return Ok(None);
@@ -415,7 +419,7 @@ fn opt_bool(object: &Value, at: &str, name: &str) -> Result<Option<bool>, CheckE
         .ok_or_else(|| CheckError::malformed(format!("{at}.{name}"), "not a boolean or null"))
 }
 
-fn u64_set(value: &Value, at: &str) -> Result<BTreeSet<u64>, CheckError> {
+pub fn u64_set(value: &Value, at: &str) -> Result<BTreeSet<u64>, CheckError> {
     value
         .as_array()
         .ok_or_else(|| CheckError::malformed(at, "not an array"))?
