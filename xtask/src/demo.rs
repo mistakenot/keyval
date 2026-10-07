@@ -1321,7 +1321,6 @@ bead = ""
         for wanted in [
             "implemented  W18 title of W18",
             "pending      W19 title of W19",
-            "M2: 0 of 0",
             "visible limitations:",
             "one real node only",
             "./dev sim run --seed 42 --profile slice",
@@ -1329,14 +1328,21 @@ bead = ""
             "(DIFFERENT)",
             "DIRTY",
         ] {
-            if wanted == "M2: 0 of 0" {
-                continue;
-            }
             assert!(
                 text.contains(wanted),
                 "rule: the report says {wanted:?} (P6, §11.6); text={text}"
             );
         }
+        // The report counts a later milestone's items too; its line is asserted against a
+        // report that has one (the M1 fixture has none, so "M2: 0 of 0" is never printed).
+        let mut with_m2 = report(true);
+        with_m2.items.push(item("W30", "m2", false));
+        assert!(
+            with_m2
+                .render_human()
+                .contains("M2: 0 of 1 work items implemented"),
+            "rule: the report counts the pending items of the next milestone (§11.6)"
+        );
         assert!(
             report(false).render_human().ends_with("M1 demo: FAILED"),
             "rule: a failed demo says so last"
