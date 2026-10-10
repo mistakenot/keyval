@@ -53,6 +53,21 @@ pub enum Kind {
     ConflictWithoutOriginal,
     /// K-4: a `request_id_conflict` for an attempt that is not a conflicting reuse (F-6).
     ConflictWithoutMisuse,
+    /// K-5: a read names a serving node other than the node that answered.
+    ReadServedByWrongNode,
+    /// K-5: a read reports a prefix its node had not applied before answering (B-05, B-06).
+    ReadPrefixNotApplied,
+    /// K-5: a read reports a prefix that was not committed before it answered (B-05).
+    ReadPrefixNotCommitted,
+    /// K-5: a GET differs from the model at the reported prefix (C-3).
+    ReadValueWrong,
+    /// K-5: a SCAN page differs from the page the model's prefix gives, in items, order,
+    /// versions, caps, `has_more` or `next_after` (B-07, F-4).
+    ScanPageWrong,
+    /// K-5: a status answer differs from the model at the reported prefix (F-9).
+    StatusAnswerWrong,
+    /// K-6: a node incarnation reported a smaller `applied_index` than it had before (C-4).
+    ReadRegressed,
     /// K-8 election safety: two different nodes led one term.
     TwoLeadersInTerm,
     /// K-8 election safety: a node held votes for two different candidates in one term.
@@ -144,6 +159,13 @@ impl fmt::Display for Kind {
             Self::ConflictWrongOriginal => "conflict_wrong_original",
             Self::ConflictWithoutOriginal => "conflict_without_original",
             Self::ConflictWithoutMisuse => "conflict_without_misuse",
+            Self::ReadServedByWrongNode => "read_served_by_wrong_node",
+            Self::ReadPrefixNotApplied => "read_prefix_not_applied",
+            Self::ReadPrefixNotCommitted => "read_prefix_not_committed",
+            Self::ReadValueWrong => "read_value_wrong",
+            Self::ScanPageWrong => "scan_page_wrong",
+            Self::StatusAnswerWrong => "status_answer_wrong",
+            Self::ReadRegressed => "read_regressed",
             Self::TwoLeadersInTerm => "two_leaders_in_term",
             Self::DoubleVote => "double_vote",
             Self::SameTermDifferentBytes => "same_term_different_bytes",

@@ -293,7 +293,7 @@ fn invoked(record: &Value, position: u64, at: &str) -> Result<Invoked, CheckErro
 }
 
 /// A terminal execution outcome as a claim, or `None` for any other answer.
-fn claim_of(
+pub fn claim_of(
     outcome: &Value,
     at: &str,
     attempt: u64,
@@ -396,7 +396,7 @@ pub fn command_of(command: &Value, at: &str) -> Result<Command, CheckError> {
     })
 }
 
-fn limits(manifest: &Value) -> Result<Limits, CheckError> {
+pub fn limits(manifest: &Value) -> Result<Limits, CheckError> {
     let at = "manifest.limits";
     let limits = field(manifest, "manifest", "limits")?;
     Limits::new(

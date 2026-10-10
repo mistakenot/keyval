@@ -2221,6 +2221,32 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 17,
     },
     CheckDef {
+        id: "K-5",
+        summary: "Read validity K-5 (§10.5, W39.1): every GET, SCAN page and status lookup answered with served_by equals the reference model at the committed prefix it reports; the serving node must be the node that answered, and the prefix must have been applied by that node and committed before the answer (a future-prefix borrow or an uncommitted value is rejected, B-05, B-06); a SCAN page is one page of one prefix under an independently written page formula (range edges, ascending order, the 128 item and 1 MiB caps, has_more and next_after, B-07). Hand-made histories, each rule broken once, with older-prefix reads as controls and the page formula compared with the model's scan: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-3", "C-8", "F-2", "F-4", "F-9"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k5::tests::"],
+        },
+        min_cases: 27,
+    },
+    CheckDef {
+        id: "K-6",
+        summary: "Read monotonicity K-6 (§10.5, W39.1): within one node incarnation the applied_index that reads report never decreases in the controller's response-generation order, not in record or client-arrival order; a restart begins a new incarnation that may start lower, and nodes are judged independently. Hand-made histories, each rule broken once, with a restart and reordered records as controls: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k6::tests::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
         id: "K-10",
         summary: "Black-box linearizability witness K-10 (§10.5, W38.3): from client observations alone (invoke, delivered response, delivery, resolution; never committed or other god-view records), attempts collapse by request ID with misuse attempts and their conflict answers excluded, reported indices are an untrusted candidate order (collisions, disagreeing answers, a resolution that contradicts the clients and indices beyond the log capacity are rejected), the reference model runs in that order and every reported decision is compared, and a greedy earliest-placement pass places each write between its first invocation and its first delivered terminal decision (an undelivered response or a later replay closes nothing); an unresolved or unresolvable write, or an incomplete run, fails (P10). Hand-made histories, each rule broken once, a protected negative-history corpus and a 10,000-operation fixture: test evidence of the checker, not proof",
         kind: Kind::TestGroup,

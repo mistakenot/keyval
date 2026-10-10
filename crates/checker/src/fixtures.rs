@@ -5,12 +5,14 @@
 use serde_json::{Value, json};
 
 use crate::history::History;
+use crate::reads::Reads;
 
 /// Request IDs the fixtures use.
 pub const A: &str = "000000000000000000000000000000a1";
 pub const B: &str = "000000000000000000000000000000a2";
 
 /// A document under construction: three voters, each recovered with an empty log.
+#[derive(Clone)]
 pub struct Doc {
     records: Vec<Value>,
     lost: Vec<u64>,
@@ -188,6 +190,46 @@ impl Doc {
         self.respond(attempt, "status", outcome).deliver(attempt)
     }
 
+    /// A node's god-view state after a step: it has applied `applied` and believes `commit`.
+    pub fn node_state(&mut self, node: u64, applied: u64, commit: u64) -> &mut Self {
+        self.records
+            .push(json!({"kind": "node_state", "seq": 10, "time": 10,
+            "at": {"node": node, "incarnation": 0}, "process": "running",
+            "role": "follower", "term": 1, "commit": commit, "applied": applied,
+            "state_digest": "00"}));
+        self
+    }
+
+    /// A read `operation` invoked at `node` and answered by `node` incarnation `incarnation`
+    /// as response number `generation` with `outcome`.
+    pub fn read(
+        &mut self,
+        attempt: u64,
+        operation: Value,
+        (node, incarnation, generation): (u64, u64, u64),
+        outcome: Value,
+    ) -> &mut Self {
+        let op = operation["op"]
+            .as_str()
+            .expect("operation has an op")
+            .to_owned();
+        let mut invoke = json!({"kind": "invoke", "seq": 5, "time": 5, "client": 1,
+            "attempt": attempt, "target": {"node": node, "incarnation": incarnation},
+            "request_id": null, "misuse": false});
+        invoke["operation"] = operation;
+        let mut response = json!({"kind": "response", "seq": 6, "time": 6, "attempt": attempt,
+            "from": {"node": node, "incarnation": incarnation}, "generation": generation,
+            "op": op});
+        response["outcome"] = outcome;
+        self.records.push(invoke);
+        self.records.push(response);
+        self
+    }
+
+    pub fn reads(&self) -> Reads {
+        Reads::from_value(&self.value()).expect("fixture parses")
+    }
+
     pub fn history(&self) -> History {
         History::from_value(&self.value()).expect("fixture parses")
     }
@@ -265,6 +307,68 @@ pub fn capacity_exceeded(id: &str, index: u64, limit: &str) -> Value {
     out["limit"] = json!(limit);
     out["replayed"] = json!(false);
     out
+}
+
+pub fn get_op(key: &str) -> Value {
+    json!({"op": "get", "key": key})
+}
+
+pub fn scan_op(
+    start: Option<&str>,
+    end: Option<&str>,
+    after: Option<&str>,
+    limit: Option<u64>,
+) -> Value {
+    json!({"op": "scan", "start": start, "end": end, "after": after, "limit": limit})
+}
+
+pub fn status_op(id: &str) -> Value {
+    json!({"op": "status", "request_id": id})
+}
+
+fn served(node: u64, applied: u64) -> Value {
+    json!({"node_id": node, "applied_index": applied})
+}
+
+/// A GET answered `ok`.
+pub fn get_found(value: &str, version: u64, node: u64, applied: u64) -> Value {
+    json!({"code": "ok", "value": value, "version": version,
+        "served_by": served(node, applied)})
+}
+
+/// A GET answered `not_found`.
+pub fn get_absent(node: u64, applied: u64) -> Value {
+    json!({"code": "not_found", "value": null, "version": null,
+        "served_by": served(node, applied)})
+}
+
+/// A SCAN page: `items` are (key, value, version).
+pub fn scan_page(
+    items: &[(&str, &str, u64)],
+    has_more: bool,
+    next_after: Option<&str>,
+    node: u64,
+    applied: u64,
+) -> Value {
+    let items: Vec<Value> = items
+        .iter()
+        .map(|(key, value, version)| json!({"key": key, "value": value, "version": version}))
+        .collect();
+    json!({"code": "ok", "items": items, "has_more": has_more, "next_after": next_after,
+        "served_by": served(node, applied)})
+}
+
+/// A status lookup that found `result`.
+pub fn status_found(result: Value, node: u64, applied: u64) -> Value {
+    let mut out = json!({"code": "ok", "state": "known", "served_by": served(node, applied)});
+    out["result"] = result;
+    out
+}
+
+/// A status lookup that found nothing.
+pub fn status_unknown(node: u64, applied: u64) -> Value {
+    json!({"code": "ok", "state": "unknown", "result": null,
+        "served_by": served(node, applied)})
 }
 
 pub fn conflict(id: &str, original_index: u64) -> Value {
