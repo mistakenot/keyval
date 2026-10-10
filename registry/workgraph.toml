@@ -260,7 +260,11 @@ deps = ["W18"]
 reqs = ["F-7", "A-1", "A-3", "O-5"]
 area = ["server"]
 milestone = "m2"
-accept = []
+accept = [
+    "./dev check PEER-TRANSPORT",
+    "./dev check CLUSTER-ROUTING",
+    "./dev check ENVELOPE-IDENTITY",
+]
 bead = "br-w21-peer-transport-routing-scj"
 
 [[item]]
@@ -427,7 +431,11 @@ deps = ["W12", "W16", "W17", "W36"]
 reqs = ["§9.1", "§10.4", "T-10", "A-4"]
 area = ["sim"]
 milestone = "m4"
-accept = []
+accept = [
+    "./dev check SIM-FAULTS",
+    "./dev check SWARM-SCENARIO",
+    "./dev check RUN-PHASES",
+]
 bead = "br-w37-nemesis-swarm-heal-ves"
 
 [[item]]
@@ -437,7 +445,13 @@ deps = ["W10", "W36"]
 reqs = ["C-1", "C-2", "C-5", "C-6", "DM-3"]
 area = ["checker"]
 milestone = "m4"
-accept = []
+accept = [
+    "./dev check K-1",
+    "./dev check K-2",
+    "./dev check K-3",
+    "./dev check K-4",
+    "./dev check K-10",
+]
 bead = "br-w38-write-history-checkers-4fq"
 
 [[item]]
@@ -457,7 +471,11 @@ deps = ["W10", "W13", "W14", "W15", "W36"]
 reqs = ["C-1", "C-2", "DUR-2", "A-5"]
 area = ["checker"]
 milestone = "m4"
-accept = []
+accept = [
+    "./dev check K-8",
+    "./dev check K-11",
+    "./dev check K-12",
+]
 bead = "br-w40-raft-persistence-honesty-checkers-efr"
 
 [[item]]
