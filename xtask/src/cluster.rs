@@ -1425,6 +1425,13 @@ pub fn restart(layout: &Layout, server: &Path, timing: Timing, node: u64) -> Clu
     };
     let mut started = start(layout, server, timing, Action::Restart, Some(node));
     // A refusal after the kill must not read as "untouched": say what was done first.
+    // A start that failed before any node was listed (the process died before its receipt
+    // was written) still has the killed node to show.
+    if started.nodes.is_empty() {
+        started
+            .nodes
+            .push(node_report(&nodes[0], NodeState::Killed));
+    }
     if let (Some(before), Some(shown)) = (before, started.nodes.first_mut()) {
         shown.detail = Some(match shown.detail.take() {
             Some(then) => format!("{before}; then {then}"),
@@ -1655,7 +1662,7 @@ mod tests {
     /// A `keyval-server` stand-in. `init` writes `nodes/N/journal.log` and `instance`, and
     /// answers like the real one, including its "initialised already" refusal. `run` needs
     /// a journal and then sleeps (bounded). Markers in the config's directory steer it (`ignore-term-N` makes `run` of node N ignore SIGTERM):
-    /// `fail-init-N` makes `init` of node N fail; `fail-run-N` makes `run` of node N exit.
+    /// `fail-init-N` makes `init` of node N fail; `fail-run-N` makes `run` of node N exit; every `run` records its pid in `pid-N`.
     const FAKE: &str = r#"#!/bin/sh
 cmd=$1; shift
 while [ $# -gt 0 ]; do
@@ -1685,6 +1692,7 @@ case $cmd in
     ;;
   run)
     [ -s "$dir/journal.log" ] || exit 4
+    echo $$ > "$here/pid-$node"
     [ -e "$here/fail-run-$node" ] && exit 5
     [ -e "$here/ignore-term-$node" ] && trap '' TERM
     i=0
@@ -2216,6 +2224,22 @@ esac
         }
         let status = status(&fixture.layout);
         assert_eq!(states(&status), vec![NodeState::Initialised; 5]);
+        let started: Vec<(u64, u32)> = (1..=5)
+            .filter_map(|id| {
+                let text = fs::read_to_string(fixture.dir.join(format!("pid-{id}"))).ok()?;
+                Some((id, text.trim().parse().ok()?))
+            })
+            .collect();
+        assert!(
+            started.len() >= 2,
+            "rule: the nodes started before node 4 failed left their pids; started={started:?}"
+        );
+        for (id, pid) in started {
+            assert!(
+                identity(pid).is_none(),
+                "rule: rollback killed node {id}'s process (pid {pid}); report={report:#?}"
+            );
+        }
     }
 
     /// A receipt for a process that is not the one recorded: PID reuse.
@@ -2400,6 +2424,32 @@ esac
         assert!(
             fixture.layout.receipt(2).exists(),
             "rule: its receipt stays"
+        );
+    }
+
+    #[test]
+    fn a_restart_that_fails_after_the_kill_says_the_node_was_killed() {
+        let fixture = Fixture::new("cluster-restart-after-kill");
+        assert!(fixture.init().ok);
+        let up = fixture.up();
+        assert!(up.ok, "report={up:#?}");
+        let pid = up.nodes[1].pid.expect("node 2 runs");
+        // Passes the preflight (initialised, journal present), then exits once started.
+        fs::write(fixture.dir.join("fail-run-2"), "").unwrap();
+        let report = restart(&fixture.layout, &fixture.server, FAST, 2);
+        assert!(!report.ok, "rule: the new process dies; {report:#?}");
+        assert!(
+            identity(pid).is_none(),
+            "rule: the old process (pid {pid}) was killed"
+        );
+        let detail = report.nodes[0].detail.as_deref().unwrap_or_default();
+        assert!(
+            detail.contains(&format!("pid {pid}")) && detail.contains("killed"),
+            "rule: a failure after the kill reports the node as killed; detail={detail:?}, report={report:#?}"
+        );
+        assert!(
+            !fixture.layout.receipt(2).exists(),
+            "rule: no receipt is left for a node that is not running"
         );
     }
 
