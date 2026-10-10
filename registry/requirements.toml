@@ -124,13 +124,13 @@ title = "Every outcome is distinguishable, terminal from non-terminal"
 [[requirement]]
 id = "C-1"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Writes are linearizable in first-execution log order"
 
 [[requirement]]
 id = "C-2"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "An acknowledged write is never lost"
 
 [[requirement]]
@@ -202,7 +202,7 @@ notes = "Owner disposition: availability relative to the healthy envelope (§9.4
 [[requirement]]
 id = "A-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "An unconfirmed submitted write returns unknown_outcome"
 
 # §6.6 Durability
@@ -216,7 +216,7 @@ title = "A write is acknowledged only after it is committed and applied"
 [[requirement]]
 id = "DUR-2"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Entries, term and vote are synced before any message depends on them"
 
 [[requirement]]
