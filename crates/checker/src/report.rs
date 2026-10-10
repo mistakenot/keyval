@@ -132,6 +132,29 @@ pub enum Kind {
     ResolutionContradicted,
     /// K-10: no placement of the writes within their intervals follows the index order.
     NoLinearization,
+    /// K-7: a recoverable node never applied the catch-up marker.
+    MarkerMissing,
+    /// K-7: recoverable nodes applied markers at different indices.
+    MarkerIndexDiffers,
+    /// K-7: recoverable nodes hold different state digests where they must agree.
+    DigestDiffers,
+    /// K-7: a drain heal recorded no certified drain.
+    DrainMissing,
+    /// K-7: the drain is not settled (last = commit = applied, one index, the quiet period) or
+    /// leaves out a recoverable node.
+    DrainNotSettled,
+    /// K-9: a logical write has no resolution or is `unresolved`.
+    WriteUnresolved,
+    /// K-9: the heal never completed (a node never applied the marker, the marker never
+    /// committed, or no drain was certified).
+    HealIncomplete,
+    /// K-9: the heal completed after its budget.
+    HealLate,
+    /// K-9: client activity did not stop: no `quiescence`, or a non-status invocation after it.
+    NotQuiescent,
+    /// K-9: a `not_executed` resolution is not backed by lookups from every recoverable node
+    /// after the drain (or quiescence).
+    AbsenceNotCertified,
 }
 
 impl fmt::Display for Kind {
@@ -197,6 +220,16 @@ impl fmt::Display for Kind {
             Self::ObservationsDisagree => "observations_disagree",
             Self::ResolutionContradicted => "resolution_contradicted",
             Self::NoLinearization => "no_linearization",
+            Self::MarkerMissing => "marker_missing",
+            Self::MarkerIndexDiffers => "marker_index_differs",
+            Self::DigestDiffers => "digest_differs",
+            Self::DrainMissing => "drain_missing",
+            Self::DrainNotSettled => "drain_not_settled",
+            Self::WriteUnresolved => "write_unresolved",
+            Self::HealIncomplete => "heal_incomplete",
+            Self::HealLate => "heal_late",
+            Self::NotQuiescent => "not_quiescent",
+            Self::AbsenceNotCertified => "absence_not_certified",
         })
     }
 }

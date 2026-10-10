@@ -2247,6 +2247,32 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 8,
     },
     CheckDef {
+        id: "K-7",
+        summary: "Convergence K-7 (§10.5, W39.2): after the heal every recoverable node has applied the catch-up marker at one index with one state digest computed at its application of it (precreated markers likewise); a drain heal is judged on the certified drain instead (last = commit = applied, one applied index, one digest, the quiet period, every recoverable node covered); permanently lost nodes are excluded and listed. Hand-made histories incl. a skipped catch-up (B-18), each rule broken once, with lost-node and re-application controls: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["A-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k7::tests::"],
+        },
+        min_cases: 21,
+    },
+    CheckDef {
+        id: "K-9",
+        summary: "Liveness K-9 (§10.5, W39.2): after the heal every logical write has a resolution that is not unresolved; the marker is applied by every recoverable node and committed, or the drain is certified, within the heal budget (inclusive); client activity stops (quiescence, then status lookups only); a not_executed resolution rests on lookups from every recoverable node after the drain or quiescence. Hand-made histories incl. a skipped catch-up and a liveness timeout, each rule broken once: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["A-1", "A-3", "A-4"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k9::tests::"],
+        },
+        min_cases: 22,
+    },
+    CheckDef {
         id: "K-10",
         summary: "Black-box linearizability witness K-10 (§10.5, W38.3): from client observations alone (invoke, delivered response, delivery, resolution; never committed or other god-view records), attempts collapse by request ID with misuse attempts and their conflict answers excluded, reported indices are an untrusted candidate order (collisions, disagreeing answers, a resolution that contradicts the clients and indices beyond the log capacity are rejected), the reference model runs in that order and every reported decision is compared, and a greedy earliest-placement pass places each write between its first invocation and its first delivered terminal decision (an undelivered response or a later replay closes nothing); an unresolved or unresolvable write, or an incomplete run, fails (P10). Hand-made histories, each rule broken once, a protected negative-history corpus and a 10,000-operation fixture: test evidence of the checker, not proof",
         kind: Kind::TestGroup,
