@@ -2262,6 +2262,26 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 14,
     },
+    CheckDef {
+        id: "CONF-HARNESS",
+        summary: "Conformance harness (§10.8, W31.1): the independent `conformance` package reads api/openapi.yaml (operation IDs and error codes, duplicates and incomplete documents refused), takes the model, single-node and five cluster base URLs (exactly zero or five cluster nodes, strict http://host:port), activates targets per operation (model serves all; a real single node only PUT/GET until W32; the cluster none until W32; topology tests only on the cluster), validates each test's class/operation/error-code tag against the spec, speaks bounded strict HTTP/1.1 (malformed, truncated and oversized responses are errors), polls stale reads until served_by.applied_index reaches the write index with a bounded budget whose timeout fails (P10), and depends on no first-party crate (T-12). Unit tests with injected clocks and local servers: test evidence of the harness, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-12", "C-7"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "conformance",
+            filters: &[
+                "spec::tests::",
+                "target::tests::",
+                "tag::tests::",
+                "http::tests::",
+                "poll::tests::",
+                "independence::",
+            ],
+        },
+        min_cases: 28,
+    },
 ];
 
 /// Outcome of one requested check.

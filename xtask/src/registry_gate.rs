@@ -603,8 +603,9 @@ fn execution(checks: &ChecksFile, inputs: &Inputs<'_>, verdict: &mut Judgement) 
 
 /// The libtest names of the `#[test]` functions in `package`'s sources.
 fn package_tests(package: &str, sources: &[(String, String)]) -> Vec<String> {
-    let dir = if package == "xtask" {
-        "xtask".to_owned()
+    // `xtask` and the HTTP-only `conformance` package sit outside `crates/` (Appendix A).
+    let dir = if package == "xtask" || package == "conformance" {
+        package.to_owned()
     } else {
         format!("crates/{package}")
     };
@@ -1567,5 +1568,18 @@ mod probes {
             verdict.violations
         );
         assert!(verdict.cases > 100, "cases={}", verdict.cases);
+    }
+
+    #[test]
+    fn conformance_tests_are_found_outside_crates() {
+        let sources = [(
+            "conformance/src/poll.rs".to_owned(),
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn waits() {}\n}\n".to_owned(),
+        )];
+        assert_eq!(
+            package_tests("conformance", &sources),
+            ["poll::tests::waits"],
+            "rule: the conformance package lives at conformance/, not crates/conformance"
+        );
     }
 }

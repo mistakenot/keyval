@@ -1,0 +1,17 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+description = "keyval API conformance suite harness: HTTP only, judged against api/openapi.yaml (PLAN.md §10.8, T-12)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No first-party crate, by design: the suite speaks HTTP to a base URL and reads the
+# OpenAPI document, nothing else (T-12, DEP-RULE). saphyr reads `api/openapi.yaml`;
+# serde_json reads response bodies.
+[dependencies]
+saphyr = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
