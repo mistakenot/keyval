@@ -378,7 +378,7 @@ notes = "SHOULD: keeps its level and needs a recorded disposition before release
 [[requirement]]
 id = "T-10"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "The simulator runs from scenario files as well as seeds"
 
 [[requirement]]
