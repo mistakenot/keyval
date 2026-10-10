@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/cluster.v1.schema.json",
+  "title": "keyval.dev.cluster/v1",
+  "description": "The report of `./dev cluster init|up|status|down` (xtask/src/cluster.rs `ClusterReport`; PLAN.md O-2, §7.7 step 0, W22.1): what the command did to each node of the config. A report that is ok has no error; one that is not ok says why.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "action",
+    "config",
+    "state_dir",
+    "instance_id",
+    "nodes",
+    "error"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.cluster/v1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "Whether the command did what it was asked."
+    },
+    "action": {
+      "enum": [
+        "init",
+        "up",
+        "status",
+        "down"
+      ],
+      "description": "The command."
+    },
+    "config": {
+      "type": "string",
+      "description": "The config file."
+    },
+    "state_dir": {
+      "type": "string",
+      "description": "The directory holding the instance record and the PID receipts."
+    },
+    "instance_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "The cluster instance ID, once known."
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Every node of the config, in config order (a refused command may list only the nodes it judged).",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Why the command failed; null exactly when ok."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "data_dir",
+        "state",
+        "pid",
+        "detail"
+      ],
+      "properties": {
+        "node": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The node's ID in the config."
+        },
+        "data_dir": {
+          "type": "string",
+          "description": "Its data directory, resolved against the config's directory."
+        },
+        "state": {
+          "enum": [
+            "uninitialised",
+            "initialised",
+            "stamped",
+            "running",
+            "started",
+            "stopped",
+            "stale",
+            "refused"
+          ],
+          "description": "What it is, or what the command did."
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "The PID of its running process, if one is."
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why, for people."
+        }
+      }
+    }
+  }
+}

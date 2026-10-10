@@ -13,6 +13,7 @@ mod cargo;
 mod check;
 mod clock;
 mod closure;
+mod cluster;
 mod commit;
 mod demo;
 mod doctor;
@@ -198,6 +199,36 @@ enum Command {
         #[command(subcommand)]
         action: DemoAction,
     },
+    /// The local five-node cluster (O-2, §7.7 step 0): init, up, status and down, managed
+    /// by PID receipts and never by port or process name (W22).
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterAction,
+    },
+}
+
+/// `./dev cluster` actions; each takes the same options.
+#[derive(Clone, Debug, Subcommand)]
+enum ClusterAction {
+    /// Stamp one random instance ID into all five data directories; refuses used ones.
+    Init(ClusterArgs),
+    /// Start the five nodes; refuses uninitialised directories and occupied ports.
+    Up(ClusterArgs),
+    /// Report each node without changing anything.
+    Status(ClusterArgs),
+    /// Stop the nodes this launcher started; never deletes data.
+    Down(ClusterArgs),
+}
+
+/// Options of every `./dev cluster` action.
+#[derive(Clone, Debug, clap::Args)]
+struct ClusterArgs {
+    /// The configuration, relative to the workspace root (default: config/local.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+    /// Where the instance record and PID receipts live (default: derived from the config).
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<PathBuf>,
 }
 
 /// `./dev demo` actions.
@@ -354,6 +385,7 @@ fn run(cli: Cli) -> Status {
                 output::emit(format, &demo::run(&root, options))
             }
         },
+        Command::Cluster { action } => run_cluster(&root, format, action),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
@@ -368,6 +400,17 @@ fn run(cli: Cli) -> Status {
             output::emit(format, &report)
         }
     }
+}
+
+fn run_cluster(root: &Path, format: Format, action: ClusterAction) -> Status {
+    let (kind, args) = match action {
+        ClusterAction::Init(args) => (cluster::Action::Init, args),
+        ClusterAction::Up(args) => (cluster::Action::Up, args),
+        ClusterAction::Status(args) => (cluster::Action::Status, args),
+        ClusterAction::Down(args) => (cluster::Action::Down, args),
+    };
+    let layout = cluster::Layout::new(root, sim::config_path(root, args.config), args.state_dir);
+    output::emit(format, &cluster::run(root, kind, &layout))
 }
 
 fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {

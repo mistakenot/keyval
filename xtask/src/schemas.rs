@@ -53,6 +53,7 @@ const IDS: &[&str] = &[
     crate::traceability::SCHEMA,
     crate::sim::SCHEMA,
     crate::demo::SCHEMA,
+    crate::cluster::SCHEMA,
 ];
 
 /// The file stem for an identifier: `keyval.dev.<name>/v<n>` becomes `<name>.v<n>`.
@@ -177,6 +178,7 @@ mod tests {
     use crate::cargo::Runner;
     use crate::check::{self, CATALOGUE, CheckStatus, ClaimClass, Kind, StaticCheck, Tier};
     use crate::closure::CloseReport;
+    use crate::cluster::{self, Action as ClusterAction, NodeState};
     use crate::commit::{self, CommitKind, CommitReport, GateRun, Outcome as CommitOutcome};
     use crate::commit::{GateCall, Ports, Request, Reservation};
     use crate::demo;
@@ -364,8 +366,30 @@ mod tests {
         );
     }
 
+    fn cluster_enums_match() {
+        let actions = variants!(ClusterAction: Init, Up, Status, Down);
+        assert_enum(cluster::SCHEMA, "/properties/action/enum", &actions, false);
+        let states = variants!(
+            NodeState: Uninitialised,
+            Initialised,
+            Stamped,
+            Running,
+            Started,
+            Stopped,
+            Stale,
+            Refused
+        );
+        assert_enum(
+            cluster::SCHEMA,
+            "/$defs/node/properties/state/enum",
+            &states,
+            false,
+        );
+    }
+
     #[test]
     fn enums_match_their_schemas() {
+        cluster_enums_match();
         let verdicts = variants!(SimVerdict: Pass, Fail, Incomplete);
         assert_enum(sim::SCHEMA, "/properties/verdict/enum", &verdicts, false);
         let error = output::ERROR_SCHEMA;
@@ -978,6 +1002,52 @@ mod tests {
         early.sim = None;
         early.items = Vec::new();
         validators.assert_matches(&early, "a demo that stopped before it identified the build");
+    }
+
+    #[test]
+    fn cluster_reports_match_their_schema() {
+        let validators = Validators::load();
+        let node = |state, pid, detail: Option<&str>| cluster::NodeReport {
+            node: 1,
+            data_dir: ".local/nodes/1".to_owned(),
+            state,
+            pid,
+            detail: detail.map(str::to_owned),
+        };
+        let report = |action, ok, nodes| cluster::ClusterReport {
+            schema: cluster::SCHEMA,
+            ok,
+            action,
+            config: "config/local.toml".to_owned(),
+            state_dir: ".local/cluster/local-1a2b3c4d".to_owned(),
+            instance_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
+            nodes,
+            error: (!ok).then(|| "node 1 refused".to_owned()),
+        };
+        validators.assert_matches(
+            &report(
+                cluster::Action::Up,
+                true,
+                vec![node(cluster::NodeState::Started, Some(4242), None)],
+            ),
+            "cluster up",
+        );
+        validators.assert_matches(
+            &report(
+                cluster::Action::Status,
+                true,
+                vec![node(cluster::NodeState::Stale, None, Some("pid 7 is gone"))],
+            ),
+            "cluster status",
+        );
+        let mut refused = report(
+            cluster::Action::Init,
+            false,
+            vec![node(cluster::NodeState::Refused, None, Some("used"))],
+        );
+        validators.assert_matches(&refused, "a refused init");
+        refused.instance_id = None;
+        validators.assert_matches(&refused, "a refused init before an ID exists");
     }
 
     #[test]

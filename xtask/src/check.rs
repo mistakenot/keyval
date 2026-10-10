@@ -2051,6 +2051,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 12,
     },
     CheckDef {
+        id: "CLUSTER-LIFECYCLE",
+        summary: "The local five-node launcher (O-2, §7.7 step 0, W22.1): `./dev cluster init` stamps one random 128-bit instance ID into all five data directories through `keyval-server init`, judging every directory first and refusing a used, missing-parent-unusable or mismatched one without modifying it, resuming an interrupted init only with its recorded ID, and never repeating a completed one; `up` refuses uninitialised directories and occupied ports before starting anything and rolls back a partial start through the child handles it owns; `status` changes nothing; `down` signals only a process whose PID receipt still matches its start time, executable and command line, so a recycled PID is never signalled and no data is deleted. Every lifecycle command takes `--config`. Test evidence from a fake server plus a manual run against the real one, not proof",
+        kind: Kind::TestGroup,
+        covers: &["O-2"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["cluster::tests::"],
+        },
+        min_cases: 23,
+    },
+    CheckDef {
         id: "AUDIT-REPORTS",
         summary: "Every audit report under reports/audits/ (§11.9, W20) names its milestone, auditor, independence, tree ID and commit in a header, and every `## F-<n>` finding names a `Bead: <id>` the tracker export holds, so no finding goes unfiled; a report with no findings must say `Findings: none`, and a missing report, an unreadable export or a vacuous selection fails (P10). Checks the report's form and bead links, not the audit's judgement",
         kind: Kind::Static,

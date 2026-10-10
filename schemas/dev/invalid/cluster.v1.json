@@ -1,0 +1,22 @@
+{
+  "rule": "a report that is ok carries no error",
+  "error_at": "/error",
+  "instance": {
+    "schema": "keyval.dev.cluster/v1",
+    "ok": true,
+    "action": "up",
+    "config": "/repo/config/local.toml",
+    "state_dir": "/repo/.local/cluster/local-1a2b3c4d",
+    "instance_id": "0123456789abcdef0123456789abcdef",
+    "nodes": [
+      {
+        "node": 1,
+        "data_dir": "/repo/.local/nodes/1",
+        "state": "started",
+        "pid": 4242,
+        "detail": null
+      }
+    ],
+    "error": "node 2 refused"
+  }
+}

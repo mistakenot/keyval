@@ -21,6 +21,7 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.traceability/v2` | `traceability.v2.schema.json` | `./dev report traceability` |
 | `keyval.dev.sim-run/v1` | `sim-run.v1.schema.json` | `./dev sim run` (printed by the `keyval-sim` binary, re-emitted) |
 | `keyval.dev.demo/v1` | `demo.v1.schema.json` | `./dev demo m1` |
+| `keyval.dev.cluster/v1` | `cluster.v1.schema.json` | `./dev cluster init|up|status|down` |
 
 ## Conventions
 
