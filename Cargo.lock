@@ -185,6 +185,8 @@ dependencies = [
 name = "conformance"
 version = "0.1.0"
 dependencies = [
+ "checker",
+ "model",
  "saphyr",
  "serde_json",
 ]

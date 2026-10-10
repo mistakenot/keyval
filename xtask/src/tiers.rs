@@ -11,7 +11,7 @@
 //! | production root (`server`) | domain, engine, adapter | ledgered |
 //! | simulation root (`sim`) | domain, engine, adapter, oracle | ledgered |
 //! | oracle (`model`, `checker`) | oracle only (T-12) | ledgered |
-//! | conformance (`conformance/`) | none: HTTP only (T-12) | ledgered |
+//! | conformance (`conformance/`) | oracle only (PLAN.md §10.8: the reference model and the K-10 witness); never a production crate (T-12) | ledgered |
 //! | CLI (`cli`) | domain, engine, adapter | ledgered |
 //! | xtask, fuzz | anything | ledgered |
 //! | lint probe (`xtask/probes/*`) | domain | none |
@@ -80,8 +80,9 @@ impl Tier {
                     Self::Domain | Self::Engine | Self::Adapter | Self::Oracle
                 )
             }
-            Self::Oracle => matches!(to, Self::Oracle),
-            Self::Conformance => false,
+            // PLAN.md §10.8: the conformance suite may use the reference model and the K-10
+            // witness, and no production crate (T-12).
+            Self::Oracle | Self::Conformance => matches!(to, Self::Oracle),
             Self::Tooling => true,
         }
     }
@@ -312,7 +313,7 @@ mod tests {
         let found = violations(vec![
             package("crates/model", vec![path_dep("crates/types")]),
             package("crates/checker", vec![path_dep("crates/model")]),
-            package("conformance", vec![path_dep("crates/model")]),
+            package("conformance", vec![path_dep("crates/server")]),
         ]);
         assert_eq!(
             found.len(),
@@ -327,7 +328,26 @@ mod tests {
         assert!(
             found
                 .iter()
-                .any(|v| v.contains("conformance (conformance) depends on"))
+                .any(|v| v.contains("conformance (conformance) depends on `server`")),
+            "rule: the conformance suite never depends on a production crate; found={found:#?}"
+        );
+    }
+
+    #[test]
+    fn conformance_may_use_the_oracle_crates() {
+        let found = violations(vec![
+            package("crates/model", Vec::new()),
+            package("crates/checker", vec![path_dep("crates/model")]),
+            package(
+                "conformance",
+                vec![path_dep("crates/model"), path_dep("crates/checker")],
+            ),
+        ]);
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "rule: PLAN.md §10.8 lets the conformance suite use the reference model and the \
+             K-10 witness from the oracle crates (br-ucsp)"
         );
     }
 

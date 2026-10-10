@@ -2316,7 +2316,7 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "CONF-HARNESS",
-        summary: "Conformance harness (§10.8, W31.1): the independent `conformance` package reads api/openapi.yaml (operation IDs and error codes, duplicates and incomplete documents refused), takes the model, single-node and five cluster base URLs (exactly zero or five cluster nodes, strict http://host:port), activates targets per operation (model serves all; a real single node only PUT/GET until W32; the cluster none until W32; topology tests only on the cluster), validates each test's class/operation/error-code tag against the spec, speaks bounded strict HTTP/1.1 (malformed, truncated and oversized responses are errors), polls stale reads until served_by.applied_index reaches the write index with a bounded budget whose timeout fails (P10), and depends on no first-party crate (T-12). Unit tests with injected clocks and local servers: test evidence of the harness, not proof",
+        summary: "Conformance harness (§10.8, W31.1): the independent `conformance` package reads api/openapi.yaml (operation IDs and error codes, duplicates and incomplete documents refused), takes the model, single-node and five cluster base URLs (exactly zero or five cluster nodes, strict http://host:port), activates targets per operation (model serves all; a real single node only PUT/GET until W32; the cluster none until W32; topology tests only on the cluster), validates each test's class/operation/error-code tag against the spec, speaks bounded strict HTTP/1.1 (malformed, truncated and oversized responses are errors), polls stale reads until served_by.applied_index reaches the write index with a bounded budget whose timeout fails (P10), and depends on no production crate (T-12; the test-only suite may use the oracle crates, §10.8). Unit tests with injected clocks and local servers: test evidence of the harness, not proof",
         kind: Kind::TestGroup,
         covers: &["T-12", "C-7"],
         class: ClaimClass::Invariant,
@@ -2333,6 +2333,19 @@ pub const CATALOGUE: &[CheckDef] = &[
             ],
         },
         min_cases: 28,
+    },
+    CheckDef {
+        id: "CONF-SEMANTIC",
+        summary: "Semantic conformance corpus (§10.8, W31.2): 35 HTTP-only tests, each run against a fresh in-process reference model server and against every real target that serves all the operations it exercises. They cover %2B, %20 and raw-plus keys, invalid percent escapes, invalid UTF-8 and repeated query parameters, decoded key and value limits and escaping expansion, the live-key and live-byte quotas, terminal-error, replayed and status-result shapes with status unknown, Idempotency-Key and body validation, compare-and-swap, Cache-Control no-store on every response, SCAN empty ranges, half-open byte order and exact caps, and bounded applied-index polling. The K-10 witness records client observations, drives each write to a terminal answer with bounded status lookups, and judges the history with K-10; an unresolved write or a poll that times out fails (P10), and tampered histories are rejected. Test evidence, run against the model, not proof",
+        kind: Kind::TestGroup,
+        covers: &["DM-1", "F-6", "C-1", "C-6", "C-8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "conformance",
+            filters: &["suite::"],
+        },
+        min_cases: 35,
     },
 ];
 

@@ -161,8 +161,9 @@ classifies every workspace member this way, and a crate in an unlisted directory
 
 Dependencies point inward only (DEP-RULE): domain → domain; engine → domain, engine,
 vendored Raft; adapter and CLI → domain, engine, adapter; server → domain, engine,
-adapter; sim → domain, engine, adapter, oracle; oracle → oracle; conformance → nothing
-first-party. The rule covers dev-dependencies too.
+adapter; sim → domain, engine, adapter, oracle; oracle → oracle; conformance → oracle
+(its tests may use the reference model and the K-10 witness, PLAN.md §10.8, never a
+production crate). The rule covers dev-dependencies too.
 
 `crates/types` exists from W01 and holds `types::invariant!` (below); W04 adds the domain
 types, newtypes, ports and errors.
@@ -332,7 +333,7 @@ output only together with its schema, and bump the version when the change break
   NODE-ATTEMPT-TABLE, APPLY-DELETE, STATE-SCAN, SERVER-INIT, APPLY-CAS, DIFFERENTIAL-SCAN,
   SERVER-RUNTIME, DIFFERENTIAL-DELETE-CAS, SIM-CLUSTER, SERVER-HTTP, REQUEST-STATUS,
   REQUEST-ID-RACE, SERVER-RESTART, HISTORY-ADMISSION, SIM-RUN, DEV-SIM,
-  CLIENT-RETRY, SIM-CLIENTS, SIM-OBSERVE, PEER-TRANSPORT, DEMO-M1, CLUSTER-LIFECYCLE, AUDIT-REPORTS, K-1, K-2, K-8, K-11, K-12, K-3, K-4, K-10, CONF-HARNESS. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
+  CLIENT-RETRY, SIM-CLIENTS, SIM-OBSERVE, PEER-TRANSPORT, DEMO-M1, CLUSTER-LIFECYCLE, AUDIT-REPORTS, K-1, K-2, K-8, K-11, K-12, K-3, K-4, K-10, CONF-HARNESS, CONF-SEMANTIC. Unknown IDs, zero-case selections, `#[ignore]`d cases and runs below the check's minimum case count
   fail (P10). A failure prints its exact re-run command.
   The catalogue is built into `xtask/src/check.rs`, and `registry/checks.toml` (W05.1)
   mirrors it row for row: a commit that adds a check adds its `checks.toml` row too, or

@@ -6,12 +6,20 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# No first-party crate, by design: the suite speaks HTTP to a base URL and reads the
-# OpenAPI document, nothing else (T-12, DEP-RULE). saphyr reads `api/openapi.yaml`;
-# serde_json reads response bodies.
+# No production crate, by design: the suite speaks HTTP to a base URL and reads the
+# OpenAPI document (T-12, DEP-RULE). saphyr reads `api/openapi.yaml`; serde_json reads
+# response bodies.
 [dependencies]
 saphyr = { workspace = true }
 serde_json = { workspace = true }
+
+# PLAN.md §10.8: the suite "may use the reference model and the K-10 witness from the oracle
+# crates" (owner-visible conflict with AGENTS.md's older table: br-ucsp; PLAN.md wins, §0.4).
+# Tests only: `model` hosts the in-process reference model server the semantic tests are
+# validated against, `checker` is the K-10 witness. Both are oracles (no production crate).
+[dev-dependencies]
+model = { workspace = true }
+checker = { path = "../crates/checker" }
 
 [lints]
 workspace = true
