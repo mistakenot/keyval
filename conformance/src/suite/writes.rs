@@ -20,7 +20,7 @@ const PUT_SHAPE: Tag = Tag {
 // api-test: putKey
 // api-test: getKey
 #[test]
-fn put_result_shape_and_versions_follow_the_log() {
+pub(super) fn put_result_shape_and_versions_follow_the_log() {
     each_target(&PUT_SHAPE, |node| {
         let key = format!("{}k", fresh_prefix());
         let id = fresh_id();
@@ -95,7 +95,7 @@ const REPLAY: Tag = Tag {
 // api-test: putKey
 // api-test: getKey
 #[test]
-fn retried_put_replays_the_original_result() {
+pub(super) fn retried_put_replays_the_original_result() {
     each_target(&REPLAY, |node| {
         let key = format!("{}k", fresh_prefix());
         let id = fresh_id();
@@ -349,7 +349,7 @@ const DELETE: Tag = Tag {
 // api-test: deleteKey
 // api-test: not_found
 #[test]
-fn delete_reports_existence_and_replays() {
+pub(super) fn delete_reports_existence_and_replays() {
     each_target(&DELETE, |node| {
         let key = format!("{}k", fresh_prefix());
         let missing = ok(&node.delete(&key, &fresh_id()), "DELETE of an absent key");

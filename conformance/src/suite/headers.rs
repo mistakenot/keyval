@@ -44,7 +44,7 @@ const NO_STORE: Tag = Tag {
 // api-test: version_mismatch
 // api-test: too_large
 #[test]
-fn every_response_is_no_store_json() {
+pub(super) fn every_response_is_no_store_json() {
     each_target(&NO_STORE, |node| {
         for (label, response) in &battery(node) {
             assert_no_store(response, label);

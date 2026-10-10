@@ -21,7 +21,7 @@ const KNOWN: Tag = Tag {
 // api-test: compareAndSwap
 // api-test: version_mismatch
 #[test]
-fn status_of_an_executed_write_is_known_and_replayed() {
+pub(super) fn status_of_an_executed_write_is_known_and_replayed() {
     each_target(&KNOWN, |node| {
         let key = format!("{}k", fresh_prefix());
         let (put_id, delete_id, cas_id) = (fresh_id(), fresh_id(), fresh_id());

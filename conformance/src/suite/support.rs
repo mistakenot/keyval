@@ -15,6 +15,7 @@ use model::server::Server;
 use model::{HistoryLimits, Limits};
 use serde_json::Value;
 
+use super::fixtures::{self, Fault};
 use crate::http::{self, Request, Response};
 use crate::poll::{self, Index, Policy, PollError, SystemClock};
 use crate::spec::Spec;
@@ -26,17 +27,23 @@ use crate::target::{BaseUrl, Kind, Targets};
 pub struct Node {
     kind: Kind,
     base: BaseUrl,
+    /// A wrong-server fixture to exhibit (W31.3); none outside the fixture tests.
+    fault: Option<Fault>,
 }
 
 impl Node {
     /// Sends `request`; a transport or protocol failure fails the test (P10).
     pub fn send(&self, request: &Request) -> Response {
-        http::send(&self.base, request).unwrap_or_else(|error| {
+        let mut response = http::send(&self.base, request).unwrap_or_else(|error| {
             panic!(
                 "rule: every exchange completes; {} {} to {} failed: {error}",
                 request.method, request.target, self.base
             )
-        })
+        });
+        if let Some(fault) = self.fault {
+            fault.apply(request, &mut response);
+        }
+        response
     }
 
     /// `GET target`.
@@ -317,6 +324,7 @@ fn spawn_model(limits: Limits) -> Node {
     Node {
         kind: Kind::Model,
         base,
+        fault: fixtures::active(),
     }
 }
 
@@ -358,6 +366,7 @@ pub fn each_target(tag: &Tag, check: impl Fn(&Node)) -> usize {
         let node = Node {
             kind,
             base: base.clone(),
+            fault: fixtures::active(),
         };
         run_on(tag, &node, &check);
         ran += 1;

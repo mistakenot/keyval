@@ -15,6 +15,7 @@
 // check: CONF-SEMANTIC
 mod cas;
 mod encoding;
+mod fixtures;
 mod headers;
 mod limits;
 mod scan;

@@ -347,7 +347,7 @@ const CONCURRENT: Tag = Tag {
 // api-test: getKey
 // api-test: version_mismatch
 #[test]
-fn concurrent_clients_produce_a_linearizable_history() {
+pub(super) fn concurrent_clients_produce_a_linearizable_history() {
     each_target(&CONCURRENT, |node| {
         let prefix = fresh_prefix();
         let keys = [format!("{prefix}a"), format!("{prefix}b")];

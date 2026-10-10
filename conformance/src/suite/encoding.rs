@@ -18,7 +18,7 @@ const ROUND_TRIP: Tag = Tag {
 // api-test: getKey
 // api-test: not_found
 #[test]
-fn escaped_plus_and_space_name_distinct_keys() {
+pub(super) fn escaped_plus_and_space_name_distinct_keys() {
     each_target(&ROUND_TRIP, |node| {
         let prefix = fresh_prefix();
         let (plus, space) = (format!("{prefix}a+b"), format!("{prefix}a b"));
@@ -71,7 +71,7 @@ const RAW_PLUS: Tag = Tag {
 // api-test: scanKeys
 // api-test: invalid_request
 #[test]
-fn raw_plus_is_refused_and_changes_nothing() {
+pub(super) fn raw_plus_is_refused_and_changes_nothing() {
     each_target(&RAW_PLUS, |node| {
         let prefix = fresh_prefix();
         let (key, id) = (format!("{prefix}x"), fresh_id());

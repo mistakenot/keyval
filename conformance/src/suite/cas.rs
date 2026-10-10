@@ -90,7 +90,7 @@ const MISMATCH: Tag = Tag {
 // api-test: getKey
 // api-test: version_mismatch
 #[test]
-fn cas_mismatch_is_a_terminal_result_that_consumes_the_id() {
+pub(super) fn cas_mismatch_is_a_terminal_result_that_consumes_the_id() {
     each_target(&MISMATCH, |node| {
         let key = format!("{}k", fresh_prefix());
         let put = ok(&node.put(&key, "one", &fresh_id()), "PUT");

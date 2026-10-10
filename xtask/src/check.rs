@@ -2336,7 +2336,7 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "CONF-SEMANTIC",
-        summary: "Semantic conformance corpus (§10.8, W31.2): 35 HTTP-only tests, each run against a fresh in-process reference model server and against every real target that serves all the operations it exercises. They cover %2B, %20 and raw-plus keys, invalid percent escapes, invalid UTF-8 and repeated query parameters, decoded key and value limits and escaping expansion, the live-key and live-byte quotas, terminal-error, replayed and status-result shapes with status unknown, Idempotency-Key and body validation, compare-and-swap, Cache-Control no-store on every response, SCAN empty ranges, half-open byte order and exact caps, and bounded applied-index polling. The K-10 witness records client observations, drives each write to a terminal answer with bounded status lookups, and judges the history with K-10; an unresolved write or a poll that times out fails (P10), and tampered histories are rejected. Test evidence, run against the model, not proof",
+        summary: "Semantic conformance corpus (§10.8, W31.2): 35 HTTP-only tests (the filter also selects the W31.3 fixture tests), each run against a fresh in-process reference model server and against every real target that serves all the operations it exercises. They cover %2B, %20 and raw-plus keys, invalid percent escapes, invalid UTF-8 and repeated query parameters, decoded key and value limits and escaping expansion, the live-key and live-byte quotas, terminal-error, replayed and status-result shapes with status unknown, Idempotency-Key and body validation, compare-and-swap, Cache-Control no-store on every response, SCAN empty ranges, half-open byte order and exact caps, and bounded applied-index polling. The K-10 witness records client observations, drives each write to a terminal answer with bounded status lookups, and judges the history with K-10; an unresolved write or a poll that times out fails (P10), and tampered histories are rejected. Test evidence, run against the model, not proof",
         kind: Kind::TestGroup,
         covers: &["DM-1", "F-6", "C-1", "C-6", "C-8"],
         class: ClaimClass::Invariant,
@@ -2346,6 +2346,19 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["suite::"],
         },
         min_cases: 35,
+    },
+    CheckDef {
+        id: "CONF-FIXTURES",
+        summary: "Wrong-response fixtures (§10.8, W31.3): the semantic corpus fails a bad server. Eleven faults rewrite a correct response into what a plausible wrong server would send: a dropped Cache-Control no-store, 412 for a version mismatch, 404 for an invalid request, a shifted or unmarked replay, a version that is not the execution index, a known status reported unknown, an inverted scan has_more or delete existed, an applied index that never advances, and a lost write. One test per fault runs a corpus test under it and requires the failure to name the rule the fault breaks; an exhaustive match proves each fault is paired with a test. Test evidence, run against the model, not proof",
+        kind: Kind::TestGroup,
+        covers: &["C-6", "F-6", "C-8"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "conformance",
+            filters: &["suite::fixtures::"],
+        },
+        min_cases: 12,
     },
 ];
 

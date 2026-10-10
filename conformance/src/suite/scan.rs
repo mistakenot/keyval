@@ -219,7 +219,7 @@ const CAPS: Tag = Tag {
 // api-test: putKey
 // api-test: invalid_request
 #[test]
-fn scan_limit_caps_are_exact() {
+pub(super) fn scan_limit_caps_are_exact() {
     each_target(&CAPS, |node| {
         let prefix = fresh_prefix();
         let (keys, last) = seed(node, &prefix, 129, |_| "v".to_owned());
