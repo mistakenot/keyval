@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://keyval.invalid/schemas/dev/cluster.v1.schema.json",
   "title": "keyval.dev.cluster/v1",
-  "description": "The report of `./dev cluster init|up|status|down` (xtask/src/cluster.rs `ClusterReport`; PLAN.md O-2, §7.7 step 0, W22.1): what the command did to each node of the config. A report that is ok has no error; one that is not ok says why.",
+  "description": "The report of `./dev cluster init|up|status|down|kill|restart` (xtask/src/cluster.rs `ClusterReport`; PLAN.md O-2, §7.7 step 0, W22.1, W22.2): what the command did to each node of the config. A report that is ok has no error; one that is not ok says why.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,7 +28,9 @@
         "init",
         "up",
         "status",
-        "down"
+        "down",
+        "kill",
+        "restart"
       ],
       "description": "The command."
     },
@@ -50,7 +52,7 @@
     },
     "nodes": {
       "type": "array",
-      "description": "Every node of the config, in config order (a refused command may list only the nodes it judged).",
+      "description": "Every node of the config, in config order (a refused command may list only the nodes it judged; `kill` and `restart` list the one node they act on).",
       "items": {
         "$ref": "#/$defs/node"
       }
@@ -117,6 +119,7 @@
             "running",
             "started",
             "stopped",
+            "killed",
             "stale",
             "refused"
           ],

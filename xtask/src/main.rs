@@ -199,7 +199,7 @@ enum Command {
         #[command(subcommand)]
         action: DemoAction,
     },
-    /// The local five-node cluster (O-2, §7.7 step 0): init, up, status and down, managed
+    /// The local five-node cluster (O-2, §7.7 step 0): init, up, status, down, kill and restart, managed
     /// by PID receipts and never by port or process name (W22).
     Cluster {
         #[command(subcommand)]
@@ -207,7 +207,7 @@ enum Command {
     },
 }
 
-/// `./dev cluster` actions; each takes the same options.
+/// `./dev cluster` actions; `kill` and `restart` also take `--node`.
 #[derive(Clone, Debug, Subcommand)]
 enum ClusterAction {
     /// Stamp one random instance ID into all five data directories; refuses used ones.
@@ -218,6 +218,20 @@ enum ClusterAction {
     Status(ClusterArgs),
     /// Stop the nodes this launcher started; never deletes data.
     Down(ClusterArgs),
+    /// SIGKILL one node this launcher started, as a crash probe does.
+    Kill(ClusterNodeArgs),
+    /// SIGKILL one node if it runs, then start it again; refuses occupied ports.
+    Restart(ClusterNodeArgs),
+}
+
+/// Options of the `./dev cluster` actions that act on one node.
+#[derive(Clone, Debug, clap::Args)]
+struct ClusterNodeArgs {
+    #[command(flatten)]
+    cluster: ClusterArgs,
+    /// The node ID, as in the config.
+    #[arg(long)]
+    node: u64,
 }
 
 /// Options of every `./dev cluster` action.
@@ -403,14 +417,16 @@ fn run(cli: Cli) -> Status {
 }
 
 fn run_cluster(root: &Path, format: Format, action: ClusterAction) -> Status {
-    let (kind, args) = match action {
-        ClusterAction::Init(args) => (cluster::Action::Init, args),
-        ClusterAction::Up(args) => (cluster::Action::Up, args),
-        ClusterAction::Status(args) => (cluster::Action::Status, args),
-        ClusterAction::Down(args) => (cluster::Action::Down, args),
+    let (kind, args, node) = match action {
+        ClusterAction::Init(args) => (cluster::Action::Init, args, None),
+        ClusterAction::Up(args) => (cluster::Action::Up, args, None),
+        ClusterAction::Status(args) => (cluster::Action::Status, args, None),
+        ClusterAction::Down(args) => (cluster::Action::Down, args, None),
+        ClusterAction::Kill(args) => (cluster::Action::Kill, args.cluster, Some(args.node)),
+        ClusterAction::Restart(args) => (cluster::Action::Restart, args.cluster, Some(args.node)),
     };
     let layout = cluster::Layout::new(root, sim::config_path(root, args.config), args.state_dir);
-    output::emit(format, &cluster::run(root, kind, &layout))
+    output::emit(format, &cluster::run(root, kind, &layout, node))
 }
 
 fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {

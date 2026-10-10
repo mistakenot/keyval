@@ -367,7 +367,7 @@ mod tests {
     }
 
     fn cluster_enums_match() {
-        let actions = variants!(ClusterAction: Init, Up, Status, Down);
+        let actions = variants!(ClusterAction: Init, Up, Status, Down, Kill, Restart);
         assert_enum(cluster::SCHEMA, "/properties/action/enum", &actions, false);
         let states = variants!(
             NodeState: Uninitialised,
@@ -376,6 +376,7 @@ mod tests {
             Running,
             Started,
             Stopped,
+            Killed,
             Stale,
             Refused
         );
@@ -1039,6 +1040,26 @@ mod tests {
                 vec![node(cluster::NodeState::Stale, None, Some("pid 7 is gone"))],
             ),
             "cluster status",
+        );
+        validators.assert_matches(
+            &report(
+                cluster::Action::Kill,
+                true,
+                vec![node(
+                    cluster::NodeState::Killed,
+                    None,
+                    Some("pid 4242 killed"),
+                )],
+            ),
+            "cluster kill",
+        );
+        validators.assert_matches(
+            &report(
+                cluster::Action::Restart,
+                true,
+                vec![node(cluster::NodeState::Started, Some(4343), None)],
+            ),
+            "cluster restart",
         );
         let mut refused = report(
             cluster::Action::Init,

@@ -2052,7 +2052,7 @@ pub const CATALOGUE: &[CheckDef] = &[
     },
     CheckDef {
         id: "CLUSTER-LIFECYCLE",
-        summary: "The local five-node launcher (O-2, §7.7 step 0, W22.1): `./dev cluster init` stamps one random 128-bit instance ID into all five data directories through `keyval-server init`, judging every directory first and refusing a used, missing-parent-unusable or mismatched one without modifying it, resuming an interrupted init only with its recorded ID, and never repeating a completed one; `up` refuses uninitialised directories and occupied ports before starting anything and rolls back a partial start through the child handles it owns; `status` changes nothing; `down` signals only a process whose PID receipt still matches its start time, executable and command line, so a recycled PID is never signalled and no data is deleted. Every lifecycle command takes `--config`. Test evidence from a fake server plus a manual run against the real one, not proof",
+        summary: "The local five-node launcher (O-2, §7.7 step 0, W22.1, W22.2): `./dev cluster init` stamps one random 128-bit instance ID into all five data directories through `keyval-server init`, judging every directory first and refusing a used, missing-parent-unusable or mismatched one without modifying it, resuming an interrupted init only with its recorded ID, and never repeating a completed one; `up` refuses uninitialised directories and occupied ports before starting anything and rolls back a partial start through the child handles it owns; `status` changes nothing; `down` signals only a process whose PID receipt still matches its start time, executable and command line, so a recycled PID is never signalled and no data is deleted; `kill --node N` sends SIGKILL (which a process ignoring SIGTERM does not survive) only to a receipted PID that still matches, refusing a foreign process at the PID without signalling it; `restart --node N` checks the initialised directory and free ports before it kills, so a refused restart leaves a running node running, and never touches a data directory. Every lifecycle command takes `--config`. Test evidence from a fake server plus a manual run against the real one, not proof",
         kind: Kind::TestGroup,
         covers: &["O-2"],
         class: ClaimClass::Invariant,
@@ -2061,7 +2061,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["cluster::tests::"],
         },
-        min_cases: 23,
+        min_cases: 33,
     },
     CheckDef {
         id: "AUDIT-REPORTS",

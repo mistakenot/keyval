@@ -1,5 +1,5 @@
-//! `./dev cluster init|up|status|down`: the local five-node launcher (PLAN.md O-2, §7.7
-//! step 0, D-63, W22.1).
+//! `./dev cluster init|up|status|down|kill|restart`: the local five-node launcher (PLAN.md
+//! O-2, §7.7 step 0, D-63, W22.1, W22.2).
 //!
 //! **Init** generates one random 128-bit instance ID and stamps it into all five data
 //! directories through `keyval-server init`, once. Before it touches anything it judges
@@ -22,6 +22,13 @@
 //!
 //! **Status** reports each node without changing anything. **Down** sends SIGTERM to the
 //! nodes whose receipts still match, waits for them, and removes their receipts.
+//!
+//! **Kill** sends SIGKILL to one node, the way a crash probe stops it, and only if its
+//! receipt still matches: a node that is not running, or whose PID now belongs to another
+//! process, is an error and nothing is signalled. **Restart** kills the node if it runs and
+//! starts it again, but only after checking that it can start (a completed init, a journal,
+//! free ports); a refused restart leaves a running node running. Neither touches a data
+//! directory, and a killed node's report carries its old PID in `detail`, not in `pid`.
 
 // check: CLUSTER-LIFECYCLE
 
@@ -82,6 +89,10 @@ pub enum Action {
     Status,
     /// Stop the nodes.
     Down,
+    /// SIGKILL one node, as a crash probe does.
+    Kill,
+    /// SIGKILL one node if it runs, then start it again.
+    Restart,
 }
 
 impl Action {
@@ -91,6 +102,8 @@ impl Action {
             Self::Up => "up",
             Self::Status => "status",
             Self::Down => "down",
+            Self::Kill => "kill",
+            Self::Restart => "restart",
         }
     }
 }
@@ -111,6 +124,8 @@ pub enum NodeState {
     Started,
     /// `down` stopped the process.
     Stopped,
+    /// `kill` or `restart` killed the process.
+    Killed,
     /// A receipt exists, but the process it names is gone or is not the one it recorded.
     Stale,
     /// The command refused this node and changed nothing in it.
@@ -501,18 +516,37 @@ fn read_receipt(path: &Path) -> Result<Option<Receipt>, String> {
         .ok_or_else(|| format!("{} is not a PID receipt; left as it is", path.display()))
 }
 
-/// Sends SIGTERM to `pid`. The caller has just checked that the PID is its own process.
-fn terminate(pid: u32) -> Result<(), String> {
+/// A signal the launcher sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Signal {
+    /// A request to exit, which the server answers by shutting down.
+    Term,
+    /// An exit the process cannot answer: a crash, for the probes.
+    Kill,
+}
+
+impl Signal {
+    const fn flag(self) -> &'static str {
+        match self {
+            Self::Term => "-TERM",
+            Self::Kill => "-KILL",
+        }
+    }
+}
+
+/// Sends `signal` to `pid`. The caller has just checked that the PID is its own process.
+fn terminate(pid: u32, signal: Signal) -> Result<(), String> {
+    let flag = signal.flag();
     let captured = process::run(
-        Command::new("kill").args(["-TERM", &pid.to_string()]),
+        Command::new("kill").args([flag, &pid.to_string()]),
         Duration::from_secs(10),
     )
-    .map_err(|err| format!("kill -TERM {pid}: {err}"))?;
+    .map_err(|err| format!("kill {flag} {pid}: {err}"))?;
     if captured.status.success() {
         Ok(())
     } else {
         Err(format!(
-            "kill -TERM {pid} exited with {}: {}",
+            "kill {flag} {pid} exited with {}: {}",
             captured.status,
             tail(&captured.stderr)
         ))
@@ -978,24 +1012,52 @@ fn watch(layout: &Layout, started: &mut [Started], grace: Duration) -> Option<St
     None
 }
 
+/// The instance ID of the completed init, `None` if there is no record; `Err` if the record
+/// is unreadable or names an interrupted init.
+fn completed_record(layout: &Layout) -> Result<Option<String>, String> {
+    match InstanceRecord::read(layout)? {
+        Some(record) if !record.complete => Err(format!(
+            "init was interrupted (instance {}): run `./dev cluster init` again first",
+            record.instance_id
+        )),
+        record => Ok(record.map(|record| record.instance_id)),
+    }
+}
+
+/// The nodes of the config `only` selects: all of them, or the one with that ID.
+fn select(nodes: Vec<NodeConfig>, only: Option<u64>) -> Result<Vec<NodeConfig>, String> {
+    let Some(id) = only else {
+        return Ok(nodes);
+    };
+    let ids: Vec<u64> = nodes.iter().map(|node| node.id).collect();
+    let chosen: Vec<NodeConfig> = nodes.into_iter().filter(|node| node.id == id).collect();
+    if chosen.is_empty() {
+        Err(format!("node {id} is not in the config (nodes {ids:?})"))
+    } else {
+        Ok(chosen)
+    }
+}
+
 /// `./dev cluster up`: see the module docs.
 pub fn up(layout: &Layout, server: &Path, timing: Timing) -> ClusterReport {
-    let mut report = layout.report(Action::Up);
-    let nodes = match load_config(&layout.config) {
+    start(layout, server, timing, Action::Up, None)
+}
+
+/// Starts the nodes `only` selects (all if `None`) and reports as `action`.
+fn start(
+    layout: &Layout,
+    server: &Path,
+    timing: Timing,
+    action: Action,
+    only: Option<u64>,
+) -> ClusterReport {
+    let mut report = layout.report(action);
+    let nodes = match load_config(&layout.config).and_then(|nodes| select(nodes, only)) {
         Ok(nodes) => nodes,
         Err(why) => return failed(report, why),
     };
-    match InstanceRecord::read(layout) {
-        Ok(Some(record)) if !record.complete => {
-            return failed(
-                report,
-                format!(
-                    "init was interrupted (instance {}): run `./dev cluster init` again first",
-                    record.instance_id
-                ),
-            );
-        }
-        Ok(record) => report.instance_id = record.map(|record| record.instance_id),
+    match completed_record(layout) {
+        Ok(id) => report.instance_id = id,
         Err(why) => return failed(report, why),
     }
     // Judge everything before starting anything.
@@ -1157,7 +1219,7 @@ pub fn down(layout: &Layout, timing: Timing) -> ClusterReport {
             }
             Ok(None) => entry.detail = Some("not started by this launcher".to_owned()),
             Ok(Some(receipt)) => match owned(&receipt) {
-                Owned::Ours => match stop(&receipt, timing.stop) {
+                Owned::Ours => match stop(&receipt, Signal::Term, timing.stop) {
                     Ok(()) => {
                         entry.state = NodeState::Stopped;
                         if let Err(err) = fs::remove_file(&path) {
@@ -1193,9 +1255,188 @@ pub fn down(layout: &Layout, timing: Timing) -> ClusterReport {
     }
 }
 
-/// SIGTERMs the process of `receipt` and waits until it is gone.
-fn stop(receipt: &Receipt, limit: Duration) -> Result<(), String> {
-    terminate(receipt.pid)?;
+// --- kill and restart -----------------------------------------------------------------
+
+/// What `kill` found at a node's receipt.
+enum Killed {
+    /// The process was the receipted one; it was sent SIGKILL and is gone.
+    Dead(NodeReport),
+    /// No receipt, or the receipted process had already exited.
+    NotRunning(NodeReport),
+    /// The PID now belongs to another process: nothing was signalled.
+    Foreign(NodeReport),
+    /// The receipt is unreadable, or the process outlived the signal.
+    Failed(NodeReport, String),
+}
+
+/// SIGKILLs `node` if, and only if, its receipt still names the process it recorded.
+/// A receipt that no longer names a live process of ours is removed; a data directory is
+/// never touched.
+fn kill_node(layout: &Layout, node: &NodeConfig, limit: Duration) -> Killed {
+    let initial = if looks_initialised(&node.data_dir) {
+        NodeState::Initialised
+    } else {
+        NodeState::Uninitialised
+    };
+    let mut entry = node_report(node, initial);
+    let path = layout.receipt(node.id);
+    let clear = |entry: &mut NodeReport| {
+        if let Err(err) = fs::remove_file(&path)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            entry.detail = Some(format!("{}: {err}", path.display()));
+        }
+    };
+    let receipt = match read_receipt(&path) {
+        Err(why) => {
+            entry.state = NodeState::Refused;
+            entry.detail = Some(why.clone());
+            return Killed::Failed(entry, why);
+        }
+        Ok(None) => {
+            entry.detail = Some("not started by this launcher".to_owned());
+            return Killed::NotRunning(entry);
+        }
+        Ok(Some(receipt)) => receipt,
+    };
+    match owned(&receipt) {
+        Owned::Ours => match stop(&receipt, Signal::Kill, limit) {
+            Ok(()) => {
+                entry.state = NodeState::Killed;
+                entry.detail = Some(format!("pid {} killed", receipt.pid));
+                clear(&mut entry);
+                Killed::Dead(entry)
+            }
+            // It may have exited on its own before the signal landed: look again.
+            Err(_) if owned(&receipt) == Owned::Gone => {
+                entry.state = NodeState::Stale;
+                entry.detail = Some(format!(
+                    "pid {} exited before the signal; receipt removed",
+                    receipt.pid
+                ));
+                clear(&mut entry);
+                Killed::NotRunning(entry)
+            }
+            Err(why) => {
+                entry.state = NodeState::Running;
+                entry.pid = Some(receipt.pid);
+                entry.detail = Some(why.clone());
+                Killed::Failed(entry, why)
+            }
+        },
+        Owned::Gone => {
+            entry.state = NodeState::Stale;
+            entry.detail = Some(format!(
+                "pid {} had exited already; receipt removed",
+                receipt.pid
+            ));
+            clear(&mut entry);
+            Killed::NotRunning(entry)
+        }
+        Owned::Foreign => {
+            entry.state = NodeState::Refused;
+            entry.detail = Some(format!(
+                "pid {} is not the process the receipt recorded: nothing signalled, \
+                 receipt removed",
+                receipt.pid
+            ));
+            clear(&mut entry);
+            Killed::Foreign(entry)
+        }
+    }
+}
+
+/// `./dev cluster kill --node N`: SIGKILL, the way a crash probe stops a node.
+pub fn kill(layout: &Layout, node: u64, timing: Timing) -> ClusterReport {
+    let mut report = layout.report(Action::Kill);
+    let nodes = match load_config(&layout.config).and_then(|nodes| select(nodes, Some(node))) {
+        Ok(nodes) => nodes,
+        Err(why) => return failed(report, why),
+    };
+    report.instance_id = instance_of(layout);
+    let error = match kill_node(layout, &nodes[0], timing.stop) {
+        Killed::Dead(entry) => {
+            report.nodes.push(entry);
+            return report;
+        }
+        Killed::NotRunning(entry) => {
+            report.nodes.push(entry);
+            format!("node {node} is not running; nothing was signalled")
+        }
+        Killed::Foreign(entry) => {
+            report.nodes.push(entry);
+            format!("node {node}: its pid now belongs to another process; nothing was signalled")
+        }
+        Killed::Failed(entry, why) => {
+            report.nodes.push(entry);
+            format!("node {node}: {why}")
+        }
+    };
+    failed(report, error)
+}
+
+/// `./dev cluster restart --node N`: SIGKILL the node if it runs, then start it again,
+/// with `up`'s refusals for an uninitialised directory or an occupied port.
+pub fn restart(layout: &Layout, server: &Path, timing: Timing, node: u64) -> ClusterReport {
+    let mut report = layout.report(Action::Restart);
+    let nodes = match load_config(&layout.config).and_then(|nodes| select(nodes, Some(node))) {
+        Ok(nodes) => nodes,
+        Err(why) => return failed(report, why),
+    };
+    // Refuse before killing what cannot be started again. A live node's own ports are free
+    // once it dies, so they are probed only when no process of ours holds them.
+    let live = matches!(
+        read_receipt(&layout.receipt(node)),
+        Ok(Some(receipt)) if owned(&receipt) == Owned::Ours
+    );
+    let blocked = completed_record(layout).err().or_else(|| {
+        if !looks_initialised(&nodes[0].data_dir) {
+            Some(format!(
+                "{} holds no journal: not initialised",
+                nodes[0].data_dir.display()
+            ))
+        } else if live {
+            None
+        } else {
+            [nodes[0].client, nodes[0].peer]
+                .into_iter()
+                .find(|address| TcpListener::bind(address).is_err())
+                .map(|taken| format!("{taken} is in use by another process"))
+        }
+    });
+    if let Some(why) = blocked {
+        report.instance_id = instance_of(layout);
+        report.nodes.push(NodeReport {
+            detail: Some(why.clone()),
+            ..node_report(&nodes[0], NodeState::Refused)
+        });
+        return failed(
+            report,
+            format!("node {node} refused before anything was signalled: {why}"),
+        );
+    }
+    let before = match kill_node(layout, &nodes[0], timing.stop) {
+        Killed::Failed(entry, why) => {
+            report.instance_id = instance_of(layout);
+            report.nodes.push(entry);
+            return failed(report, format!("node {node}: {why}"));
+        }
+        Killed::Dead(entry) | Killed::NotRunning(entry) | Killed::Foreign(entry) => entry.detail,
+    };
+    let mut started = start(layout, server, timing, Action::Restart, Some(node));
+    // A refusal after the kill must not read as "untouched": say what was done first.
+    if let (Some(before), Some(shown)) = (before, started.nodes.first_mut()) {
+        shown.detail = Some(match shown.detail.take() {
+            Some(then) => format!("{before}; then {then}"),
+            None => before,
+        });
+    }
+    started
+}
+
+/// Signals the process of `receipt` and waits until it is gone.
+fn stop(receipt: &Receipt, signal: Signal, limit: Duration) -> Result<(), String> {
+    terminate(receipt.pid, signal)?;
     let deadline = Instant::now() + limit;
     while Instant::now() < deadline {
         if owned(receipt) != Owned::Ours {
@@ -1204,9 +1445,10 @@ fn stop(receipt: &Receipt, limit: Duration) -> Result<(), String> {
         thread::sleep(POLL);
     }
     Err(format!(
-        "pid {} still runs {}s after SIGTERM; it is left running",
+        "pid {} still runs {}s after {}; it is left running",
         receipt.pid,
-        limit.as_secs()
+        limit.as_secs(),
+        signal.flag()
     ))
 }
 
@@ -1312,24 +1554,46 @@ impl Drop for Lock {
     }
 }
 
-/// Runs `action` against the config at `layout`, building the server for `init` and `up`.
-pub fn run(root: &Path, action: Action, layout: &Layout) -> ClusterReport {
+/// Runs `action` against the config at `layout`, building the server for `init`, `up` and
+/// `restart`. `kill` and `restart` act on `node`, which they require.
+pub fn run(root: &Path, action: Action, layout: &Layout, node: Option<u64>) -> ClusterReport {
     let _lock = match action {
         Action::Status => None,
-        Action::Down if !layout.state_dir.exists() => None,
-        Action::Init | Action::Up | Action::Down => match Lock::take(layout) {
-            Ok(lock) => Some(lock),
-            Err(why) => return failed(layout.report(action), why),
-        },
+        Action::Down | Action::Kill if !layout.state_dir.exists() => None,
+        Action::Init | Action::Up | Action::Down | Action::Kill | Action::Restart => {
+            match Lock::take(layout) {
+                Ok(lock) => Some(lock),
+                Err(why) => return failed(layout.report(action), why),
+            }
+        }
     };
-    match action {
-        Action::Status => status(layout),
-        Action::Down => down(layout, Timing::LIVE),
-        Action::Init | Action::Up => match build_server(root) {
-            Ok(server) if action == Action::Init => init(layout, &server),
-            Ok(server) => up(layout, &server, Timing::LIVE),
-            Err(why) => failed(layout.report(action), why),
-        },
+    match (action, node) {
+        (Action::Kill, Some(node)) => kill(layout, node, Timing::LIVE),
+        (Action::Restart, Some(node)) => with_server(root, action, layout, Some(node)),
+        (Action::Kill | Action::Restart, None) => failed(
+            layout.report(action),
+            format!("`{}` needs --node", action.name()),
+        ),
+        (Action::Status, _) => status(layout),
+        (Action::Down, _) => down(layout, Timing::LIVE),
+        (Action::Init | Action::Up, _) => with_server(root, action, layout, None),
+    }
+}
+
+/// Builds the server, then runs the action that starts or stamps with it.
+fn with_server(root: &Path, action: Action, layout: &Layout, node: Option<u64>) -> ClusterReport {
+    let server = match build_server(root) {
+        Ok(server) => server,
+        Err(why) => return failed(layout.report(action), why),
+    };
+    match (action, node) {
+        (Action::Restart, Some(node)) => restart(layout, &server, Timing::LIVE, node),
+        (Action::Init, _) => init(layout, &server),
+        (Action::Up, _) => up(layout, &server, Timing::LIVE),
+        (Action::Status | Action::Down | Action::Kill | Action::Restart, _) => failed(
+            layout.report(action),
+            format!("`{}` does not start a server", action.name()),
+        ),
     }
 }
 
@@ -1390,7 +1654,7 @@ mod tests {
 
     /// A `keyval-server` stand-in. `init` writes `nodes/N/journal.log` and `instance`, and
     /// answers like the real one, including its "initialised already" refusal. `run` needs
-    /// a journal and then sleeps (bounded). Markers in the config's directory steer it:
+    /// a journal and then sleeps (bounded). Markers in the config's directory steer it (`ignore-term-N` makes `run` of node N ignore SIGTERM):
     /// `fail-init-N` makes `init` of node N fail; `fail-run-N` makes `run` of node N exit.
     const FAKE: &str = r#"#!/bin/sh
 cmd=$1; shift
@@ -1422,6 +1686,7 @@ case $cmd in
   run)
     [ -s "$dir/journal.log" ] || exit 4
     [ -e "$here/fail-run-$node" ] && exit 5
+    [ -e "$here/ignore-term-$node" ] && trap '' TERM
     i=0
     while [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done
     ;;
@@ -2002,6 +2267,272 @@ esac
         );
         assert_eq!(started.nodes[1].state, NodeState::Started);
         assert_ne!(started.nodes[1].pid, Some(foreign));
+    }
+
+    fn pids(report: &ClusterReport) -> Vec<Option<u32>> {
+        report.nodes.iter().map(|node| node.pid).collect()
+    }
+
+    #[test]
+    fn kill_sigkills_only_the_named_node_and_touches_no_data() {
+        let fixture = Fixture::new("cluster-kill");
+        assert!(fixture.init().ok);
+        let up = fixture.up();
+        assert!(up.ok, "report={up:#?}");
+        let victim = up.nodes[2].pid.expect("node 3 runs");
+        let data = fixture.snapshot();
+        let report = kill(&fixture.layout, 3, FAST);
+        assert!(report.ok, "rule: a receipted node is killed; {report:#?}");
+        assert_eq!(report.action, Action::Kill);
+        assert_eq!(
+            report.nodes.len(),
+            1,
+            "rule: one node is named; {report:#?}"
+        );
+        assert_eq!(report.nodes[0].state, NodeState::Killed);
+        assert!(identity(victim).is_none(), "rule: pid {victim} is gone");
+        assert!(
+            !fixture.layout.receipt(3).exists(),
+            "rule: its receipt is cleared"
+        );
+        assert_eq!(fixture.snapshot(), data, "rule: no data directory changes");
+        let seen = status(&fixture.layout);
+        let states: Vec<NodeState> = seen.nodes.iter().map(|n| n.state).collect();
+        assert_eq!(
+            states,
+            [
+                NodeState::Running,
+                NodeState::Running,
+                NodeState::Initialised,
+                NodeState::Running,
+                NodeState::Running
+            ],
+            "rule: only node 3 stopped; {seen:#?}"
+        );
+    }
+
+    #[test]
+    fn kill_of_a_node_that_is_not_running_or_not_in_the_config_fails_quietly() {
+        let fixture = Fixture::new("cluster-kill-absent");
+        assert!(fixture.init().ok);
+        let never = kill(&fixture.layout, 2, FAST);
+        assert!(!never.ok, "rule: nothing to kill is an error; {never:#?}");
+        assert_eq!(never.nodes[0].state, NodeState::Initialised);
+        let unknown = kill(&fixture.layout, 9, FAST);
+        assert!(!unknown.ok && unknown.nodes.is_empty(), "{unknown:#?}");
+        assert!(
+            unknown.error.as_deref().unwrap_or("").contains("node 9"),
+            "rule: the error names the node; {unknown:#?}"
+        );
+    }
+
+    #[test]
+    fn kill_refuses_a_foreign_process_at_the_pid() {
+        let fixture = Fixture::new("cluster-kill-foreign");
+        assert!(fixture.init().ok);
+        let foreign = std::process::id();
+        forge_receipt(&fixture, 2, foreign);
+        let report = kill(&fixture.layout, 2, FAST);
+        assert!(!report.ok, "rule: a foreign pid is refused; {report:#?}");
+        assert_eq!(report.nodes[0].state, NodeState::Refused);
+        assert!(
+            identity(foreign).is_some(),
+            "rule: the foreign process (pid {foreign}) was not signalled"
+        );
+        assert!(
+            !fixture.layout.receipt(2).exists(),
+            "rule: the dead receipt goes"
+        );
+    }
+
+    #[test]
+    fn restart_replaces_the_process_and_keeps_the_others() {
+        let fixture = Fixture::new("cluster-restart");
+        assert!(fixture.init().ok);
+        let up = fixture.up();
+        assert!(up.ok, "report={up:#?}");
+        let data = fixture.snapshot();
+        let report = restart(&fixture.layout, &fixture.server, FAST, 2);
+        assert!(report.ok, "rule: a running node restarts; {report:#?}");
+        assert_eq!(report.action, Action::Restart);
+        assert_eq!(report.nodes[0].state, NodeState::Started);
+        let fresh = report.nodes[0].pid.expect("a new pid");
+        assert_ne!(Some(fresh), up.nodes[1].pid, "rule: a new process");
+        assert!(
+            identity(up.nodes[1].pid.unwrap()).is_none(),
+            "rule: the old one is dead"
+        );
+        let seen = status(&fixture.layout);
+        assert_eq!(seen.nodes[1].pid, Some(fresh));
+        for index in [0, 2, 3, 4] {
+            assert_eq!(
+                seen.nodes[index].pid,
+                up.nodes[index].pid,
+                "rule: node {} is untouched",
+                index + 1
+            );
+        }
+        assert_eq!(fixture.snapshot(), data, "rule: no data directory changes");
+        assert!(
+            pids(&seen).iter().all(Option::is_some),
+            "rule: all five run; {seen:#?}"
+        );
+    }
+
+    #[test]
+    fn restart_that_cannot_start_leaves_the_running_node_alone() {
+        let fixture = Fixture::new("cluster-restart-preflight");
+        assert!(fixture.init().ok);
+        let up = fixture.up();
+        assert!(up.ok, "report={up:#?}");
+        let pid = up.nodes[1].pid.expect("node 2 runs");
+        fs::write(fixture.node_dir(2).join("journal.log"), "").unwrap();
+        let report = restart(&fixture.layout, &fixture.server, FAST, 2);
+        assert!(
+            !report.ok,
+            "rule: an unstartable node is refused; {report:#?}"
+        );
+        assert_eq!(report.nodes[0].state, NodeState::Refused);
+        assert!(
+            identity(pid).is_some(),
+            "rule: the healthy node (pid {pid}) was not killed by a refused restart"
+        );
+        assert!(
+            fixture.layout.receipt(2).exists(),
+            "rule: its receipt stays"
+        );
+    }
+
+    #[test]
+    fn kill_is_sigkill_and_not_a_polite_request() {
+        assert_eq!(Signal::Kill.flag(), "-KILL");
+        assert_eq!(Signal::Term.flag(), "-TERM");
+        let fixture = Fixture::new("cluster-kill-vs-term");
+        assert!(fixture.init().ok);
+        fs::write(fixture.dir.join("ignore-term-2"), "").unwrap();
+        let up = fixture.up();
+        assert!(up.ok, "report={up:#?}");
+        let pid = up.nodes[1].pid.expect("node 2 runs");
+        let patient = Timing {
+            grace: FAST.grace,
+            stop: Duration::from_millis(500),
+        };
+        let stopped = down(&fixture.layout, patient);
+        assert!(
+            !stopped.ok,
+            "rule: SIGTERM cannot stop node 2; {stopped:#?}"
+        );
+        assert_eq!(stopped.nodes[1].state, NodeState::Running);
+        assert!(identity(pid).is_some(), "rule: node 2 shrugged off SIGTERM");
+        let report = kill(&fixture.layout, 2, FAST);
+        assert!(
+            report.ok,
+            "rule: SIGKILL stops what ignores SIGTERM; {report:#?}"
+        );
+        assert!(identity(pid).is_none(), "rule: pid {pid} is gone");
+    }
+
+    #[test]
+    fn kill_clears_the_receipt_of_a_process_that_already_exited() {
+        let fixture = Fixture::new("cluster-kill-gone");
+        assert!(fixture.init().ok);
+        let mut brief = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = brief.id();
+        fs::create_dir_all(&fixture.layout.state_dir).unwrap();
+        let nodes = load_config(&fixture.layout.config).unwrap();
+        let receipt = Receipt {
+            pid,
+            identity: identity(pid).unwrap(),
+        };
+        fs::write(
+            fixture.layout.receipt(2),
+            receipt
+                .to_json(&nodes[1], &fixture.layout.config)
+                .to_string(),
+        )
+        .unwrap();
+        brief.kill().unwrap();
+        brief.wait().unwrap();
+        let report = kill(&fixture.layout, 2, FAST);
+        assert!(!report.ok, "rule: nothing was running; {report:#?}");
+        assert_eq!(report.nodes[0].state, NodeState::Stale);
+        assert!(
+            !fixture.layout.receipt(2).exists(),
+            "rule: the dead receipt goes"
+        );
+    }
+
+    #[test]
+    fn restart_over_a_foreign_pid_signals_nothing_and_starts_the_node() {
+        let fixture = Fixture::new("cluster-restart-foreign");
+        assert!(fixture.init().ok);
+        let foreign = std::process::id();
+        forge_receipt(&fixture, 2, foreign);
+        let report = restart(&fixture.layout, &fixture.server, FAST, 2);
+        assert!(
+            report.ok,
+            "rule: the node is not running, so it starts; {report:#?}"
+        );
+        assert_eq!(report.nodes[0].state, NodeState::Started);
+        assert!(
+            report.nodes[0]
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("nothing signalled"),
+            "rule: the report says nothing was signalled; {report:#?}"
+        );
+        assert!(
+            identity(foreign).is_some(),
+            "rule: pid {foreign} was not signalled"
+        );
+    }
+
+    #[test]
+    fn restart_starts_a_node_that_is_not_running() {
+        let fixture = Fixture::new("cluster-restart-cold");
+        assert!(fixture.init().ok);
+        let report = restart(&fixture.layout, &fixture.server, FAST, 4);
+        assert!(
+            report.ok,
+            "rule: restart starts a stopped node; {report:#?}"
+        );
+        assert_eq!(report.nodes[0].state, NodeState::Started);
+    }
+
+    #[test]
+    fn restart_refuses_an_occupied_port_and_an_uninitialised_directory() {
+        let fixture = Fixture::new("cluster-restart-refused");
+        assert!(fixture.init().ok);
+        assert!(fixture.up().ok);
+        assert!(kill(&fixture.layout, 2, FAST).ok);
+        let squatter = TcpListener::bind(("127.0.0.1", fixture.ports[1])).unwrap();
+        let data = fixture.snapshot();
+        let blocked = restart(&fixture.layout, &fixture.server, FAST, 2);
+        assert!(
+            !blocked.ok,
+            "rule: an occupied port is refused; {blocked:#?}"
+        );
+        assert_eq!(blocked.nodes[0].state, NodeState::Refused);
+        let why = blocked.nodes[0].detail.as_deref().unwrap_or_default();
+        assert!(
+            why.contains(&fixture.ports[1].to_string()) && why.contains("in use"),
+            "rule: the refusal names the occupied port {}; detail={why:?}",
+            fixture.ports[1]
+        );
+        assert!(
+            !fixture.layout.receipt(2).exists(),
+            "rule: nothing was started"
+        );
+        assert_eq!(fixture.snapshot(), data);
+        drop(squatter);
+        // Node 5 is up; its journal is emptied behind the launcher's back, so it holds no
+        // genesis any more: restart refuses to start it over nothing.
+        assert!(kill(&fixture.layout, 5, FAST).ok);
+        fs::write(fixture.node_dir(5).join("journal.log"), "").unwrap();
+        let bare = restart(&fixture.layout, &fixture.server, FAST, 5);
+        assert!(!bare.ok, "rule: no genesis, no start; {bare:#?}");
+        assert_eq!(bare.nodes[0].state, NodeState::Refused);
     }
 
     #[test]
