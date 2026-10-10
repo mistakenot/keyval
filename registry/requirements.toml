@@ -291,7 +291,7 @@ notes = "SHOULD: keeps its level and needs a recorded disposition before release
 [[requirement]]
 id = "O-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "One static configuration file, parsed and validated"
 
 [[requirement]]
