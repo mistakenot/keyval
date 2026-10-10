@@ -28,7 +28,7 @@ notes = "Size limits accepted by the owner 2026-10-01 (§15 Q1)."
 [[requirement]]
 id = "DM-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A key's version is the log index of the write that set it"
 
 [[requirement]]
@@ -148,7 +148,7 @@ title = "One node's reads never go backwards within an incarnation"
 [[requirement]]
 id = "C-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "COMPARE_SWAP is evaluated when its entry is applied"
 
 [[requirement]]
