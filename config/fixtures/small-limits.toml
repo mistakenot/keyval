@@ -2,7 +2,9 @@
 # exactly on its rule's boundary:
 # - max_journal_bytes = ⌈1.25 × 4096⌉ + 100 × 64 + 64 MiB = 67120384, the margin
 #   formula's minimum (the same formula applies to small limits, §7.10);
-# - replication_inflight_batches × replication_batch_bytes = peer_send_queue_bytes;
+# - peer_send_queue_bytes = 1960 = one replication message's bound, ⌈3/2 × (16 + 64 + 1024 +
+#   32)⌉ + 256 (§7.10, D-81); the largest entry exceeds the batch, so it sets the bound,
+#   and with one batch in flight and one queued message every send-queue rule is exact;
 # - max_uncommitted_bytes = replication_batch_bytes (raft-rs needs >=).
 
 cluster_id = "keyval-fixture-small-limits"
@@ -23,7 +25,7 @@ max_journal_bytes = 67120384
 replication_batch_bytes = 1024
 replication_inflight_batches = 1
 peer_send_queue_messages = 1
-peer_send_queue_bytes = 1024
+peer_send_queue_bytes = 1960
 max_uncommitted_bytes = 1024
 max_committed_bytes_per_ready = 1
 

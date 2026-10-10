@@ -297,9 +297,24 @@ pub enum ConfigError {
         /// The smallest value the formula allows.
         required: u64,
     },
-    /// In-flight replication bytes exceed the per-peer send queue's bytes (§7.11).
+    /// The per-peer send queue cannot hold one replication message (§7.10, D-81).
+    SendQueueBelowMessage {
+        /// `peer_send_queue_bytes`.
+        peer_send_queue_bytes: u64,
+        /// One replication message's bound.
+        message_bound: u64,
+    },
+    /// The per-peer send queue holds fewer messages than there are in-flight batches
+    /// (§7.10, D-81).
+    SendQueueMessagesBelowInflight {
+        /// `peer_send_queue_messages`.
+        peer_send_queue_messages: u64,
+        /// `replication_inflight_batches`.
+        replication_inflight_batches: u64,
+    },
+    /// In-flight replication bytes exceed the per-peer send queue's bytes (§7.10, D-81).
     ReplicationExceedsSendQueue {
-        /// `replication_inflight_batches × replication_batch_bytes`.
+        /// `replication_inflight_batches ×` one replication message's bound.
         inflight_bytes: u64,
         /// `peer_send_queue_bytes`.
         peer_send_queue_bytes: u64,
@@ -442,13 +457,30 @@ impl fmt::Display for ConfigError {
                  max_log_entries × {PER_ENTRY_OVERHEAD_BOUND} + {JOURNAL_PROTOCOL_ALLOWANCE} \
                  = {required} (§7.10)"
             ),
+            Self::SendQueueBelowMessage {
+                peer_send_queue_bytes,
+                message_bound,
+            } => write!(
+                f,
+                "peer_send_queue_bytes = {peer_send_queue_bytes} is below one replication \
+                 message's bound of {message_bound} bytes (§7.10)"
+            ),
+            Self::SendQueueMessagesBelowInflight {
+                peer_send_queue_messages,
+                replication_inflight_batches,
+            } => write!(
+                f,
+                "peer_send_queue_messages = {peer_send_queue_messages} is below \
+                 replication_inflight_batches = {replication_inflight_batches} (§7.10)"
+            ),
             Self::ReplicationExceedsSendQueue {
                 inflight_bytes,
                 peer_send_queue_bytes,
             } => write!(
                 f,
-                "replication_inflight_batches × replication_batch_bytes = {inflight_bytes} \
-                 exceeds peer_send_queue_bytes = {peer_send_queue_bytes}"
+                "replication_inflight_batches × one replication message's bound = \
+                 {inflight_bytes} exceeds peer_send_queue_bytes = {peer_send_queue_bytes} \
+                 (§7.10)"
             ),
             Self::Consensus { node, violation } => write!(
                 f,

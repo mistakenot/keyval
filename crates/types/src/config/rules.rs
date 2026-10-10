@@ -52,6 +52,10 @@ pub(super) struct Values {
     pub(super) max_uncommitted_bytes: u64,
     /// `max_committed_bytes_per_ready`.
     pub(super) max_committed_bytes_per_ready: u64,
+    /// `raft_entry_overhead_bound`.
+    pub(super) raft_entry_overhead_bound: u64,
+    /// `peer_message_overhead_bound`.
+    pub(super) peer_message_overhead_bound: u64,
 }
 
 impl Values {
@@ -78,6 +82,8 @@ impl Values {
             ConfigParam::PeerSendQueueBytes => self.peer_send_queue_bytes,
             ConfigParam::MaxUncommittedBytes => self.max_uncommitted_bytes,
             ConfigParam::MaxCommittedBytesPerReady => self.max_committed_bytes_per_ready,
+            ConfigParam::RaftEntryOverheadBound => self.raft_entry_overhead_bound,
+            ConfigParam::PeerMessageOverheadBound => self.peer_message_overhead_bound,
         }
     }
 
@@ -133,6 +139,8 @@ pub(super) const fn timing(values: &Values) -> Result<(), ConfigError> {
 pub(super) fn limits(values: &Values) -> Result<(), ConfigError> {
     command_fits(values)?;
     journal_margin(values)?;
+    message_fits(values)?;
+    queue_counts_fit(values)?;
     replication_fits(values)
 }
 
@@ -183,19 +191,64 @@ pub(super) fn journal_margin(values: &Values) -> Result<(), ConfigError> {
     }
 }
 
-/// In-flight replication bytes fit the per-peer send queue, so ordinary catch-up bursts
-/// are never dropped (§7.11).
+/// One replication message's byte bound (§7.10, D-81): ⌈3/2 × max(`replication_batch_bytes`,
+/// the largest single entry)⌉ + `peer_message_overhead_bound`, computed exactly. The
+/// largest entry is `max_key_bytes` + `max_value_bytes` + [`COMMAND_ENVELOPE_BOUND`] +
+/// `raft_entry_overhead_bound`. The consensus library always sends at least one entry,
+/// and the 3/2 covers per-entry framing.
+pub(super) fn message_bound(values: &Values) -> u128 {
+    let largest_entry = u128::from(values.max_key_bytes)
+        + u128::from(values.max_value_bytes)
+        + u128::from(COMMAND_ENVELOPE_BOUND)
+        + u128::from(values.raft_entry_overhead_bound);
+    let payload = largest_entry.max(u128::from(values.replication_batch_bytes));
+    (payload * 3).div_ceil(2) + u128::from(values.peer_message_overhead_bound)
+}
+
+/// The per-peer send queue holds at least one replication message (§7.10, D-81).
+///
+/// # Errors
+///
+/// [`ConfigError::SendQueueBelowMessage`].
+pub(super) fn message_fits(values: &Values) -> Result<(), ConfigError> {
+    let bound = message_bound(values);
+    if u128::from(values.peer_send_queue_bytes) < bound {
+        Err(ConfigError::SendQueueBelowMessage {
+            peer_send_queue_bytes: values.peer_send_queue_bytes,
+            message_bound: u64::try_from(bound).unwrap_or(u64::MAX),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// The per-peer send queue holds a message for every in-flight batch (§7.10, D-81).
+///
+/// # Errors
+///
+/// [`ConfigError::SendQueueMessagesBelowInflight`].
+pub(super) const fn queue_counts_fit(values: &Values) -> Result<(), ConfigError> {
+    if values.peer_send_queue_messages < values.replication_inflight_batches {
+        Err(ConfigError::SendQueueMessagesBelowInflight {
+            peer_send_queue_messages: values.peer_send_queue_messages,
+            replication_inflight_batches: values.replication_inflight_batches,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// In-flight replication messages fit the per-peer send queue's bytes, so ordinary
+/// catch-up bursts are never dropped (§7.10, §7.11, D-81).
 ///
 /// # Errors
 ///
 /// [`ConfigError::ReplicationExceedsSendQueue`].
-pub(super) const fn replication_fits(values: &Values) -> Result<(), ConfigError> {
-    let inflight_bytes = values
-        .replication_inflight_batches
-        .saturating_mul(values.replication_batch_bytes);
-    if inflight_bytes > values.peer_send_queue_bytes {
+pub(super) fn replication_fits(values: &Values) -> Result<(), ConfigError> {
+    let inflight_bytes = u128::from(values.replication_inflight_batches) * message_bound(values);
+    if inflight_bytes > u128::from(values.peer_send_queue_bytes) {
         Err(ConfigError::ReplicationExceedsSendQueue {
-            inflight_bytes,
+            inflight_bytes: u64::try_from(inflight_bytes).unwrap_or(u64::MAX),
             peer_send_queue_bytes: values.peer_send_queue_bytes,
         })
     } else {

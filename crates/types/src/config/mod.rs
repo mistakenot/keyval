@@ -462,6 +462,8 @@ fn read_values(top: &Table) -> Result<Values, ConfigError> {
         peer_send_queue_bytes: read(ConfigParam::PeerSendQueueBytes)?,
         max_uncommitted_bytes: read(ConfigParam::MaxUncommittedBytes)?,
         max_committed_bytes_per_ready: read(ConfigParam::MaxCommittedBytesPerReady)?,
+        raft_entry_overhead_bound: read(ConfigParam::RaftEntryOverheadBound)?,
+        peer_message_overhead_bound: read(ConfigParam::PeerMessageOverheadBound)?,
     })
 }
 

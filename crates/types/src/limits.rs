@@ -73,6 +73,10 @@ pub enum Limit {
     PeerQueueMessages,
     /// Per-peer send queue bytes: `peer_send_queue_bytes`.
     PeerQueueBytes,
+    /// Raft entry overhead bound: `raft_entry_overhead_bound`.
+    RaftEntryOverheadBound,
+    /// Peer message overhead bound: `peer_message_overhead_bound`.
+    PeerMessageOverheadBound,
     /// Replication batch bytes: `replication_batch_bytes`.
     ReplicationBatchBytes,
     /// Replication batches in flight per peer: `replication_inflight_batches`.
@@ -97,7 +101,7 @@ pub enum Limit {
 
 impl Limit {
     /// Every limit, in §7.11 order.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 32] = [
         Self::KeyBytes,
         Self::ValueBytes,
         Self::RequestBodyBytes,
@@ -118,6 +122,8 @@ impl Limit {
         Self::EntryCacheBytes,
         Self::PeerQueueMessages,
         Self::PeerQueueBytes,
+        Self::RaftEntryOverheadBound,
+        Self::PeerMessageOverheadBound,
         Self::ReplicationBatchBytes,
         Self::ReplicationInflightBatches,
         Self::FramePayloadBytes,
@@ -154,6 +160,8 @@ impl Limit {
             Self::EntryCacheBytes => "entry_cache_bytes",
             Self::PeerQueueMessages => "peer_queue_messages",
             Self::PeerQueueBytes => "peer_queue_bytes",
+            Self::RaftEntryOverheadBound => "raft_entry_overhead_bound",
+            Self::PeerMessageOverheadBound => "peer_message_overhead_bound",
             Self::ReplicationBatchBytes => "replication_batch_bytes",
             Self::ReplicationInflightBatches => "replication_inflight_batches",
             Self::FramePayloadBytes => "frame_payload_bytes",
@@ -194,6 +202,12 @@ impl Limit {
             Self::EntryCacheBytes => LimitSource::Fixed(8 * MIB),
             Self::PeerQueueMessages => LimitSource::Config(ConfigParam::PeerSendQueueMessages),
             Self::PeerQueueBytes => LimitSource::Config(ConfigParam::PeerSendQueueBytes),
+            Self::RaftEntryOverheadBound => {
+                LimitSource::Config(ConfigParam::RaftEntryOverheadBound)
+            }
+            Self::PeerMessageOverheadBound => {
+                LimitSource::Config(ConfigParam::PeerMessageOverheadBound)
+            }
             Self::ReplicationBatchBytes => LimitSource::Config(ConfigParam::ReplicationBatchBytes),
             Self::ReplicationInflightBatches => {
                 LimitSource::Config(ConfigParam::ReplicationInflightBatches)
@@ -269,7 +283,7 @@ mod tests {
     fn the_registry_matches_the_section_7_11_table() {
         let local = Config::parse(LOCAL, Path::new("config")).unwrap();
         // Written by hand from PLAN.md §7.11 (and §7.10 for the configured defaults).
-        let expected: [(Limit, u64); 30] = [
+        let expected: [(Limit, u64); 32] = [
             (Limit::KeyBytes, 256),
             (Limit::ValueBytes, 65_536),
             (Limit::RequestBodyBytes, 512 * 1024),
@@ -290,6 +304,8 @@ mod tests {
             (Limit::EntryCacheBytes, 8 << 20),
             (Limit::PeerQueueMessages, 64),
             (Limit::PeerQueueBytes, 8 << 20),
+            (Limit::RaftEntryOverheadBound, 32),
+            (Limit::PeerMessageOverheadBound, 256),
             (Limit::ReplicationBatchBytes, 256 << 10),
             (Limit::ReplicationInflightBatches, 16),
             (Limit::FramePayloadBytes, 1 << 20),

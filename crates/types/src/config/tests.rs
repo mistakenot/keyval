@@ -1046,21 +1046,161 @@ fn the_journal_margin_formula_is_pinned_and_exact() {
     );
 }
 
+/// One replication message's bound under [`BASE`]: the 256 KiB batch exceeds the largest
+/// entry (256 + 65536 + 1024 + 32), so ⌈3/2 × 262144⌉ + 256.
+const BASE_MESSAGE_BOUND: u64 = 393_216 + 256;
+
 #[test]
-fn in_flight_replication_bytes_must_fit_the_send_queue() {
-    let inflight = 16 * (256 << 10);
+fn the_message_bound_is_three_halves_of_the_larger_of_batch_and_entry_plus_the_header() {
+    let mut values = base_values();
+    assert_eq!(
+        rules::message_bound(&values),
+        u128::from(BASE_MESSAGE_BOUND),
+        "rule: batch-dominated bound (D-81); values={values:?}"
+    );
+    values.replication_batch_bytes = 1;
+    assert_eq!(
+        rules::message_bound(&values),
+        u128::from((256 + 65_536 + 1024 + 32_u64) * 3 / 2 + 256),
+        "rule: entry-dominated bound (D-81); values={values:?}"
+    );
+    values.replication_batch_bytes = 3;
+    values.max_value_bytes = 0;
+    values.max_key_bytes = 1;
+    values.raft_entry_overhead_bound = 32;
+    values.peer_message_overhead_bound = 256;
+    assert_eq!(
+        rules::message_bound(&values),
+        u128::from((3 * (1 + 1024 + 32_u64)).div_ceil(2) + 256),
+        "rule: the 3/2 factor rounds up (D-81); values={values:?}"
+    );
+}
+
+#[test]
+fn the_send_queue_must_hold_one_message() {
+    let mut values = base_values();
+    values.replication_inflight_batches = 1;
+    values.peer_send_queue_bytes = BASE_MESSAGE_BOUND - 1;
+    assert_eq!(
+        rules::message_fits(&values),
+        Err(ConfigError::SendQueueBelowMessage {
+            peer_send_queue_bytes: BASE_MESSAGE_BOUND - 1,
+            message_bound: BASE_MESSAGE_BOUND,
+        }),
+        "rule: queue bytes N-1 below one message's bound are refused (D-81)"
+    );
+    for bytes in [BASE_MESSAGE_BOUND, BASE_MESSAGE_BOUND + 1] {
+        values.peer_send_queue_bytes = bytes;
+        assert_eq!(
+            rules::message_fits(&values),
+            Ok(()),
+            "rule: queue bytes N and N+1 are accepted (D-81); bytes={bytes}"
+        );
+    }
+}
+
+#[test]
+fn the_send_queue_must_hold_a_message_per_in_flight_batch() {
+    let mut values = base_values();
+    values.replication_inflight_batches = 16;
+    values.peer_send_queue_messages = 15;
+    assert_eq!(
+        rules::queue_counts_fit(&values),
+        Err(ConfigError::SendQueueMessagesBelowInflight {
+            peer_send_queue_messages: 15,
+            replication_inflight_batches: 16,
+        }),
+        "rule: queue messages N-1 below the in-flight batches are refused (D-81)"
+    );
+    for messages in [16, 17] {
+        values.peer_send_queue_messages = messages;
+        assert_eq!(
+            rules::queue_counts_fit(&values),
+            Ok(()),
+            "rule: queue messages N and N+1 are accepted (D-81); messages={messages}"
+        );
+    }
+    refused(
+        &with_top("replication_inflight_batches = 16\npeer_send_queue_messages = 15"),
+        &ConfigError::SendQueueMessagesBelowInflight {
+            peer_send_queue_messages: 15,
+            replication_inflight_batches: 16,
+        },
+        "the message-count rule is reached from a file (D-81)",
+    );
+}
+
+#[test]
+fn in_flight_replication_messages_must_fit_the_send_queue() {
+    let inflight = 16 * BASE_MESSAGE_BOUND;
     refused(
         &with_top(&format!("peer_send_queue_bytes = {}", inflight - 1)),
         &ConfigError::ReplicationExceedsSendQueue {
             inflight_bytes: inflight,
             peer_send_queue_bytes: inflight - 1,
         },
-        "in-flight batches × batch size > per-peer send-queue bytes is refused (§7.10)",
+        "in-flight batches × one message's bound > per-peer send-queue bytes is refused (D-81)",
     );
-    accepted(
-        &with_top(&format!("peer_send_queue_bytes = {inflight}")),
-        "in-flight bytes equal to the send queue's bytes are accepted",
+    for bytes in [inflight, inflight + 1] {
+        accepted(
+            &with_top(&format!("peer_send_queue_bytes = {bytes}")),
+            "in-flight message bytes equal to or under the send queue's bytes are accepted",
+        );
+    }
+}
+
+#[test]
+fn a_queue_that_holds_the_old_in_flight_bytes_but_not_one_message_is_refused() {
+    // Bead br-replication-queue-rule-incomplete-y6ib (a): the old rule admitted these.
+    let text = with_top(
+        "replication_batch_bytes = 1024\nreplication_inflight_batches = 1\n\
+         peer_send_queue_messages = 1\npeer_send_queue_bytes = 16384",
     );
+    refused(
+        &text,
+        &ConfigError::SendQueueBelowMessage {
+            peer_send_queue_bytes: 16_384,
+            message_bound: 100_528,
+        },
+        "a 66848 B largest entry makes one message's bound 100528 B, over the 16384 B queue (D-81)",
+    );
+}
+
+#[test]
+fn the_overhead_bounds_are_optional_raise_only_and_default_to_their_floors() {
+    let config = accepted(BASE, "BASE omits both overhead keys");
+    assert_eq!(
+        (
+            config.values.raft_entry_overhead_bound,
+            config.values.peer_message_overhead_bound
+        ),
+        (32, 256),
+        "rule: absent overhead keys take the §7.11 floors"
+    );
+    for (key, floor) in [
+        ("raft_entry_overhead_bound", 32),
+        ("peer_message_overhead_bound", 256),
+    ] {
+        let param = ConfigParam::from_key(key).unwrap();
+        let below = with_top(&format!("{key} = {}", floor - 1));
+        let observed = parse(&below).err();
+        let Some(ConfigError::OutOfRange {
+            param: got_param,
+            value,
+            ..
+        }) = observed
+        else {
+            panic!(
+                "rule: an overhead bound below its floor is refused (D-81); observed \
+                 {observed:?}; config:\n{below}"
+            );
+        };
+        assert_eq!(
+            (got_param, value),
+            (param, floor - 1),
+            "rule: the refusal names the key and value (D-81); config:\n{below}"
+        );
+    }
 }
 
 #[test]

@@ -78,6 +78,14 @@ pub const PER_ENTRY_OVERHEAD_BOUND: u64 = FRAME_OVERHEAD_BYTES + ENTRY_ENVELOPE_
 /// margin formula, covering protocol frames and truncation slack.
 pub const JOURNAL_PROTOCOL_ALLOWANCE: u64 = 64 * MIB;
 
+/// Bytes of protobuf framing one Raft entry adds beyond its data (D-81, §7.11): the
+/// default and floor of `raft_entry_overhead_bound`.
+pub const RAFT_ENTRY_OVERHEAD_DEFAULT: u64 = 32;
+
+/// Bytes of envelope and message header one peer message adds beyond its entries (D-81,
+/// §7.11): the default and floor of `peer_message_overhead_bound`.
+pub const PEER_MESSAGE_OVERHEAD_DEFAULT: u64 = 256;
+
 /// The sum of [`FRAME_FIELDS`].
 const fn frame_overhead() -> u64 {
     let mut total = 0;
@@ -160,11 +168,19 @@ pub enum ConfigParam {
     /// `max_committed_bytes_per_ready`: committed entry bytes per Ready (raft-rs
     /// `max_committed_size_per_ready`), 1 B to 1 MiB; default 1 MiB.
     MaxCommittedBytesPerReady,
+    /// `raft_entry_overhead_bound`: the bytes one entry's protobuf framing adds beyond
+    /// its data (D-81), 32 B to 64 KiB; default 32 B. Raising it only widens the
+    /// send-queue margin.
+    RaftEntryOverheadBound,
+    /// `peer_message_overhead_bound`: the bytes one peer message's envelope and header
+    /// add beyond its entries (D-81), 256 B to 64 KiB; default 256 B. Raising it only
+    /// widens the send-queue margin.
+    PeerMessageOverheadBound,
 }
 
 impl ConfigParam {
     /// Every parameter, in the order the parser reads and checks them.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::ProtocolVersion,
         Self::TickMs,
         Self::HeartbeatTicks,
@@ -185,6 +201,8 @@ impl ConfigParam {
         Self::PeerSendQueueBytes,
         Self::MaxUncommittedBytes,
         Self::MaxCommittedBytesPerReady,
+        Self::RaftEntryOverheadBound,
+        Self::PeerMessageOverheadBound,
     ];
 
     /// The parameter's key in the config file.
@@ -211,6 +229,8 @@ impl ConfigParam {
             Self::PeerSendQueueBytes => "peer_send_queue_bytes",
             Self::MaxUncommittedBytes => "max_uncommitted_bytes",
             Self::MaxCommittedBytesPerReady => "max_committed_bytes_per_ready",
+            Self::RaftEntryOverheadBound => "raft_entry_overhead_bound",
+            Self::PeerMessageOverheadBound => "peer_message_overhead_bound",
         }
     }
 
@@ -225,6 +245,8 @@ impl ConfigParam {
     pub const fn minimum(self) -> u64 {
         match self {
             Self::MaxValueBytes => 0,
+            Self::RaftEntryOverheadBound => RAFT_ENTRY_OVERHEAD_DEFAULT,
+            Self::PeerMessageOverheadBound => PEER_MESSAGE_OVERHEAD_DEFAULT,
             Self::ProtocolVersion
             | Self::TickMs
             | Self::HeartbeatTicks
@@ -268,6 +290,7 @@ impl ConfigParam {
             Self::PeerSendQueueBytes => 8 * MIB,
             Self::MaxUncommittedBytes => 4 * MIB,
             Self::MaxCommittedBytesPerReady => MIB,
+            Self::RaftEntryOverheadBound | Self::PeerMessageOverheadBound => 64 * KIB,
         }
     }
 
@@ -282,6 +305,7 @@ impl ConfigParam {
             | Self::PeerSendQueueBytes
             | Self::MaxUncommittedBytes
             | Self::MaxCommittedBytesPerReady => Some(self.maximum()),
+            Self::RaftEntryOverheadBound | Self::PeerMessageOverheadBound => Some(self.minimum()),
             Self::ProtocolVersion
             | Self::TickMs
             | Self::HeartbeatTicks
@@ -322,7 +346,9 @@ impl ConfigParam {
             | Self::PeerSendQueueMessages
             | Self::PeerSendQueueBytes
             | Self::MaxUncommittedBytes
-            | Self::MaxCommittedBytesPerReady => ConfigParamClass::Local,
+            | Self::MaxCommittedBytesPerReady
+            | Self::RaftEntryOverheadBound
+            | Self::PeerMessageOverheadBound => ConfigParamClass::Local,
         }
     }
 
