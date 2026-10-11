@@ -155,6 +155,26 @@ pub enum Kind {
     /// K-9: a `not_executed` resolution is not backed by lookups from every recoverable node
     /// after the drain (or quiescence).
     AbsenceNotCertified,
+    /// K-13: no write succeeded before the first fault (or before chaos, with no fault).
+    NoPreFaultWrite,
+    /// K-13: a fault the scenario selected was never injected.
+    FaultNotInjected,
+    /// K-13: reads were served by too few nodes (T-13).
+    ReadsFromTooFewNodes,
+    /// K-13: no write succeeded after the heal began (no marker, or no certified drain).
+    NoPostHealWrite,
+    /// K-13: a logical write has no resolution and K-9 reported no liveness failure for it.
+    WriteUnaccounted,
+    /// K-13: an applicable checker did not run.
+    CheckerNotExecuted,
+    /// K-13: the event budget was exhausted.
+    BudgetExhausted,
+    /// K-13: the scenario was reported invalid (a generator defect, D-73).
+    ScenarioInvalid,
+    /// K-13: a required observation overflowed its bound.
+    ObservationOverflowed,
+    /// K-13: the document says the run is not complete.
+    RunIncomplete,
 }
 
 impl fmt::Display for Kind {
@@ -230,6 +250,16 @@ impl fmt::Display for Kind {
             Self::HealLate => "heal_late",
             Self::NotQuiescent => "not_quiescent",
             Self::AbsenceNotCertified => "absence_not_certified",
+            Self::NoPreFaultWrite => "no_pre_fault_write",
+            Self::FaultNotInjected => "fault_not_injected",
+            Self::ReadsFromTooFewNodes => "reads_from_too_few_nodes",
+            Self::NoPostHealWrite => "no_post_heal_write",
+            Self::WriteUnaccounted => "write_unaccounted",
+            Self::CheckerNotExecuted => "checker_not_executed",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::ScenarioInvalid => "scenario_invalid",
+            Self::ObservationOverflowed => "observation_overflowed",
+            Self::RunIncomplete => "run_incomplete",
         })
     }
 }

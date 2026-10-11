@@ -2213,6 +2213,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 25,
     },
     CheckDef {
+        id: "K-13",
+        summary: "Non-vacuity K-13 (§10.16, W41.1): a run is incomplete, and fails (P10), unless a write succeeded after the baseline began and before the first fault, every selected fault type was injected, reads were served by more than one node (every voter in 1- and 3-voter runs), a marker or certified drain followed the heal, every logical write resolved or K-9 reported its liveness failure, every applicable checker K-1..K-12 ran and examined a case, and the run is complete with its event budget and observation bounds intact; a reported scenario invalid is incomplete (D-73); the overall verdict is pass, fail or incomplete. The shipped keyval.observation/v1 fixtures as controls and mutated copies, each rule broken once: test evidence of the checker, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-13", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["k13::tests::"],
+        },
+        min_cases: 21,
+    },
+    CheckDef {
         id: "SWARM-SCENARIO",
         summary: "swarm configurations and scenario files (W37.2, §9.1, §9.4, §10.4, \
                   T-10): each seed draws a non-empty subset of the nine fault types \

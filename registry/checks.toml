@@ -1331,6 +1331,18 @@ min_cases = 25
 status = "implemented"
 
 [[check]]
+id = "K-13"
+summary = "Non-vacuity K-13 (§10.16, W41.1): a run is incomplete, and fails (P10), unless a write succeeded after the baseline began and before the first fault, every selected fault type was injected, reads were served by more than one node (every voter in 1- and 3-voter runs), a marker or certified drain followed the heal, every logical write resolved or K-9 reported its liveness failure, every applicable checker K-1..K-12 ran and examined a case, and the run is complete with its event budget and observation bounds intact; a reported scenario invalid is incomplete (D-73); the overall verdict is pass, fail or incomplete. The shipped keyval.observation/v1 fixtures as controls and mutated copies, each rule broken once: test evidence of the checker, not proof"
+kind = "test_group"
+covers = ["T-13", "P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check K-13"
+min_cases = 21
+status = "implemented"
+
+[[check]]
 id = "SWARM-SCENARIO"
 summary = "swarm configurations and scenario files (W37.2, §9.1, §9.4, §10.4, T-10): each seed draws a non-empty subset of the nine fault types and an intensity, with a no-fault control and a manifest record that reads back; generated schedules are only self-undoing episodes (crash and restart, pause and resume, partition and heal, cut and mend, a network fault and the healthy profile), at most two nodes lost, no network episodes overlapping, no conflicting steps at one instant and every step before chaos ends, so three voters are up, recovered and connected on links within 50 ms when chaos ends (400 seeds, two workloads; 150 seeds run to the end of chaos and judged on the real cluster); a hand-edited file is refused as malformed (unknown fields, bad keys, values, IDs) or as scenario invalid (§10.16: unbounded chaos or steps, a plan clients would not generate, steps whose same-instant order could matter, nodes left down or paused, links left cut or slow); and a file reads back to its scenario and reproduces its seed's run exactly (same trace hash). Armed crash points are not in the file. Simulation evidence from a few hundred seeds, not proof"
 kind = "test_group"

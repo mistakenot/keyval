@@ -21,6 +21,7 @@ mod k1;
 mod k10;
 mod k11;
 mod k12;
+mod k13;
 mod k2;
 mod k3;
 mod k4;
@@ -32,6 +33,7 @@ mod k9;
 mod reads;
 mod report;
 mod trace;
+mod vacuity;
 
 #[cfg(test)]
 mod fixtures;
@@ -57,6 +59,8 @@ pub use k9::k9;
 pub use k10::k10;
 pub use k11::k11;
 pub use k12::k12;
+pub use k13::{APPLICABLE, Judgement, Verdict, judge, k13};
 pub use reads::Reads;
 pub use report::{CheckError, Kind, Report, Violation};
 pub use trace::{Answer, AttemptState, Item, Located, Resolved, Trace};
+pub use vacuity::Vacuity;
