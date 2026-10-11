@@ -8,15 +8,15 @@
 //!   spec's schemas;
 //! - [`live`], [`ready`] and [`cluster`] render the node's published snapshot (O-1).
 //!
-//! DELETE, compare-and-swap, SCAN and the status lookup are not served yet. Their work
-//! items (W27, W28, F-9) wire them; until then they are refused here, never forwarded to a
-//! core that cannot apply them.
+//! Every endpoint of `api/openapi.yaml` is served here: PUT, GET and DELETE on `/v1/kv`,
+//! compare-and-swap, SCAN and the status lookup (W32.1).
 
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
 use types::{
-    ClientOp, Config, Decision, Key, KeyError, Mutation, NodeId, NotReadyLifecycle, Refusal,
-    RequestId, Response as CoreResponse, ServedBy, TerminalResult, Value, ValueError, Version,
+    ClientOp, Config, Decision, ExpectedVersion, Key, KeyError, Mutation, NodeId,
+    NotReadyLifecycle, PageSize, Refusal, RequestId, RequestState, Response as CoreResponse,
+    ScanPage, ScanRange, ServedBy, TerminalResult, Value, ValueError, Version,
 };
 
 use crate::http::{Body, Request, Response};
@@ -61,6 +61,39 @@ pub enum Kind {
         /// The key, echoed in the result.
         key: Key,
     },
+    /// `DELETE /v1/kv?key=K` (F-3, F-6).
+    Delete {
+        /// The request ID.
+        request_id: RequestId,
+        /// The key, for a redirect's `Location`.
+        key: Key,
+    },
+    /// `POST /v1/cas?key=K` (F-5, F-6).
+    Cas {
+        /// The request ID.
+        request_id: RequestId,
+        /// The key, for a redirect's `Location`.
+        key: Key,
+    },
+    /// `GET /v1/scan` (F-4).
+    Scan,
+    /// `GET /v1/requests/{request_id}` (F-9).
+    Status {
+        /// The request looked up.
+        request_id: RequestId,
+    },
+}
+
+impl Kind {
+    /// The request ID of a write; `None` for a read, which has none to report.
+    const fn write_id(&self) -> Option<RequestId> {
+        match self {
+            Self::Put { request_id, .. }
+            | Self::Delete { request_id, .. }
+            | Self::Cas { request_id, .. } => Some(*request_id),
+            Self::Get { .. } | Self::Scan | Self::Status { .. } => None,
+        }
+    }
 }
 
 /// Everything rendering needs to know about the cluster.
@@ -70,8 +103,8 @@ pub struct View<'a> {
     pub config: &'a Config,
 }
 
-/// The methods `/v1/kv` serves today.
-const KV_METHODS: &str = "GET, PUT";
+/// The methods `/v1/kv` serves.
+const KV_METHODS: &str = "DELETE, GET, PUT";
 
 /// Parses `request` into what it asks of the node, or the error to answer at once.
 ///
@@ -83,10 +116,9 @@ pub fn route(request: &Request, config: &Config) -> Result<Routed, Response> {
     match (request.method.as_str(), request.path.as_str()) {
         ("PUT", "/v1/kv") => put(request, config).map(Routed::Attempt),
         ("GET", "/v1/kv") => get(request, config).map(Routed::Attempt),
-        ("DELETE", "/v1/kv") => Err(not_allowed(
-            KV_METHODS,
-            "DELETE is not served yet: it arrives with W27",
-        )),
+        ("DELETE", "/v1/kv") => delete(request, config).map(Routed::Attempt),
+        ("POST", "/v1/cas") => cas(request, config).map(Routed::Attempt),
+        ("GET", "/v1/scan") => scan(request, config).map(Routed::Attempt),
         (_, "/v1/kv") => Err(not_allowed(
             KV_METHODS,
             &format!("{} is not a method of /v1/kv", request.method),
@@ -98,11 +130,21 @@ pub fn route(request: &Request, config: &Config) -> Result<Routed, Response> {
             "GET",
             &format!("{} is not a method of {}", request.method, request.path),
         )),
-        (_, "/v1/cas") => Err(not_served("compare-and-swap arrives with W27")),
-        (_, "/v1/scan") => Err(not_served("SCAN arrives with W28")),
-        (_, path) if path.starts_with("/v1/requests/") => {
-            Err(not_served("the status lookup is not served yet (F-9)"))
+        (_, "/v1/cas") => Err(not_allowed(
+            "POST",
+            &format!("{} is not a method of /v1/cas", request.method),
+        )),
+        (_, "/v1/scan") => Err(not_allowed(
+            "GET",
+            &format!("{} is not a method of /v1/scan", request.method),
+        )),
+        ("GET", path) if path.starts_with("/v1/requests/") => {
+            status(request, path.trim_start_matches("/v1/requests/")).map(Routed::Attempt)
         }
+        (_, path) if path.starts_with("/v1/requests/") => Err(not_allowed(
+            "GET",
+            &format!("{} is not a method of {path}", request.method),
+        )),
         (_, path) => Err(error(
             404,
             "invalid_request",
@@ -123,19 +165,119 @@ struct PutBody {
 /// error can carry it (§8.1).
 // api: putKey
 fn put(request: &Request, config: &Config) -> Result<Attempt, Response> {
-    let request_id = match request.field("idempotency-key")[..] {
-        [raw] => RequestId::parse(raw)
-            .map_err(|why| invalid_write(None, &format!("Idempotency-Key {raw:?}: {why}")))?,
-        [] => {
-            return Err(invalid_write(
-                None,
-                "a write needs an Idempotency-Key header",
-            ));
-        }
-        _ => return Err(invalid_write(None, "Idempotency-Key is repeated")),
-    };
+    let request_id = write_id(request)?;
     let id = Some(request_id);
     let key = query_key(request, config).map_err(|why| invalid_write(id, &why))?;
+    let body: PutBody = json_body(request, id, "PutRequest")?;
+    let value = write_value(body.value, config, id)?;
+    Ok(Attempt {
+        op: ClientOp::Write {
+            request_id,
+            mutation: Mutation::Put {
+                key: key.clone(),
+                value,
+            },
+        },
+        kind: Kind::Put { request_id, key },
+    })
+}
+
+/// The strict body of a compare-and-swap (§8.1): `expected` and `value`, nothing else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CasBody {
+    expected: Expectation,
+    value: String,
+}
+
+/// `expected`: exactly `{"kind":"absent"}` or `{"kind":"version","version":N}`. A struct,
+/// not a tagged enum, so serde refuses unknown and duplicate members (§8.1); the pairing of
+/// kind and version is checked by [`expectation`].
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Expectation {
+    kind: String,
+    version: Option<u64>,
+}
+
+fn expectation(expected: &Expectation) -> Result<ExpectedVersion, String> {
+    match (expected.kind.as_str(), expected.version) {
+        ("absent", None) => Ok(ExpectedVersion::Absent),
+        ("absent", Some(_)) => Err("expected.kind \"absent\" takes no other member".to_owned()),
+        ("version", Some(raw)) => Version::new(raw)
+            .map(ExpectedVersion::Version)
+            .map_err(|why| format!("expected.version: {why}")),
+        ("version", None) => {
+            Err("expected.kind \"version\" takes exactly one more member, version".to_owned())
+        }
+        (other, _) => Err(format!(
+            "expected.kind {other:?} is neither \"absent\" nor \"version\""
+        )),
+    }
+}
+
+/// A compare-and-swap, its errors found in the order a PUT's are.
+// api: compareAndSwap
+fn cas(request: &Request, config: &Config) -> Result<Attempt, Response> {
+    let request_id = write_id(request)?;
+    let id = Some(request_id);
+    let key = query_key(request, config).map_err(|why| invalid_write(id, &why))?;
+    let CasBody { expected, value } = json_body(request, id, "CasRequest")?;
+    let expected = expectation(&expected).map_err(|why| invalid_write(id, &why))?;
+    let value = write_value(value, config, id)?;
+    Ok(Attempt {
+        op: ClientOp::Write {
+            request_id,
+            mutation: Mutation::Cas {
+                key: key.clone(),
+                expected,
+                value,
+            },
+        },
+        kind: Kind::Cas { request_id, key },
+    })
+}
+
+/// A DELETE: no body.
+// api: deleteKey
+fn delete(request: &Request, config: &Config) -> Result<Attempt, Response> {
+    let request_id = write_id(request)?;
+    let id = Some(request_id);
+    let key = query_key(request, config).map_err(|why| invalid_write(id, &why))?;
+    match &request.body {
+        Body::Bytes(bytes) if bytes.is_empty() => {}
+        Body::Bytes(_) => return Err(invalid_write(id, "a DELETE takes no body")),
+        Body::TooLarge => return Err(too_large(id, "the request body exceeds 512 KiB (§7.11)")),
+    }
+    Ok(Attempt {
+        op: ClientOp::Write {
+            request_id,
+            mutation: Mutation::Delete { key: key.clone() },
+        },
+        kind: Kind::Delete { request_id, key },
+    })
+}
+
+/// The one `Idempotency-Key` of a write (§8.1). Errors found before it carry no ID.
+fn write_id(request: &Request) -> Result<RequestId, Response> {
+    match request.field("idempotency-key")[..] {
+        [raw] => RequestId::parse(raw)
+            .map_err(|why| invalid_write(None, &format!("Idempotency-Key {raw:?}: {why}"))),
+        [] => Err(invalid_write(
+            None,
+            "a write needs an Idempotency-Key header",
+        )),
+        _ => Err(invalid_write(None, "Idempotency-Key is repeated")),
+    }
+}
+
+/// The strict JSON body of a write: `application/json`, within the body bound, and exactly
+/// the members of `T` (`what` names the schema in errors).
+fn json_body<T: serde::de::DeserializeOwned>(
+    request: &Request,
+    id: Option<RequestId>,
+    what: &str,
+) -> Result<T, Response> {
     let bytes = match &request.body {
         Body::Bytes(bytes) => bytes,
         Body::TooLarge => {
@@ -151,23 +293,72 @@ fn put(request: &Request, config: &Config) -> Result<Attempt, Response> {
     if !json_type {
         return Err(invalid_write(
             id,
-            "a PUT's body needs Content-Type: application/json",
+            "the body needs Content-Type: application/json",
         ));
     }
-    let body: PutBody = serde_json::from_slice(bytes)
-        .map_err(|why| invalid_write(id, &format!("the body is not a valid PutRequest: {why}")))?;
-    let value = Value::parse(body.value, config.key_value_limits()).map_err(|why| match why {
+    serde_json::from_slice(bytes)
+        .map_err(|why| invalid_write(id, &format!("the body is not a valid {what}: {why}")))
+}
+
+/// A write's value, within the DM-1 limit (`413` past it).
+fn write_value(raw: String, config: &Config, id: Option<RequestId>) -> Result<Value, Response> {
+    Value::parse(raw, config.key_value_limits()).map_err(|why| match why {
         ValueError::TooLong { .. } => too_large(id, &format!("the value is too large: {why}")),
-    })?;
+    })
+}
+
+/// A SCAN: `start`, `end`, `after` and `limit`, each at most once, all optional (§8.5).
+// api: scanKeys
+fn scan(request: &Request, config: &Config) -> Result<Attempt, Response> {
+    let mut parameters = query::parse(
+        request.query.as_deref(),
+        &["start", "end", "after", "limit"],
+    )
+    .map_err(|why: QueryError| invalid_read(&why.to_string()))?;
+    let mut bound = |name: &str| -> Result<Option<Key>, Response> {
+        parameters
+            .remove(name)
+            .map(|raw| {
+                Key::parse(raw, config.key_value_limits()).map_err(|why| match why {
+                    KeyError::Empty | KeyError::TooLong { .. } => {
+                        invalid_read(&format!("bad {name}: {why}"))
+                    }
+                })
+            })
+            .transpose()
+    };
+    let start = bound("start")?;
+    let end = bound("end")?;
+    let after = bound("after")?;
+    let limit = match parameters.remove("limit") {
+        None => PageSize::DEFAULT,
+        Some(raw) => {
+            let digits = !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit());
+            let number = digits.then(|| raw.parse::<u64>().ok()).flatten();
+            number
+                .ok_or_else(|| invalid_read(&format!("limit {raw:?} is not a decimal integer")))
+                .and_then(|number| {
+                    PageSize::new(number).map_err(|why| invalid_read(&format!("limit: {why}")))
+                })?
+        }
+    };
+    let range = ScanRange::new(start, end, after, limit)
+        .map_err(|_| invalid_read("start sorts after end"))?;
     Ok(Attempt {
-        op: ClientOp::Write {
-            request_id,
-            mutation: Mutation::Put {
-                key: key.clone(),
-                value,
-            },
-        },
-        kind: Kind::Put { request_id, key },
+        op: ClientOp::Scan { range },
+        kind: Kind::Scan,
+    })
+}
+
+/// A status lookup of the request ID in the path.
+// api: getRequestStatus
+fn status(request: &Request, raw: &str) -> Result<Attempt, Response> {
+    no_query(request)?;
+    let request_id =
+        RequestId::parse(raw).map_err(|why| invalid_read(&format!("request ID {raw:?}: {why}")))?;
+    Ok(Attempt {
+        op: ClientOp::Status { request_id },
+        kind: Kind::Status { request_id },
     })
 }
 
@@ -204,25 +395,11 @@ fn no_query(request: &Request) -> Result<(), Response> {
 #[must_use]
 pub fn render(attempt: &Attempt, response: CoreResponse, view: View<'_>) -> Response {
     match (&attempt.kind, response) {
-        (
-            Kind::Put { request_id, .. },
-            CoreResponse::Written {
-                result,
-                replayed,
-                served_by,
-            },
-        ) => written(*request_id, result, replayed, served_by),
-        (Kind::Put { request_id, .. }, CoreResponse::Conflict { original_index }) => error(
-            409,
-            "request_id_conflict",
-            "the request ID was already used for a different command; nothing changed",
-            details([
-                ("request_id", json!(request_id.to_string())),
-                ("original_index", json!(original_index.get())),
-            ]),
-        ),
-        (Kind::Put { request_id, key }, CoreResponse::Refused(refusal)) => {
-            write_refusal(*request_id, key, refusal, view)
+        (Kind::Put { request_id, key } | Kind::Delete { request_id, key }, response) => {
+            render_write(&attempt.kind, *request_id, key, "/v1/kv", &response, view)
+        }
+        (Kind::Cas { request_id, key }, response) => {
+            render_write(&attempt.kind, *request_id, key, "/v1/cas", &response, view)
         }
         (
             Kind::Get { key },
@@ -246,23 +423,107 @@ pub fn render(attempt: &Attempt, response: CoreResponse, view: View<'_>) -> Resp
             "the key is absent in the applied prefix in served_by",
             details([("served_by", served(served_by))]),
         ),
-        (Kind::Get { .. }, CoreResponse::Refused(refusal)) => read_refusal(refusal, view),
+        (Kind::Scan, CoreResponse::Page(page)) => scan_page(page),
+        (Kind::Status { request_id }, CoreResponse::Status { state, served_by }) => {
+            status_body(*request_id, state, served_by)
+        }
+        (Kind::Get { .. } | Kind::Scan | Kind::Status { .. }, CoreResponse::Refused(refusal)) => {
+            read_refusal(refusal, view)
+        }
         (
-            kind,
+            kind @ (Kind::Get { .. } | Kind::Scan | Kind::Status { .. }),
             response @ (CoreResponse::Written { .. }
             | CoreResponse::Conflict { .. }
             | CoreResponse::Found { .. }
             | CoreResponse::NotFound { .. }
             | CoreResponse::Page(_)
             | CoreResponse::Status { .. }),
-        ) => {
-            types::invariant!(
-                false,
-                "API-ANSWER-KIND",
-                "the core answered a {kind:?} with {response:?}"
-            );
-            unavailable_read(view)
-        }
+        ) => mismatch(kind, &response, view),
+    }
+}
+
+/// The core's answer to a PUT, DELETE or compare-and-swap.
+fn render_write(
+    kind: &Kind,
+    request_id: RequestId,
+    key: &Key,
+    path: &str,
+    response: &CoreResponse,
+    view: View<'_>,
+) -> Response {
+    match response {
+        CoreResponse::Written {
+            result,
+            replayed,
+            served_by,
+        } => written(request_id, *result, *replayed, *served_by),
+        CoreResponse::Conflict { original_index } => error(
+            409,
+            "request_id_conflict",
+            "the request ID was already used for a different command; nothing changed",
+            details([
+                ("request_id", json!(request_id.to_string())),
+                ("original_index", json!(original_index.get())),
+            ]),
+        ),
+        CoreResponse::Refused(refusal) => write_refusal(request_id, key, path, *refusal, view),
+        CoreResponse::Found { .. }
+        | CoreResponse::NotFound { .. }
+        | CoreResponse::Page(_)
+        | CoreResponse::Status { .. } => mismatch(kind, response, view),
+    }
+}
+
+/// A core answer that cannot answer this kind of attempt: a bug (CD-7).
+fn mismatch(kind: &Kind, response: &CoreResponse, view: View<'_>) -> Response {
+    types::invariant!(
+        false,
+        "API-ANSWER-KIND",
+        "the core answered a {kind:?} with {response:?}"
+    );
+    unavailable_read(view)
+}
+
+/// A SCAN page (§8.5): `next_after` is the continuation, so `has_more` is its presence.
+fn scan_page(page: ScanPage) -> Response {
+    let (items, continuation, served_by) = page.into_parts();
+    let items: Vec<Json> = items
+        .iter()
+        .map(|item| {
+            json!({
+                "key": item.key.as_str(),
+                "value": item.value.as_str(),
+                "version": item.version.get(),
+            })
+        })
+        .collect();
+    Response::json(
+        200,
+        json!({
+            "items": items,
+            "has_more": continuation.is_some(),
+            "next_after": continuation.as_ref().map(Key::as_str),
+            "served_by": served(served_by),
+        }),
+    )
+}
+
+/// A status lookup (F-9): `200` whatever the stored decision was; the embedded result is
+/// the body a retry of the original would get now (`replayed: true`).
+fn status_body(request_id: RequestId, state: RequestState, served_by: ServedBy) -> Response {
+    match state {
+        RequestState::Known(result) => Response::json(
+            200,
+            json!({
+                "state": "known",
+                "result": written(request_id, result, true, served_by).body,
+                "served_by": served(served_by),
+            }),
+        ),
+        RequestState::Unknown => Response::json(
+            200,
+            json!({"state": "unknown", "served_by": served(served_by)}),
+        ),
     }
 }
 
@@ -321,7 +582,13 @@ fn written(
 }
 
 /// A write's non-terminal refusal (§8.4), with `request_id` and `attempt_state`.
-fn write_refusal(request_id: RequestId, key: &Key, refusal: Refusal, view: View<'_>) -> Response {
+fn write_refusal(
+    request_id: RequestId,
+    key: &Key,
+    path: &str,
+    refusal: Refusal,
+    view: View<'_>,
+) -> Response {
     let id = json!(request_id.to_string());
     let not_submitted = json!("not_submitted");
     match refusal {
@@ -338,7 +605,7 @@ fn write_refusal(request_id: RequestId, key: &Key, refusal: Refusal, view: View<
             );
             response.location = view.config.node(leader).map(|node| {
                 format!(
-                    "http://{}/v1/kv?key={}",
+                    "http://{}{path}?key={}",
                     node.client_address(),
                     query::encode(key.as_str())
                 )
@@ -400,15 +667,17 @@ fn read_refusal(refusal: Refusal, view: View<'_>) -> Response {
 /// `429 busy` for a write the hand-off refused: it was not submitted (§7.11).
 #[must_use]
 pub fn busy(attempt: &Attempt) -> Response {
-    match &attempt.kind {
-        Kind::Put { request_id, .. } => busy_write(*request_id),
-        Kind::Get { .. } => error(
-            429,
-            "busy",
-            "a local admission bound was hit; back off and retry",
-            Map::new(),
-        ),
-    }
+    attempt.kind.write_id().map_or_else(
+        || {
+            error(
+                429,
+                "busy",
+                "a local admission bound was hit; back off and retry",
+                Map::new(),
+            )
+        },
+        busy_write,
+    )
 }
 
 /// `429 busy` for a connection past the bound, before any request is read (CD-9).
@@ -438,10 +707,10 @@ fn busy_write(request_id: RequestId) -> Response {
 /// unknown (A-5), a read is unavailable.
 #[must_use]
 pub fn timed_out(attempt: &Attempt, view: View<'_>) -> Response {
-    match &attempt.kind {
-        Kind::Put { request_id, .. } => unknown_outcome(*request_id, view),
-        Kind::Get { .. } => unavailable_read(view),
-    }
+    attempt
+        .kind
+        .write_id()
+        .map_or_else(|| unavailable_read(view), |id| unknown_outcome(id, view))
 }
 
 fn unknown_outcome(request_id: RequestId, view: View<'_>) -> Response {
@@ -617,10 +886,6 @@ fn not_allowed(allow: &'static str, message: &str) -> Response {
     let mut response = error(405, "invalid_request", message, Map::new());
     response.allow = Some(allow);
     response
-}
-
-fn not_served(message: &str) -> Response {
-    error(404, "invalid_request", message, Map::new())
 }
 
 /// `400 invalid_request` for a request that is not well-formed HTTP.
@@ -826,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoints_not_served_yet_are_refused_never_forwarded() {
+    fn methods_and_paths_are_answered_405_with_allow_or_404() {
         let config = config(ONE_VOTER);
         let routed = |method: &str, target: &str| {
             route(
@@ -844,28 +1109,25 @@ mod tests {
         };
         assert_eq!(
             [
-                shape(routed("DELETE", "/v1/kv?key=a")),
                 shape(routed("POST", "/v1/kv?key=a")),
                 shape(routed("POST", "/v1/health/live")),
-                shape(routed("POST", "/v1/cas?key=a")),
-                shape(routed("GET", "/v1/scan")),
-                shape(routed("GET", &format!("/v1/requests/{ID}"))),
+                shape(routed("GET", "/v1/cas?key=a")),
+                shape(routed("PUT", "/v1/scan")),
+                shape(routed("POST", &format!("/v1/requests/{ID}"))),
                 shape(routed("GET", "/v2/kv")),
                 shape(routed("GET", "/v1/cluster?x=1")),
             ],
             [
-                (405, Some("GET, PUT"), json!("invalid_request")),
-                (405, Some("GET, PUT"), json!("invalid_request")),
+                (405, Some("DELETE, GET, PUT"), json!("invalid_request")),
                 (405, Some("GET"), json!("invalid_request")),
-                (404, None, json!("invalid_request")),
-                (404, None, json!("invalid_request")),
-                (404, None, json!("invalid_request")),
+                (405, Some("POST"), json!("invalid_request")),
+                (405, Some("GET"), json!("invalid_request")),
+                (405, Some("GET"), json!("invalid_request")),
                 (404, None, json!("invalid_request")),
                 (400, None, json!("invalid_request")),
             ],
-            "rule: DELETE, compare-and-swap, SCAN and the status lookup are refused until their \
-             work items serve them (W27, W28, F-9), never handed to a core that cannot apply \
-             them; other methods are 405 with Allow, unknown paths 404 (§8.4)"
+            "rule: a method an endpoint does not serve is 405 with Allow naming the methods it \
+             does, an unknown path 404, an unknown query parameter 400 (§8.4)"
         );
     }
 
@@ -1209,6 +1471,599 @@ mod tests {
             "rule: live reports the lifecycle; ready is 200 only when ready, else 503 \
              recovering; the cluster view has every voter with its client URL and, as leader, \
              its match index (O-1, §8.2)"
+        );
+    }
+
+    fn call(
+        method: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<Routed, Response> {
+        route(
+            &request(method, target, headers, Body::Bytes(body.to_vec())),
+            &config(ONE_VOTER),
+        )
+    }
+
+    fn attempt_of(routed: Result<Routed, Response>) -> Attempt {
+        match routed {
+            Ok(Routed::Attempt(attempt)) => attempt,
+            other => panic!("rule: expected a client attempt; got {other:?}"),
+        }
+    }
+
+    fn rendered(attempt: &Attempt, response: CoreResponse) -> Response {
+        let three = config(THREE_VOTERS);
+        render(attempt, response, View { config: &three })
+    }
+
+    /// The body of `response` rendered for `attempt`, an error's message removed.
+    fn shown(attempt: &Attempt, response: CoreResponse) -> Json {
+        let mut body = rendered(attempt, response).body;
+        if let Some(error) = body.get_mut("error").and_then(Json::as_object_mut) {
+            assert!(
+                error
+                    .remove("message")
+                    .is_some_and(|message| message.is_string()),
+                "rule: every error has a message"
+            );
+        }
+        body
+    }
+
+    fn invalid(details: Json) -> (u16, Json, Json) {
+        (400, json!("invalid_request"), details)
+    }
+
+    fn delete_attempt() -> Attempt {
+        attempt_of(call("DELETE", "/v1/kv?key=a%20b", &GOOD[..1], b""))
+    }
+
+    fn cas_attempt() -> Attempt {
+        attempt_of(call(
+            "POST",
+            "/v1/cas?key=a%20b",
+            &GOOD,
+            br#"{"expected":{"kind":"absent"},"value":"v"}"#,
+        ))
+    }
+
+    fn scan_attempt() -> Attempt {
+        attempt_of(call("GET", "/v1/scan", &[], b""))
+    }
+
+    fn status_attempt() -> Attempt {
+        attempt_of(call("GET", &format!("/v1/requests/{ID}"), &[], b""))
+    }
+
+    #[test]
+    fn a_delete_parses_into_a_delete_and_takes_no_body() {
+        let limits = config(ONE_VOTER).key_value_limits();
+        let key = Key::parse("a/b".to_owned(), limits).unwrap();
+        let request_id = RequestId::parse(ID).unwrap();
+        let parsed = attempt_of(call("DELETE", "/v1/kv?key=a%2Fb", &GOOD[..1], b""));
+        assert_eq!(
+            parsed,
+            Attempt {
+                op: ClientOp::Write {
+                    request_id,
+                    mutation: types::Mutation::Delete { key: key.clone() },
+                },
+                kind: Kind::Delete { request_id, key },
+            },
+            "rule: a DELETE is parsed into domain types at the boundary (CD-3, F-3)"
+        );
+        assert_eq!(
+            [
+                refusal(call("DELETE", "/v1/kv?key=a", &[], b"")),
+                refusal(call(
+                    "DELETE",
+                    "/v1/kv?key=a",
+                    &GOOD[..1],
+                    br#"{"value":"v"}"#
+                )),
+                refusal(call("DELETE", "/v1/kv", &GOOD[..1], b"")),
+                refusal(call("DELETE", "/v1/kv?key=", &GOOD[..1], b"")),
+                refusal(call("DELETE", "/v1/kv?key=a&key=b", &GOOD[..1], b"")),
+            ],
+            [
+                invalid(json!({})),
+                invalid(with_id()),
+                invalid(with_id()),
+                invalid(with_id()),
+                invalid(with_id()),
+            ],
+            "rule: a DELETE needs one Idempotency-Key, one non-empty key and no body; \
+             request_id appears exactly when a well-formed Idempotency-Key was sent (§8.1)"
+        );
+    }
+
+    #[test]
+    fn a_cas_is_parsed_strictly() {
+        let limits = config(ONE_VOTER).key_value_limits();
+        let key = Key::parse("k".to_owned(), limits).unwrap();
+        let request_id = RequestId::parse(ID).unwrap();
+        let cas = |body: &str| call("POST", "/v1/cas?key=k", &GOOD, body.as_bytes());
+        let parsed = |body: &str| attempt_of(cas(body)).op;
+        let expect = |expected| ClientOp::Write {
+            request_id,
+            mutation: types::Mutation::Cas {
+                key: key.clone(),
+                expected,
+                value: Value::parse("v".to_owned(), limits).unwrap(),
+            },
+        };
+        assert_eq!(
+            [
+                parsed(r#"{"expected":{"kind":"absent"},"value":"v"}"#),
+                parsed(r#"{"expected":{"kind":"version","version":41},"value":"v"}"#),
+                parsed(r#"{"value":"v","expected":{"version":9007199254740991,"kind":"version"}}"#),
+            ],
+            [
+                expect(types::ExpectedVersion::Absent),
+                expect(types::ExpectedVersion::Version(Version::new(41).unwrap())),
+                expect(types::ExpectedVersion::Version(
+                    Version::new(9_007_199_254_740_991).unwrap()
+                )),
+            ],
+            "rule: a CAS body is parsed into an ExpectedVersion; 2^53-1 is the largest version"
+        );
+    }
+
+    #[test]
+    fn a_malformed_cas_is_refused_whatever_the_rule_it_breaks() {
+        let cas = |body: &str| call("POST", "/v1/cas?key=k", &GOOD, body.as_bytes());
+        let bad = [
+            (
+                "version 2^53",
+                r#"{"expected":{"kind":"version","version":9007199254740992},"value":"v"}"#,
+            ),
+            (
+                "version 0",
+                r#"{"expected":{"kind":"version","version":0},"value":"v"}"#,
+            ),
+            (
+                "negative version",
+                r#"{"expected":{"kind":"version","version":-1},"value":"v"}"#,
+            ),
+            (
+                "fractional version",
+                r#"{"expected":{"kind":"version","version":1.5},"value":"v"}"#,
+            ),
+            (
+                "string version",
+                r#"{"expected":{"kind":"version","version":"4"},"value":"v"}"#,
+            ),
+            (
+                "version missing",
+                r#"{"expected":{"kind":"version"},"value":"v"}"#,
+            ),
+            (
+                "version on absent",
+                r#"{"expected":{"kind":"absent","version":1},"value":"v"}"#,
+            ),
+            (
+                "repeated kind",
+                r#"{"expected":{"kind":"version","kind":"absent"},"value":"v"}"#,
+            ),
+            (
+                "repeated kind upgrading absent to version",
+                r#"{"expected":{"kind":"absent","kind":"version","version":3},"value":"v"}"#,
+            ),
+            (
+                "repeated version",
+                r#"{"expected":{"kind":"version","version":1,"version":2},"value":"v"}"#,
+            ),
+            (
+                "repeated value",
+                r#"{"expected":{"kind":"absent"},"value":"v","value":"w"}"#,
+            ),
+            ("unknown kind", r#"{"expected":{"kind":"any"},"value":"v"}"#),
+            ("no kind", r#"{"expected":{},"value":"v"}"#),
+            ("no expected", r#"{"value":"v"}"#),
+            ("no value", r#"{"expected":{"kind":"absent"}}"#),
+            (
+                "unknown member",
+                r#"{"expected":{"kind":"absent"},"value":"v","x":1}"#,
+            ),
+            (
+                "non-string value",
+                r#"{"expected":{"kind":"absent"},"value":1}"#,
+            ),
+            ("not an object", "[]"),
+        ];
+        let observed: Vec<_> = bad.iter().map(|(_, body)| refusal(cas(body))).collect();
+        assert_eq!(
+            observed,
+            vec![invalid(with_id()); bad.len()],
+            "rule: an expected version of 0 or at least 2^53, a malformed or unknown \
+             expectation and any unknown or missing member are 400 invalid_request carrying \
+             the request ID; cases: {:?}",
+            bad.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        );
+        let big = json!({"expected": {"kind": "absent"}, "value": "v".repeat(65_537)}).to_string();
+        assert_eq!(
+            [
+                refusal(cas(&big)),
+                refusal(call("POST", "/v1/cas?key=k", &GOOD[..1], b"{}")),
+                refusal(call("POST", "/v1/cas?key=k", &GOOD[1..], b"{}")),
+                refusal(call("POST", "/v1/cas", &GOOD, b"{}")),
+            ],
+            [
+                (413, json!("too_large"), with_id()),
+                invalid(with_id()),
+                invalid(json!({})),
+                invalid(with_id()),
+            ],
+            "rule: a value over 64 KiB is 413; a missing Content-Type, Idempotency-Key or key \
+             is 400 (§8.1)"
+        );
+    }
+
+    #[test]
+    fn a_scan_s_parameters_are_parsed_strictly() {
+        let limits = config(ONE_VOTER).key_value_limits();
+        let key = |text: &str| Key::parse(text.to_owned(), limits).unwrap();
+        let scan = |query: &str| call("GET", &format!("/v1/scan{query}"), &[], b"");
+        let range = |start: Option<&str>, end: Option<&str>, after: Option<&str>, limit: u64| {
+            ClientOp::Scan {
+                range: types::ScanRange::new(
+                    start.map(key),
+                    end.map(key),
+                    after.map(key),
+                    types::PageSize::new(limit).unwrap(),
+                )
+                .unwrap(),
+            }
+        };
+        assert_eq!(
+            [
+                attempt_of(scan("")).op,
+                attempt_of(scan("?start=a&end=b%2F&after=a%20b&limit=128")).op,
+                attempt_of(scan("?start=m&end=m&limit=1")).op,
+            ],
+            [
+                range(None, None, None, 32),
+                range(Some("a"), Some("b/"), Some("a b"), 128),
+                range(Some("m"), Some("m"), None, 1),
+            ],
+            "rule: every SCAN parameter is optional, limit defaults to 32, equal bounds are a \
+             valid (empty) range (§8.5)"
+        );
+        let bad = [
+            "?start=b&end=a",
+            "?start=",
+            "?end=",
+            "?after=",
+            "?limit=0",
+            "?limit=129",
+            "?limit=",
+            "?limit=abc",
+            "?limit=%2B5",
+            "?limit=-1",
+            "?limit=1.0",
+            "?limit=99999999999999999999999",
+            "?limit=1&limit=2",
+            "?start=a+b",
+            "?x=1",
+            "?start",
+        ];
+        let observed: Vec<_> = bad.iter().map(|query| refusal(scan(query))).collect();
+        assert_eq!(
+            observed,
+            vec![invalid(json!({})); bad.len()],
+            "rule: start > end, an empty bound, a limit outside 1..=128 or not a plain \
+             decimal integer, a repeated, unknown or malformed parameter are 400 \
+             invalid_request; cases: {bad:?}"
+        );
+        let long = format!("?start={}", "k".repeat(257));
+        assert_eq!(
+            refusal(scan(&long)),
+            invalid(json!({})),
+            "rule: a bound over the key limit is invalid_request"
+        );
+    }
+
+    #[test]
+    fn a_status_lookup_takes_a_request_id_in_the_path_and_no_query() {
+        let request_id = RequestId::parse(ID).unwrap();
+        let lookup = |target: &str| call("GET", target, &[], b"");
+        assert_eq!(
+            attempt_of(lookup(&format!("/v1/requests/{ID}"))),
+            Attempt {
+                op: ClientOp::Status { request_id },
+                kind: Kind::Status { request_id },
+            },
+            "rule: the lookup parses the path's request ID into the domain type (F-9)"
+        );
+        let bad = [
+            "/v1/requests/".to_owned(),
+            "/v1/requests/abc".to_owned(),
+            format!("/v1/requests/{}", ID.to_uppercase()),
+            format!("/v1/requests/{ID}/"),
+            format!("/v1/requests/{ID}?x=1"),
+            format!("/v1/requests/{ID}00"),
+        ];
+        let observed: Vec<_> = bad.iter().map(|target| refusal(lookup(target))).collect();
+        assert_eq!(
+            observed,
+            vec![invalid(json!({})); bad.len()],
+            "rule: a malformed request ID, a trailing slash or any query is 400 \
+             invalid_request; cases: {bad:?}"
+        );
+    }
+
+    #[test]
+    fn a_delete_and_a_cas_render_their_results_and_refusals() {
+        let mismatch = |current: Option<u64>| Decision::VersionMismatch {
+            current: current.map(|raw| Version::new(raw).unwrap()),
+        };
+        let delete = delete_attempt();
+        let cas = cas_attempt();
+        let served = json!({"node_id": 7, "applied_index": 9});
+        assert_eq!(
+            [
+                shown(&delete, written(Decision::Deleted { existed: true }, false)),
+                shown(&delete, written(Decision::Deleted { existed: false }, true)),
+                shown(&cas, written(Decision::Set, false)),
+                shown(&cas, written(mismatch(Some(57)), false)),
+                shown(&cas, written(mismatch(None), true)),
+                shown(
+                    &delete,
+                    CoreResponse::Conflict {
+                        original_index: EntryIndex::new(3).unwrap()
+                    }
+                ),
+            ],
+            [
+                json!({"request_id": ID, "index": 5, "existed": true, "replayed": false,
+                    "served_by": served}),
+                json!({"request_id": ID, "index": 5, "existed": false, "replayed": true,
+                    "served_by": served}),
+                json!({"request_id": ID, "index": 5, "version": 5, "replayed": false,
+                    "served_by": served}),
+                envelope(
+                    "version_mismatch",
+                    json!({"current_version": 57, "request_id": ID, "index": 5,
+                        "replayed": false})
+                ),
+                envelope(
+                    "version_mismatch",
+                    json!({"current_version": null, "request_id": ID, "index": 5,
+                        "replayed": true})
+                ),
+                envelope(
+                    "request_id_conflict",
+                    json!({"request_id": ID, "original_index": 3})
+                ),
+            ],
+            "rule: DELETE answers existed, a CAS answers version == index, a mismatch is the \
+             terminal version_mismatch with current_version (null when absent), replayed and \
+             the original index, a reused ID request_id_conflict with original_index (§8.3, \
+             §8.4)"
+        );
+        let status = |attempt: &Attempt, response| rendered(attempt, response).status;
+        assert_eq!(
+            [
+                status(&delete, written(Decision::Deleted { existed: true }, false)),
+                status(&cas, written(mismatch(Some(1)), false)),
+                status(
+                    &cas,
+                    CoreResponse::Conflict {
+                        original_index: EntryIndex::new(3).unwrap()
+                    }
+                ),
+                status(&delete, CoreResponse::Refused(Refusal::Busy)),
+                status(&cas, CoreResponse::Refused(Refusal::UnknownOutcome)),
+                status(
+                    &delete,
+                    CoreResponse::Refused(Refusal::HistoryFull {
+                        limit: HistoryLimit::LogEntries
+                    })
+                ),
+            ],
+            [200, 409, 409, 429, 504, 507],
+            "rule: statuses per §8.4 for the other write endpoints"
+        );
+    }
+
+    #[test]
+    fn a_redirect_names_the_endpoint_that_was_asked() {
+        let leader = NodeId::new(7).unwrap();
+        let location = |attempt: &Attempt| {
+            let response = rendered(
+                attempt,
+                CoreResponse::Refused(Refusal::NotLeader { leader }),
+            );
+            (response.status, response.location)
+        };
+        let node = config(THREE_VOTERS).node(leader).unwrap().client_address();
+        assert_eq!(
+            [
+                location(&delete_attempt()),
+                location(&cas_attempt()),
+                location(&put_attempt())
+            ],
+            [
+                (307, Some(format!("http://{node}/v1/kv?key=a%20b"))),
+                (307, Some(format!("http://{node}/v1/cas?key=a%20b"))),
+                (307, Some(format!("http://{node}/v1/kv?key=a%20b"))),
+            ],
+            "rule: a 307 Location keeps the endpoint and the re-encoded key (§8.1), so a CAS \
+             is redirected to /v1/cas and a DELETE to /v1/kv"
+        );
+    }
+
+    #[test]
+    fn writes_refused_by_the_hand_off_or_timed_out_report_their_attempt_state() {
+        let three = config(THREE_VOTERS);
+        let view = View { config: &three };
+        let state = |response: Response| {
+            (
+                response.status,
+                response.body["error"]["details"]["attempt_state"].clone(),
+            )
+        };
+        assert_eq!(
+            [
+                state(busy(&delete_attempt())),
+                state(busy(&cas_attempt())),
+                state(super::timed_out(&delete_attempt(), view)),
+                state(super::timed_out(&cas_attempt(), view)),
+            ],
+            [
+                (429, json!("not_submitted")),
+                (429, json!("not_submitted")),
+                (504, json!("submitted")),
+                (504, json!("submitted")),
+            ],
+            "rule: a hand-off refusal is not_submitted, a silent core submitted (A-5), for \
+             every write endpoint"
+        );
+        let reads = [scan_attempt(), status_attempt()];
+        let observed: Vec<_> = reads
+            .iter()
+            .map(|read| (busy(read).status, super::timed_out(read, view).status))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![(429, 503); 2],
+            "rule: SCAN and the status lookup are reads: busy is 429, a silent core 503"
+        );
+    }
+
+    #[test]
+    fn a_scan_page_renders_as_the_spec_says() {
+        let limits = config(ONE_VOTER).key_value_limits();
+        let item = |key: &str, value: &str, version: u64| types::ScanItem {
+            key: Key::parse(key.to_owned(), limits).unwrap(),
+            value: Value::parse(value.to_owned(), limits).unwrap(),
+            version: Version::new(version).unwrap(),
+        };
+        let range =
+            types::ScanRange::new(None, None, None, types::PageSize::new(2).unwrap()).unwrap();
+        let page = |items: Vec<types::ScanItem>, more: bool| {
+            let next = more.then(|| items.last().unwrap().key.clone());
+            CoreResponse::Page(types::ScanPage::new(&range, items, next, served_by()))
+        };
+        let scan = scan_attempt();
+        let served = json!({"node_id": 7, "applied_index": 9});
+        assert_eq!(
+            [
+                shown(
+                    &scan,
+                    page(vec![item("a", "1", 2), item("b", "2", 3)], true)
+                ),
+                shown(&scan, page(vec![item("a", "1", 2)], false)),
+                shown(&scan, page(Vec::new(), false)),
+            ],
+            [
+                json!({"items": [{"key": "a", "value": "1", "version": 2},
+                    {"key": "b", "value": "2", "version": 3}],
+                    "has_more": true, "next_after": "b", "served_by": served}),
+                json!({"items": [{"key": "a", "value": "1", "version": 2}],
+                    "has_more": false, "next_after": null, "served_by": served}),
+                json!({"items": [], "has_more": false, "next_after": null, "served_by": served}),
+            ],
+            "rule: a page lists key, value and version; has_more is true exactly when \
+             next_after is the last returned key (§8.5)"
+        );
+        assert_eq!(rendered(&scan, page(Vec::new(), false)).status, 200);
+    }
+
+    #[test]
+    fn a_status_lookup_renders_the_original_result_and_is_200_whatever_it_was() {
+        let status = status_attempt();
+        let served = json!({"node_id": 7, "applied_index": 9});
+        let lookup = |state| CoreResponse::Status {
+            state,
+            served_by: served_by(),
+        };
+        let known = |decision| lookup(types::RequestState::Known(result(decision)));
+        let decisions = [
+            Decision::Set,
+            Decision::Deleted { existed: false },
+            Decision::VersionMismatch {
+                current: Some(Version::new(4).unwrap()),
+            },
+            Decision::CapacityExceeded {
+                limit: LiveStateLimit::Bytes,
+            },
+        ];
+        let statuses: Vec<u16> = decisions
+            .iter()
+            .map(|decision| rendered(&status, known(*decision)).status)
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![200; 4],
+            "rule: the lookup is 200 whatever the stored decision was (§8.3)"
+        );
+        let mut observed: Vec<Json> = decisions
+            .iter()
+            .map(|decision| rendered(&status, known(*decision)).body)
+            .collect();
+        observed.push(rendered(&status, lookup(types::RequestState::Unknown)).body);
+        let result_body = |decision| shown(&delete_attempt_for(decision), written(decision, true));
+        assert_eq!(
+            observed,
+            vec![
+                json!({"state": "known", "served_by": served, "result": result_body(decisions[0])}),
+                json!({"state": "known", "served_by": served, "result": result_body(decisions[1])}),
+                json!({"state": "known", "served_by": served, "result": json!({"error": {
+                    "code": "version_mismatch",
+                    "message": "the compare-and-swap's expectation did not match; it changed nothing",
+                    "details": {"current_version": 4, "request_id": ID, "index": 5,
+                        "replayed": true}}})}),
+                json!({"state": "known", "served_by": served, "result": json!({"error": {
+                    "code": "capacity_exceeded",
+                    "message": "the live-state quota refused the write; it changed nothing",
+                    "details": {"request_id": ID, "limit": "max_live_bytes", "index": 5,
+                        "replayed": true}}})}),
+                json!({"state": "unknown", "served_by": served}),
+            ],
+            "rule: a known request embeds the body a retry of it would get now (replayed true, \
+             the original index and decision), an unknown one only served_by (F-9)"
+        );
+    }
+
+    /// The write attempt whose result a `decision` is: a CAS for a mismatch, else a DELETE.
+    fn delete_attempt_for(decision: Decision) -> Attempt {
+        match decision {
+            Decision::Deleted { .. } => delete_attempt(),
+            Decision::Set
+            | Decision::VersionMismatch { .. }
+            | Decision::CapacityExceeded { .. } => cas_attempt(),
+        }
+    }
+
+    #[test]
+    fn a_read_refusal_is_the_same_for_every_read() {
+        let three = config(THREE_VOTERS);
+        let view = View { config: &three };
+        let scan = scan_attempt();
+        let status = status_attempt();
+        let codes = |refusal| {
+            [&scan, &status].map(|read| {
+                let response = render(read, CoreResponse::Refused(refusal), view);
+                (response.status, response.body["error"]["code"].clone())
+            })
+        };
+        assert_eq!(
+            [
+                codes(Refusal::Busy),
+                codes(Refusal::Unavailable),
+                codes(Refusal::Recovering {
+                    lifecycle: NotReadyLifecycle::Recovering
+                }),
+            ],
+            [
+                [(429, json!("busy")), (429, json!("busy"))],
+                [(503, json!("unavailable")), (503, json!("unavailable"))],
+                [(503, json!("recovering")), (503, json!("recovering"))],
+            ],
+            "rule: SCAN and the status lookup refuse as GET does (§8.4)"
         );
     }
 }

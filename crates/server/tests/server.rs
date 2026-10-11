@@ -925,6 +925,258 @@ mod serve_tests {
         );
     }
 
+    fn id(n: u32) -> String {
+        format!("{n:032x}")
+    }
+
+    fn post_json(address: SocketAddr, target: &str, id: &str, body: &str) -> Reply {
+        send(
+            address,
+            &request(
+                "POST",
+                target,
+                &[
+                    ("Idempotency-Key", id),
+                    ("Content-Type", "application/json"),
+                ],
+                body,
+            ),
+        )
+    }
+
+    fn delete(address: SocketAddr, target: &str, id: &str) -> Reply {
+        send(
+            address,
+            &request("DELETE", target, &[("Idempotency-Key", id)], ""),
+        )
+    }
+
+    fn no_store(replies: &[&Reply]) -> bool {
+        replies
+            .iter()
+            .all(|reply| reply.header("cache-control") == vec!["no-store"])
+    }
+
+    #[test]
+    fn a_scan_pages_through_the_keys_over_http_in_the_spec_s_shapes() {
+        let dir = scratch("serve-scan");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let put_a = put(address, "/v1/kv?key=a", &id(1), &put_body("1"));
+        let put_b = put(address, "/v1/kv?key=b", &id(2), &put_body("2"));
+        let page = get(address, "/v1/scan");
+        let first = get(address, "/v1/scan?limit=1");
+        let second = get(address, "/v1/scan?limit=1&after=a");
+        let empty = get(address, "/v1/scan?start=m&end=m");
+        let inverted = get(address, "/v1/scan?start=b&end=a");
+        let stored = no_store(&[&page, &first, &second, &empty, &inverted]);
+        stop(serving);
+        let keys = |reply: &Reply| {
+            reply.body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["key"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let shape = |reply: &Reply| {
+            (
+                reply.status,
+                keys(reply),
+                reply.body["has_more"].clone(),
+                reply.body["next_after"].clone(),
+            )
+        };
+        assert_eq!(
+            (
+                (put_a.status, put_b.status),
+                shape(&page),
+                shape(&first),
+                shape(&second),
+                shape(&empty),
+                (inverted.status, inverted.code()),
+                page.body["items"][1].clone(),
+                stored,
+            ),
+            (
+                (200, 200),
+                (
+                    200,
+                    vec!["a".to_owned(), "b".to_owned()],
+                    json!(false),
+                    Json::Null
+                ),
+                (200, vec!["a".to_owned()], json!(true), json!("a")),
+                (200, vec!["b".to_owned()], json!(false), Json::Null),
+                (200, Vec::new(), json!(false), Json::Null),
+                (400, Some("invalid_request")),
+                json!({"key": "b", "value": "2", "version": put_b.body["version"]}),
+                true,
+            ),
+            "rule: SCAN lists key, value and version in key order; a page cut by limit says \
+             has_more with next_after the last key and `after` continues past it; equal \
+             bounds are an empty page and start > end is invalid_request; every response is \
+             no-store (F-4, §8.5)"
+        );
+    }
+
+    #[test]
+    fn a_cas_sets_or_refuses_terminally_over_http_in_the_spec_s_shapes() {
+        let dir = scratch("serve-cas");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let put_a = put(address, "/v1/kv?key=a", &id(1), &put_body("1"));
+        let version_a = put_a.body["version"].as_u64().unwrap();
+        let matching =
+            format!(r#"{{"expected":{{"kind":"version","version":{version_a}}},"value":"3"}}"#);
+        let stale =
+            format!(r#"{{"expected":{{"kind":"version","version":{version_a}}},"value":"4"}}"#);
+        let cas_ok = post_json(address, "/v1/cas?key=a", &id(3), &matching);
+        let cas_stale = post_json(address, "/v1/cas?key=a", &id(4), &stale);
+        let cas_stale_again = post_json(address, "/v1/cas?key=a", &id(4), &stale);
+        let create_only = post_json(
+            address,
+            "/v1/cas?key=c",
+            &id(5),
+            r#"{"expected":{"kind":"absent"},"value":"new"}"#,
+        );
+        let too_big = post_json(
+            address,
+            "/v1/cas?key=a",
+            &id(6),
+            r#"{"expected":{"kind":"version","version":9007199254740992},"value":"x"}"#,
+        );
+        let stored = no_store(&[&cas_ok, &cas_stale, &create_only, &too_big]);
+        stop(serving);
+        let cas_index = cas_ok.body["index"].clone();
+        let stale_index = cas_stale.body["error"]["details"]["index"].clone();
+        assert_eq!(
+            (
+                (
+                    cas_ok.status,
+                    cas_ok.body["version"].clone(),
+                    cas_ok.body["replayed"].clone()
+                ),
+                (
+                    cas_stale.status,
+                    cas_stale.code(),
+                    cas_stale.body["error"]["details"].clone()
+                ),
+                (
+                    cas_stale_again.status,
+                    cas_stale_again.body["error"]["details"]["replayed"].clone()
+                ),
+                (
+                    create_only.status,
+                    create_only.body["version"] == create_only.body["index"]
+                ),
+                (
+                    too_big.status,
+                    too_big.code(),
+                    too_big.body["error"]["details"].clone()
+                ),
+                stored,
+            ),
+            (
+                (200, cas_index.clone(), json!(false)),
+                (
+                    409,
+                    Some("version_mismatch"),
+                    json!({"current_version": cas_index, "request_id": id(4),
+                        "index": stale_index, "replayed": false})
+                ),
+                (409, json!(true)),
+                (200, true),
+                (400, Some("invalid_request"), json!({"request_id": id(6)})),
+                true,
+            ),
+            "rule: a CAS that matches sets with version == index; one that does not is the \
+             terminal 409 version_mismatch naming the current version and the original index, \
+             replayed on a retry; an absent expectation creates; an expected version of 2^53 \
+             is invalid_request (F-5, F-6, §8.3)"
+        );
+    }
+
+    #[test]
+    fn a_delete_and_the_status_lookup_round_trip_over_http_in_the_spec_s_shapes() {
+        let dir = scratch("serve-delete-status");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let put_a = put(address, "/v1/kv?key=a", &id(1), &put_body("1"));
+        let version_a = put_a.body["version"].as_u64().unwrap();
+        let stale = format!(
+            r#"{{"expected":{{"kind":"version","version":{}}},"value":"4"}}"#,
+            version_a + 1
+        );
+        let cas_stale = post_json(address, "/v1/cas?key=a", &id(4), &stale);
+        let removed = delete(address, "/v1/kv?key=a", &id(7));
+        let removed_again = delete(address, "/v1/kv?key=a", &id(8));
+        let removed_replay = delete(address, "/v1/kv?key=a", &id(7));
+        let reused = delete(address, "/v1/kv?key=b", &id(7));
+        let gone = get(address, "/v1/kv?key=a");
+        let status_stale = get(address, &format!("/v1/requests/{}", id(4)));
+        let status_put = get(address, &format!("/v1/requests/{}", id(1)));
+        let status_removed = get(address, &format!("/v1/requests/{}", id(8)));
+        let status_unknown = get(address, &format!("/v1/requests/{}", id(99)));
+        let stored = no_store(&[&removed, &status_stale, &status_unknown]);
+        stop(serving);
+        assert_eq!(
+            (
+                (
+                    removed.status,
+                    removed.body["existed"].clone(),
+                    removed.body["replayed"].clone()
+                ),
+                (removed_again.status, removed_again.body["existed"].clone()),
+                (
+                    removed_replay.status,
+                    removed_replay.body["replayed"].clone()
+                ),
+                (reused.status, reused.code()),
+                (gone.status, gone.code()),
+                stored,
+            ),
+            (
+                (200, json!(true), json!(false)),
+                (200, json!(false)),
+                (200, json!(true)),
+                (409, Some("request_id_conflict")),
+                (404, Some("not_found")),
+                true,
+            ),
+            "rule: DELETE reports existed, replays on a retry, deleting an absent key succeeds \
+             with existed false, and a reused ID for another command is request_id_conflict \
+             (F-3, F-6, §8.3)"
+        );
+        assert_eq!(
+            (
+                (status_stale.status, status_stale.body["state"].clone()),
+                status_stale.body["result"]["error"]["code"].clone(),
+                status_stale.body["result"]["error"]["details"].clone(),
+                (
+                    status_put.status,
+                    status_put.body["result"]["version"].clone()
+                ),
+                status_removed.body["result"]["existed"].clone(),
+                (status_unknown.status, status_unknown.body.clone()),
+            ),
+            (
+                (200, json!("known")),
+                json!("version_mismatch"),
+                json!({"current_version": version_a, "request_id": id(4),
+                    "index": cas_stale.body["error"]["details"]["index"], "replayed": true}),
+                (200, put_a.body["version"].clone()),
+                json!(false),
+                (
+                    200,
+                    json!({"state": "unknown", "served_by": status_unknown.body["served_by"]})
+                ),
+            ),
+            "rule: the status lookup is 200 with the original terminal result and replayed true \
+             whatever it was, and `unknown` for an ID this node never applied (F-9, §8.3)"
+        );
+    }
+
     #[test]
     fn health_and_cluster_report_the_running_node() {
         let dir = scratch("serve-health");
@@ -984,7 +1236,7 @@ mod serve_tests {
                 &put_body("v"),
             ),
         );
-        let delete = send(address, &request("DELETE", "/v1/kv?key=a", &[], ""));
+        let delete = send(address, &request("POST", "/v1/kv?key=a", &[], ""));
         let bare_lf = send(address, b"GET /v1/kv?key=a HTTP/1.1\nHost: x\n\n");
         // Two requests on one connection, the first kept alive.
         let mut stream = TcpStream::connect(address).unwrap();
@@ -1049,13 +1301,13 @@ mod serve_tests {
                     (405, Some("invalid_request".to_owned()), Json::Null, true),
                     (400, Some("invalid_request".to_owned()), Json::Null, true),
                 ],
-                vec!["GET, PUT"],
+                vec!["DELETE, GET, PUT"],
                 vec!["close"],
                 (200, 200, vec!["close"], true),
             ),
             "rule: over the wire, an unknown field and an unescaped '+' are 400 with the \
-             request ID, a write without an Idempotency-Key is 400 without one, DELETE is 405 \
-             until W27, malformed HTTP is 400 and closes the connection, every refusal is \
+             request ID, a write without an Idempotency-Key is 400 without one, a POST to \
+             /v1/kv is 405 naming DELETE, GET and PUT, malformed HTTP is 400 and closes the connection, every refusal is \
              no-store, and a kept-alive connection serves the next request (§8.1, §8.4)"
         );
     }

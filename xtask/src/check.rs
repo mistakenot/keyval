@@ -1864,12 +1864,18 @@ pub const CATALOGUE: &[CheckDef] = &[
                   published snapshot; a hand-off refusal is busy and a silent core \
                   unknown_outcome; queries are percent-decoded strictly and re-encoded exactly; \
                   heads over 16 KiB, chunked bodies and bare-LF lines are refused; every \
-                  response is no-store; DELETE, CAS, SCAN and the status lookup are refused \
-                  until served; a non-loopback address warns; end to end a real node answers \
-                  PUT, GET, health and cluster over loopback, keeps a connection alive and \
-                  closes one that asks",
+                  response is no-store; DELETE, CAS, SCAN and the status lookup parse strictly \
+                  (no body on a DELETE, an expected version of 0 or 2^53, a repeated member, a \
+                  limit outside 1..=128, start after end) and render as §8.3 to §8.5 say \
+                  (existed, a terminal version_mismatch naming current_version, pages with \
+                  has_more and next_after, known and unknown lookups); a non-loopback address \
+                  warns; end to end a real node answers PUT, GET, DELETE, CAS, SCAN, the \
+                  status lookup, health and cluster over loopback, keeps a connection alive \
+                  and closes one that asks",
         kind: Kind::TestGroup,
-        covers: &["F-1", "F-2", "O-1", "O-9", "CD-3"],
+        covers: &[
+            "F-1", "F-2", "F-3", "F-4", "F-5", "F-6", "F-9", "O-1", "O-9", "CD-3",
+        ],
         class: ClaimClass::Invariant,
         tier: Tier::T0,
         selector: Selector::CargoTest {
@@ -1882,7 +1888,7 @@ pub const CATALOGUE: &[CheckDef] = &[
                 "serve::tests::",
             ],
         },
-        min_cases: 21,
+        min_cases: 35,
     },
     CheckDef {
         id: "REQUEST-STATUS",
