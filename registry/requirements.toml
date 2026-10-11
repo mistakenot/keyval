@@ -396,7 +396,7 @@ title = "Oracles depend on no production crate"
 [[requirement]]
 id = "T-13"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A simulation run passes only if it did meaningful work"
 
 [[requirement]]
