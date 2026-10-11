@@ -390,7 +390,7 @@ title = "Replay identity is checked in fresh OS processes"
 [[requirement]]
 id = "T-12"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Oracles depend on no production crate"
 
 [[requirement]]
