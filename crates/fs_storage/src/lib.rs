@@ -594,6 +594,9 @@ impl ByteStorage for FsStorage {
 }
 
 #[cfg(test)]
+mod sync_order;
+
+#[cfg(test)]
 mod tests {
     // check: FS-STORAGE
     use super::*;

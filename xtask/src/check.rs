@@ -1116,6 +1116,28 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 2,
     },
     CheckDef {
+        id: "SYNC-ORDER",
+        summary: "syscall-boundary sync-order check (§10.17, D-46, W24.2): a recording \
+                  implementation of fs_storage's OS-call seam logs each real call the adapter \
+                  makes while the real journal engine drives it, and a judge holds the trace \
+                  to DUR-7 (a new directory's parent is synced before the journal is created, \
+                  the journal's directory before any byte is written) and §7.4 (every append \
+                  or truncation is covered by an fdatasync before the next write, and nothing \
+                  is left unsynced). Fresh init, both init re-runs, steady-state batches and \
+                  torn-tail recovery pass; seeded bad traces and adapters that drop the \
+                  fdatasync or the directory sync are rejected. Syscall-order evidence, not \
+                  proof: that the disk honours fsync is the §10.15 assumption",
+        kind: Kind::TestGroup,
+        covers: &["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &["sync_order::"],
+        },
+        min_cases: 12,
+    },
+    CheckDef {
         id: "RAFT-READY-LOOP",
         summary: "the Ready loop persists, then releases: no vote grant, append acknowledgement \
                   or other message leaves before its sender has synced the term, vote and \

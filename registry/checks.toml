@@ -718,6 +718,18 @@ min_cases = 2
 status = "implemented"
 
 [[check]]
+id = "SYNC-ORDER"
+summary = "syscall-boundary sync-order check (§10.17, D-46, W24.2): a recording implementation of fs_storage's OS-call seam logs each real call the adapter makes while the real journal engine drives it, and a judge holds the trace to DUR-7 (a new directory's parent is synced before the journal is created, the journal's directory before any byte is written) and §7.4 (every append or truncation is covered by an fdatasync before the next write, and nothing is left unsynced). Fresh init, both init re-runs, steady-state batches and torn-tail recovery pass; seeded bad traces and adapters that drop the fdatasync or the directory sync are rejected. Syscall-order evidence, not proof: that the disk honours fsync is the §10.15 assumption"
+kind = "test_group"
+covers = ["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check SYNC-ORDER"
+min_cases = 12
+status = "implemented"
+
+[[check]]
 id = "RAFT-READY-LOOP"
 summary = "the Ready loop persists, then releases: no vote grant, append acknowledgement or other message leaves before its sender has synced the term, vote and entries it depends on, and no entry applies before its frame is synced at the applying node with the term its synced log holds (scripted, seeded and lone-voter runs judged against each node's synced journal), a frame never persists a commit index alone, inputs wait while a sync is outstanding, an old-incarnation SyncDone is ignored, committed entries apply once each in index order and drain past the per-Ready bound before the next input, applied progress is reported, and a hard stop stops the loop (§7.4, DUR-2, K-11, D-28)"
 kind = "test_group"
