@@ -548,7 +548,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["schemas::"],
         },
-        min_cases: 20,
+        min_cases: 21,
     },
     CheckDef {
         id: "INVARIANT",
@@ -1134,6 +1134,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         selector: Selector::CargoTest {
             package: "fs_storage",
             filters: &["sync_order::"],
+        },
+        min_cases: 12,
+    },
+    CheckDef {
+        id: "LIFECYCLE-SMOKE",
+        summary: "five-node lifecycle smoke (§10.17, T-14, W24.3): `./dev smoke lifecycle` generates a per-run config with free ports and a unique cluster ID (never the owner's cluster), starts five real nodes through `./dev cluster`, writes N acknowledged keys, SIGKILLs the leader and one follower and restarts them, waits until all five nodes report an applied index at or beyond the last acknowledged write's index, reads every acknowledged key from every node through the minimal HTTP client, stops the cluster and runs `keyval doctor` bound to the config on every stopped data directory, logging every step. The gate judges the smoke's logic against fake nodes and real sockets: the generated config loads, a leader is agreed only when all five name it and it says so, the victims are the leader and the lowest follower, catch-up names every node behind or unreachable, a missing or stale key is named by node and key, and the doctor verdict passes only for a startable, config-bound directory. The five-process run is manual and not gated (as DEMO-M1), and SIGKILL shows process-crash recovery only, not power-loss durability (§10.15 assumption): test evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["lifecycle::tests::"],
         },
         min_cases: 12,
     },

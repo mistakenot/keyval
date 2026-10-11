@@ -24,6 +24,7 @@ mod gate;
 mod git;
 mod ledger;
 mod libtest;
+mod lifecycle;
 mod lint;
 mod metadata;
 #[cfg(test)]
@@ -206,6 +207,20 @@ enum Command {
         #[command(subcommand)]
         action: ClusterAction,
     },
+    /// Scripted smokes (§10.17): the five-node lifecycle smoke on real processes (W24.3).
+    Smoke {
+        #[command(subcommand)]
+        action: SmokeAction,
+    },
+}
+
+/// `./dev smoke` actions.
+#[derive(Clone, Copy, Debug, Subcommand)]
+enum SmokeAction {
+    /// Five real nodes: write keys, SIGKILL the leader and a follower, restart them, wait
+    /// for all five to catch up, read every key from every node, stop, and examine every
+    /// data directory with `keyval doctor`; the first failed step exits 1 (P10).
+    Lifecycle,
 }
 
 /// `./dev cluster` actions; `kill` and `restart` also take `--node`.
@@ -322,6 +337,18 @@ fn main() -> ExitCode {
     ExitCode::from(status.code())
 }
 
+/// Runs one `./dev smoke` action.
+fn run_smoke(root: &Path, format: Format, action: SmokeAction) -> Status {
+    match action {
+        SmokeAction::Lifecycle => {
+            let options = lifecycle::Options {
+                progress: format == Format::Human,
+            };
+            output::emit(format, &lifecycle::run(root, options))
+        }
+    }
+}
+
 fn run(cli: Cli) -> Status {
     let format = if cli.json {
         Format::Json
@@ -408,6 +435,7 @@ fn run(cli: Cli) -> Status {
             }
         },
         Command::Cluster { action } => run_cluster(&root, format, action),
+        Command::Smoke { action } => run_smoke(&root, format, action),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };

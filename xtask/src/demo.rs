@@ -1041,7 +1041,7 @@ fn free_port() -> Result<u16, String> {
 }
 
 /// The executable cargo's JSON messages say it built for the binary `name`.
-fn executable(messages: &str, name: &str) -> Option<PathBuf> {
+pub fn executable(messages: &str, name: &str) -> Option<PathBuf> {
     messages
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -1052,13 +1052,13 @@ fn executable(messages: &str, name: &str) -> Option<PathBuf> {
 }
 
 /// `GET target` from `address`.
-fn get(address: SocketAddr, target: &str) -> Result<(u16, Value), String> {
+pub fn get(address: SocketAddr, target: &str) -> Result<(u16, Value), String> {
     http(address, "GET", target, &[], "")
 }
 
 /// One HTTP/1.1 request to `address`, closing the connection after the response: its status
 /// and JSON body.
-fn http(
+pub fn http(
     address: SocketAddr,
     method: &str,
     target: &str,

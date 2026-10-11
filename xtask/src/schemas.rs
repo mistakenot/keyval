@@ -55,6 +55,7 @@ const IDS: &[&str] = &[
     crate::sim::SCHEMA,
     crate::demo::SCHEMA,
     crate::cluster::SCHEMA,
+    crate::lifecycle::SCHEMA,
 ];
 
 /// The file stem for an identifier: `keyval.dev.<name>/v<n>` becomes `<name>.v<n>`.
@@ -186,6 +187,7 @@ mod tests {
     use crate::doctor::{self, Expect, Need, Probe, ToolSpec, ToolStatus};
     use crate::gate::{self, Context, GateTier, Step as GateStep, Tree, TreeSource, Verdict};
     use crate::git::{Git, fixture};
+    use crate::lifecycle;
     use crate::output::{self, ErrorKind};
     use crate::prune::{self, Action, Layout, Reason};
     use crate::sim::{self, Verdict as SimVerdict};
@@ -1070,6 +1072,50 @@ mod tests {
         validators.assert_matches(&refused, "a refused init");
         refused.instance_id = None;
         validators.assert_matches(&refused, "a refused init before an ID exists");
+    }
+
+    #[test]
+    fn smoke_reports_match_their_schema() {
+        let validators = Validators::load();
+        let mut log = StepLog::new("smoke lifecycle", None, false).unwrap();
+        let mut step = |name: &str, observed: Result<String, String>| {
+            let step = steplog::Step {
+                name,
+                action: "an action",
+                expected: "what it expects",
+                rerun: "./dev smoke lifecycle",
+            };
+            log.record(step, observed, std::time::Duration::from_millis(5))
+                .unwrap_or_else(|failed| *failed.record)
+        };
+        let passed = step("leader", Ok("node 2 leads".to_owned()));
+        let failed = step("catch-up", Err("node 4 applied 29".to_owned()));
+        let report = |ok: bool, steps: Vec<steplog::StepRecord>, last_index: Option<u64>| {
+            lifecycle::SmokeReport {
+                schema: lifecycle::SCHEMA,
+                ok,
+                label: lifecycle::LABEL,
+                run_dir: ".local/smoke/lifecycle/run".to_owned(),
+                keys: lifecycle::KEYS,
+                last_index,
+                killed: vec![2, 1],
+                steps,
+                limitations: lifecycle::LIMITATIONS.to_vec(),
+                step_log: ".local/smoke/lifecycle/run/steps.jsonl".to_owned(),
+            }
+        };
+        validators.assert_matches(
+            &report(true, vec![passed.clone()], Some(31)),
+            "a passing smoke",
+        );
+        validators.assert_matches(
+            &report(false, vec![passed, failed], Some(31)),
+            "a failed smoke",
+        );
+        validators.assert_matches(
+            &report(false, Vec::new(), None),
+            "a smoke that stopped before any write",
+        );
     }
 
     #[test]

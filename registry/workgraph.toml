@@ -298,7 +298,7 @@ deps = ["W12", "W22", "W23"]
 reqs = ["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"]
 area = ["fs_storage (probe tests)", "xtask"]
 milestone = "m2"
-accept = []
+accept = ["./dev check CRASH-PROBES", "./dev check FAILPOINTS-ABSENT", "./dev check SYNC-ORDER", "./dev check LIFECYCLE-SMOKE"]
 bead = "br-w24-crash-probes-lifecycle-smoke-c92"
 
 [[item]]

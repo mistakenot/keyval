@@ -1,0 +1,30 @@
+{
+  "rule": "a smoke that is ok has no failed step",
+  "error_at": "/steps",
+  "instance": {
+    "schema": "keyval.dev.smoke/v1",
+    "ok": true,
+    "label": "five-node lifecycle smoke: five real keyval-server processes on this machine, two killed with SIGKILL and restarted, then every data directory examined offline",
+    "run_dir": ".local/smoke/lifecycle/20261011T231800Z-4242",
+    "keys": 20,
+    "last_index": 31,
+    "killed": [2, 1],
+    "steps": [
+      {
+        "schema": "keyval.dev.step/v1",
+        "flow": "smoke lifecycle",
+        "step": "catch-up",
+        "action": "poll /v1/cluster on all five nodes",
+        "expected": "every node's applied index ≥ the last acknowledged write's index 31",
+        "observed": "after 60s, not at index 31: node 4 applied 29",
+        "outcome": "failed",
+        "duration_ms": 60012,
+        "rerun": "./dev smoke lifecycle"
+      }
+    ],
+    "limitations": [
+      "process-crash evidence only: a SIGKILL ends the process but the page cache survives (D-46, §10.17, §10.15)"
+    ],
+    "step_log": ".local/smoke/lifecycle/20261011T231800Z-4242/steps.jsonl"
+  }
+}
