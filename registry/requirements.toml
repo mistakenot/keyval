@@ -272,13 +272,13 @@ title = "Liveness, readiness and cluster status endpoints"
 [[requirement]]
 id = "O-2"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "./dev cluster manages a local 5-node cluster without losing data"
 
 [[requirement]]
 id = "O-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Structured per-node JSON logs with a bounded queue"
 
 [[requirement]]
