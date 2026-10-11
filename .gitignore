@@ -35,6 +35,7 @@ logs/
 
 # Coverage
 coverage/
+!schemas/coverage/
 *.lcov
 
 # NTM session runtime state (logs, pids, rate limits)

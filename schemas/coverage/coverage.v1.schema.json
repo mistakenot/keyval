@@ -1,0 +1,391 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/coverage/coverage.v1.schema.json",
+  "title": "keyval.coverage/v1",
+  "description": "The coverage matrix (PLAN.md \u00a710.4): what one or more runs of one build exercised. Every cell of every dimension is present, zero included, so an empty cell is visible. Produced by the checker crate's Coverage from keyval.observation/v1 documents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "build_id",
+    "runs",
+    "cells"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.coverage/v1"
+    },
+    "build_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runs": {
+      "$ref": "#/$defs/count"
+    },
+    "cells": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fault",
+        "fault_pair",
+        "topology",
+        "crash_point",
+        "outcome",
+        "operation"
+      ],
+      "properties": {
+        "fault": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "crash_restart",
+            "all_node_crash",
+            "permanent_loss",
+            "symmetric_partition",
+            "asymmetric_partition",
+            "message_loss",
+            "message_delay",
+            "message_duplication",
+            "stall"
+          ],
+          "properties": {
+            "crash_restart": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "stall": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "fault_pair": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "crash_restart+all_node_crash",
+            "crash_restart+permanent_loss",
+            "crash_restart+symmetric_partition",
+            "crash_restart+asymmetric_partition",
+            "crash_restart+message_loss",
+            "crash_restart+message_delay",
+            "crash_restart+message_duplication",
+            "crash_restart+stall",
+            "all_node_crash+permanent_loss",
+            "all_node_crash+symmetric_partition",
+            "all_node_crash+asymmetric_partition",
+            "all_node_crash+message_loss",
+            "all_node_crash+message_delay",
+            "all_node_crash+message_duplication",
+            "all_node_crash+stall",
+            "permanent_loss+symmetric_partition",
+            "permanent_loss+asymmetric_partition",
+            "permanent_loss+message_loss",
+            "permanent_loss+message_delay",
+            "permanent_loss+message_duplication",
+            "permanent_loss+stall",
+            "symmetric_partition+asymmetric_partition",
+            "symmetric_partition+message_loss",
+            "symmetric_partition+message_delay",
+            "symmetric_partition+message_duplication",
+            "symmetric_partition+stall",
+            "asymmetric_partition+message_loss",
+            "asymmetric_partition+message_delay",
+            "asymmetric_partition+message_duplication",
+            "asymmetric_partition+stall",
+            "message_loss+message_delay",
+            "message_loss+message_duplication",
+            "message_loss+stall",
+            "message_delay+message_duplication",
+            "message_delay+stall",
+            "message_duplication+stall"
+          ],
+          "properties": {
+            "crash_restart+all_node_crash": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+permanent_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+symmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+asymmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "crash_restart+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+permanent_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+symmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+asymmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "all_node_crash+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+symmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+asymmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "permanent_loss+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition+asymmetric_partition": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition+message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "symmetric_partition+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_partition+message_loss": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_partition+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_partition+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_partition+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "message_loss+message_delay": {
+              "$ref": "#/$defs/count"
+            },
+            "message_loss+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "message_loss+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "message_delay+message_duplication": {
+              "$ref": "#/$defs/count"
+            },
+            "message_delay+stall": {
+              "$ref": "#/$defs/count"
+            },
+            "message_duplication+stall": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "3/2",
+            "4/1",
+            "2/2/1",
+            "asymmetric_cycle",
+            "other_partition"
+          ],
+          "properties": {
+            "3/2": {
+              "$ref": "#/$defs/count"
+            },
+            "4/1": {
+              "$ref": "#/$defs/count"
+            },
+            "2/2/1": {
+              "$ref": "#/$defs/count"
+            },
+            "asymmetric_cycle": {
+              "$ref": "#/$defs/count"
+            },
+            "other_partition": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "crash_point": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "idle",
+            "before_write",
+            "mid_append",
+            "after_write_before_sync",
+            "after_sync_before_completion",
+            "after_commit_before_reply",
+            "after_truncate_before_sync",
+            "after_create_before_dir_sync"
+          ],
+          "properties": {
+            "idle": {
+              "$ref": "#/$defs/count"
+            },
+            "before_write": {
+              "$ref": "#/$defs/count"
+            },
+            "mid_append": {
+              "$ref": "#/$defs/count"
+            },
+            "after_write_before_sync": {
+              "$ref": "#/$defs/count"
+            },
+            "after_sync_before_completion": {
+              "$ref": "#/$defs/count"
+            },
+            "after_commit_before_reply": {
+              "$ref": "#/$defs/count"
+            },
+            "after_truncate_before_sync": {
+              "$ref": "#/$defs/count"
+            },
+            "after_create_before_dir_sync": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "outcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "success",
+            "mismatch",
+            "conflict",
+            "live_capacity",
+            "history_full",
+            "unknown",
+            "not_leader",
+            "busy",
+            "unavailable",
+            "recovering"
+          ],
+          "properties": {
+            "success": {
+              "$ref": "#/$defs/count"
+            },
+            "mismatch": {
+              "$ref": "#/$defs/count"
+            },
+            "conflict": {
+              "$ref": "#/$defs/count"
+            },
+            "live_capacity": {
+              "$ref": "#/$defs/count"
+            },
+            "history_full": {
+              "$ref": "#/$defs/count"
+            },
+            "unknown": {
+              "$ref": "#/$defs/count"
+            },
+            "not_leader": {
+              "$ref": "#/$defs/count"
+            },
+            "busy": {
+              "$ref": "#/$defs/count"
+            },
+            "unavailable": {
+              "$ref": "#/$defs/count"
+            },
+            "recovering": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "put",
+            "delete",
+            "cas",
+            "get",
+            "scan",
+            "status"
+          ],
+          "properties": {
+            "put": {
+              "$ref": "#/$defs/count"
+            },
+            "delete": {
+              "$ref": "#/$defs/count"
+            },
+            "cas": {
+              "$ref": "#/$defs/count"
+            },
+            "get": {
+              "$ref": "#/$defs/count"
+            },
+            "scan": {
+              "$ref": "#/$defs/count"
+            },
+            "status": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}

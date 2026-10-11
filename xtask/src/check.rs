@@ -548,7 +548,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "xtask",
             filters: &["schemas::"],
         },
-        min_cases: 19,
+        min_cases: 20,
     },
     CheckDef {
         id: "INVARIANT",
@@ -2230,6 +2230,32 @@ pub const CATALOGUE: &[CheckDef] = &[
             filters: &["k13::tests::"],
         },
         min_cases: 21,
+    },
+    CheckDef {
+        id: "COVERAGE-MATRIX",
+        summary: "Coverage matrix accounting (§10.4, W41.2): per build, the checker counts each fault type, each pair of fault types, each partition topology (3/2, 4/1, 2/2/1, asymmetric cycle), each crash point, each outcome and each operation from keyval.observation/v1 runs into a keyval.coverage/v1 record in which every cell is present, zero included; records of one build merge and records of different builds are refused; the record schema's cell lists are the universe. Test evidence of the accounting, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-13", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "checker",
+            filters: &["coverage::tests::"],
+        },
+        min_cases: 10,
+    },
+    CheckDef {
+        id: "COVERAGE-REPORT",
+        summary: "./dev report coverage (§10.4, W41.2): sums keyval.coverage/v1 records per build, lists every empty cell, flags the ones in the required set registry/coverage.toml, and writes reports/coverage.md; the required set is judged against the record schema (unknown cells, the never-required other_partition, duplicate or missing dimensions, unknown owners and a vacuous empty set outside W43 are refused); a malformed record is an error, never skipped (P10). Test evidence of the report, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-13", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["coverage::tests::"],
+        },
+        min_cases: 8,
     },
     CheckDef {
         id: "SWARM-SCENARIO",

@@ -485,7 +485,7 @@ deps = ["W37", "W38", "W39", "W40"]
 reqs = ["T-13", "P10"]
 area = ["checker", "sim", "registry"]
 milestone = "m4"
-accept = []
+accept = ["./dev check K-13", "./dev check COVERAGE-MATRIX", "./dev check COVERAGE-REPORT"]
 bead = "br-w41-nonvacuity-coverage-verdicts-tzb"
 
 [[item]]

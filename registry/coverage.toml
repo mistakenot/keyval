@@ -1,0 +1,110 @@
+# The required coverage set (PLAN.md §10.4, D-73): the cells of the coverage matrix a T3
+# release campaign must see non-zero, per build. T2 only reports empty cells.
+#
+# W41 authors this structure and the fault, fault_pair, topology and crash_point cells.
+# W43 completes the outcome and operation cells (until then `required = []`, which the report
+# lists as pending and `./dev check COVERAGE-REPORT` accepts only for a dimension owned by
+# W43). A cell name must be one of the matrix's cells (`schemas/coverage/coverage.v1.schema.json`);
+# `other_partition` is a catch-all that is counted but never required.
+#
+# Not a requirement status: nothing here is derived from receipts (§10.13), and no one edits a
+# cell to make a campaign pass (P9): a cell leaves the set only by a plan change.
+
+schema = "keyval.coverage-required/v1"
+
+# Every fault type of §9.1.
+[[dimension]]
+name = "fault"
+owner = "W41"
+required = [
+  "crash_restart",
+  "all_node_crash",
+  "permanent_loss",
+  "symmetric_partition",
+  "asymmetric_partition",
+  "message_loss",
+  "message_delay",
+  "message_duplication",
+  "stall",
+]
+
+# Every unordered pair of distinct fault types (a+b in the order of the fault list).
+[[dimension]]
+name = "fault_pair"
+owner = "W41"
+required = [
+  "crash_restart+all_node_crash",
+  "crash_restart+permanent_loss",
+  "crash_restart+symmetric_partition",
+  "crash_restart+asymmetric_partition",
+  "crash_restart+message_loss",
+  "crash_restart+message_delay",
+  "crash_restart+message_duplication",
+  "crash_restart+stall",
+  "all_node_crash+permanent_loss",
+  "all_node_crash+symmetric_partition",
+  "all_node_crash+asymmetric_partition",
+  "all_node_crash+message_loss",
+  "all_node_crash+message_delay",
+  "all_node_crash+message_duplication",
+  "all_node_crash+stall",
+  "permanent_loss+symmetric_partition",
+  "permanent_loss+asymmetric_partition",
+  "permanent_loss+message_loss",
+  "permanent_loss+message_delay",
+  "permanent_loss+message_duplication",
+  "permanent_loss+stall",
+  "symmetric_partition+asymmetric_partition",
+  "symmetric_partition+message_loss",
+  "symmetric_partition+message_delay",
+  "symmetric_partition+message_duplication",
+  "symmetric_partition+stall",
+  "asymmetric_partition+message_loss",
+  "asymmetric_partition+message_delay",
+  "asymmetric_partition+message_duplication",
+  "asymmetric_partition+stall",
+  "message_loss+message_delay",
+  "message_loss+message_duplication",
+  "message_loss+stall",
+  "message_delay+message_duplication",
+  "message_delay+stall",
+  "message_duplication+stall",
+]
+
+# The four named partition shapes of §10.4.
+[[dimension]]
+name = "topology"
+owner = "W41"
+required = [
+  "3/2",
+  "4/1",
+  "2/2/1",
+  "asymmetric_cycle",
+]
+
+# Every crash point of §9.1 and §10.17.
+[[dimension]]
+name = "crash_point"
+owner = "W41"
+required = [
+  "idle",
+  "before_write",
+  "mid_append",
+  "after_write_before_sync",
+  "after_sync_before_completion",
+  "after_commit_before_reply",
+  "after_truncate_before_sync",
+  "after_create_before_dir_sync",
+]
+
+# Completed by W43 (full-operation workload profiles): every outcome of §10.4 reachable.
+[[dimension]]
+name = "outcome"
+owner = "W43"
+required = []
+
+# Completed by W43: every operation of §8.2 reachable.
+[[dimension]]
+name = "operation"
+owner = "W43"
+required = []

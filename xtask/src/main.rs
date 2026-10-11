@@ -15,6 +15,7 @@ mod clock;
 mod closure;
 mod cluster;
 mod commit;
+mod coverage;
 mod demo;
 mod doctor;
 #[cfg(test)]
@@ -292,6 +293,13 @@ enum ReportKind {
         #[arg(long, value_name = "DIR")]
         artifacts: Option<PathBuf>,
     },
+    /// reports/coverage.md: the coverage matrix per build, with empty cells and the required
+    /// set from registry/coverage.toml (§10.4).
+    Coverage {
+        /// Coverage records (keyval.coverage/v1); default: every *.json in artifacts/coverage.
+        #[arg(long = "input", value_name = "FILE")]
+        inputs: Vec<PathBuf>,
+    },
 }
 
 /// `./dev beads` actions.
@@ -479,6 +487,10 @@ fn run_report(root: &Path, format: Format, report: ReportKind) -> Status {
                 Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
             }
         }
+        ReportKind::Coverage { inputs } => match coverage::run(root, &inputs) {
+            Ok(report) => output::emit(format, &report),
+            Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
+        },
     }
 }
 

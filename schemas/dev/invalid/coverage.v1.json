@@ -1,0 +1,25 @@
+{
+  "rule": "a build's empty cells are named with whether each is required; an unflagged cell hides what T3 would reject",
+  "error_at": "/builds/0/empty_cells/0",
+  "instance": {
+    "schema": "keyval.dev.coverage/v1",
+    "ok": true,
+    "path": "reports/coverage.md",
+    "inputs": ["artifacts/coverage/campaign.json"],
+    "required": [
+      { "dimension": "fault", "owner": "W41", "cells": 9, "pending": false },
+      { "dimension": "outcome", "owner": "W43", "cells": 0, "pending": true }
+    ],
+    "builds": [
+      {
+        "build_id": "fixture-build",
+        "runs": 8,
+        "cells": 74,
+        "empty": 1,
+        "required_total": 9,
+        "required_empty": 1,
+        "empty_cells": [{ "dimension": "fault", "cell": "stall" }]
+      }
+    ]
+  }
+}

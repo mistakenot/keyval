@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/coverage.v1.schema.json",
+  "title": "keyval.dev.coverage/v1",
+  "description": "The `./dev report coverage --json` report (xtask/src/coverage.rs `CoverageReport`): the coverage matrix of PLAN.md §10.4 summed per build from keyval.coverage/v1 records, each build's empty cells flagged required or not against registry/coverage.toml. `ok` means the records were read and the report written; empty required cells do not clear it, because T3 is the gate and this is a view.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ok", "path", "inputs", "required", "builds"],
+  "properties": {
+    "schema": { "const": "keyval.dev.coverage/v1" },
+    "ok": { "type": "boolean" },
+    "path": { "type": "string", "minLength": 1 },
+    "inputs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "required": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension", "owner", "cells", "pending"],
+        "properties": {
+          "dimension": { "enum": ["fault", "fault_pair", "topology", "crash_point", "outcome", "operation"] },
+          "owner": { "enum": ["W41", "W43"] },
+          "cells": { "type": "integer", "minimum": 0 },
+          "pending": { "type": "boolean" }
+        }
+      }
+    },
+    "builds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["build_id", "runs", "cells", "empty", "required_total", "required_empty", "empty_cells"],
+        "properties": {
+          "build_id": { "type": "string", "minLength": 1 },
+          "runs": { "type": "integer", "minimum": 0 },
+          "cells": { "type": "integer", "minimum": 0 },
+          "empty": { "type": "integer", "minimum": 0 },
+          "required_total": { "type": "integer", "minimum": 0 },
+          "required_empty": { "type": "integer", "minimum": 0 },
+          "empty_cells": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["dimension", "cell", "required"],
+              "properties": {
+                "dimension": { "enum": ["fault", "fault_pair", "topology", "crash_point", "outcome", "operation"] },
+                "cell": { "type": "string", "minLength": 1 },
+                "required": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

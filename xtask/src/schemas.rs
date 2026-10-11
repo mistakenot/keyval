@@ -51,6 +51,7 @@ const IDS: &[&str] = &[
     crate::prune::SCHEMA,
     crate::steplog::SCHEMA,
     crate::traceability::SCHEMA,
+    crate::coverage::SCHEMA,
     crate::sim::SCHEMA,
     crate::demo::SCHEMA,
     crate::cluster::SCHEMA,
@@ -1100,6 +1101,26 @@ mod tests {
                 validators.assert_matches(&read_json(Path::new(path)), &format!("{case}: receipt"));
             }
         }
+    }
+
+    #[test]
+    fn coverage_reports_match_their_schema() {
+        let validators = Validators::load();
+        let root = scratch_dir("schemas-coverage-root");
+        for file in [crate::coverage::RECORD_SCHEMA, crate::coverage::REQUIRED] {
+            let to = root.join(file);
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::copy(workspace_root().join(file), to).unwrap();
+        }
+        let none = crate::coverage::run(&root, &[]).unwrap();
+        validators.assert_matches(&none, "coverage::run without a record");
+        let record = workspace_root().join("schemas/coverage/fixtures/campaign.v1.json");
+        let some = crate::coverage::run(&root, &[record]).unwrap();
+        assert!(
+            !some.builds[0].empty_cells.is_empty(),
+            "the fixture leaves cells empty, so the schema sees them; report={some:#?}"
+        );
+        validators.assert_matches(&some, "coverage::run on the campaign fixture");
     }
 
     #[test]

@@ -10,10 +10,12 @@
 //! the [`Reads`] view, [`k8`] (Raft safety, judged on
 //! the [`GodView`] with commit certificates), [`k7`] (convergence) and [`k9`] (liveness), both
 //! judged on the [`Heal`] view, [`k11`] (persistence ordering, on the god view)
-//! and [`k12`] (unknown-outcome honesty, on the client-side [`Trace`]). Each returns a [`Report`]:
+//! and [`k12`] (unknown-outcome honesty, on the client-side [`Trace`]); [`Coverage`] counts the
+//! coverage matrix (§10.4) across runs of one build. Each returns a [`Report`]:
 //! how many cases it examined and every [`Violation`] it found. A document the checkers
 //! cannot read is a [`CheckError`], never a silent pass (P10).
 
+mod coverage;
 mod godview;
 mod heal;
 mod history;
@@ -42,6 +44,7 @@ mod heal_fixtures;
 #[cfg(test)]
 mod raft_fixtures;
 
+pub use coverage::{Coverage, Dimension};
 pub use godview::{
     Durable, Event, GodView, NodeState, Obligation, Process, Released, Role, Stamped, SyncState,
 };
