@@ -22,6 +22,9 @@
 //! - [`swarm`] and [`scenario`]: swarm configurations (a non-empty fault subset and an
 //!   intensity per seed, plus the no-fault control) and the scenario a seed generates inside
 //!   the §9.4 healthy envelope, with its human-readable scenario file (W37.2, T-10).
+//! - [`scenario_run`]: a scenario driven through the run phases and reported as
+//!   `keyval.dev.sim-run/v2` (W42.1), the program behind `keyval-sim run --profile swarm` and
+//!   `--scenario FILE`.
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
@@ -59,6 +62,7 @@ pub mod phases;
 mod phases_tests;
 pub mod replay;
 pub mod scenario;
+pub mod scenario_run;
 #[cfg(test)]
 mod scenario_tests;
 pub mod scheduler;

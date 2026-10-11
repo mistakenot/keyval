@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/sim-run.v2.schema.json",
+  "title": "keyval.dev.sim-run/v2",
+  "description": "The `./dev sim run --profile swarm|--scenario FILE --json` report (PLAN.md \u00a710.9, \u00a712.2 W42.1): one simulated scenario run, printed by the `keyval-sim` binary (crates/sim/src/scenario_run.rs `ScenarioRun::report`) and re-emitted by xtask/src/sim_campaign.rs from the strictly parsed report. `ok` is true exactly when the verdict is `pass`. A run that no checker judged is `incomplete` and `checkers.ran` is empty: an unjudged run is never a pass (P10). A pass needs a complete trace and at least one checker that ran.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "label",
+    "manifest",
+    "verdict",
+    "failures",
+    "incomplete",
+    "heal",
+    "checkers",
+    "trace",
+    "virtual_time_us"
+  ],
+  "allOf": [
+    {
+      "description": "ok exactly when the verdict is pass.",
+      "if": {
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "verdict": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "failures": {
+            "maxItems": 0
+          },
+          "incomplete": {
+            "maxItems": 0
+          },
+          "checkers": {
+            "properties": {
+              "ran": {
+                "minItems": 1
+              }
+            }
+          },
+          "trace": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "ok": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "description": "A failed run says what failed; an incomplete run says why.",
+      "if": {
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "verdict": {
+            "const": "fail"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "failures": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "verdict": {
+            "const": "incomplete"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "incomplete": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.sim-run/v2"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_schema",
+        "profile",
+        "prng",
+        "config_fingerprint",
+        "scenario"
+      ],
+      "properties": {
+        "scenario_schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "enum": [
+            "swarm",
+            "scenario"
+          ]
+        },
+        "prng": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "scenario": {
+          "type": "object",
+          "required": [
+            "seed"
+          ],
+          "properties": {
+            "seed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "incomplete"
+      ]
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "incomplete": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "heal": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "converged",
+            "stalled"
+          ]
+        },
+        "ticks": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "checkers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ran",
+        "not_run"
+      ],
+      "properties": {
+        "ran": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "not_run": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hash",
+        "lines",
+        "events",
+        "complete",
+        "path"
+      ],
+      "properties": {
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "virtual_time_us": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -1186,6 +1186,30 @@ min_cases = 9
 status = "implemented"
 
 [[check]]
+id = "SIM-SCENARIO-RUN"
+summary = "A scenario run and its report (§10.9, §12.2 W42.1): a seed's generated scenario runs to a complete trace and is reported as keyval.dev.sim-run/v2 with its seed and profile; a run nothing judged is incomplete and not ok, never a pass (P10); the same scenario gives the same trace hash, and a scenario read from its file reproduces the seed's run exactly (T-4); a heal starved of its budget fails the run and names its stage"
+kind = "test_group"
+covers = ["T-4", "P6", "P10"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check SIM-SCENARIO-RUN"
+min_cases = 5
+status = "implemented"
+
+[[check]]
+id = "DEV-SIM-CAMPAIGN"
+summary = "./dev sim run --scenario/--profile swarm, campaign and shrink (§10.9, §12.2 W42.1): a v2 report is parsed strictly; --scenario FILE reaches keyval-sim alone and a seed run as --seed N --profile swarm; exit statuses map as for the slice, never to a pass (P10); seed ranges A..B parse inclusive and bounded; a campaign runs every seed once in parallel within --jobs, lists them in seed order with re-run commands, is ok only if all pass, and records a seed with no report as an error line; unusable requests are refused before anything runs; shrink is refused as not implemented until W44"
+kind = "test_group"
+covers = ["T-4", "O-6", "P10"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check DEV-SIM-CAMPAIGN"
+min_cases = 9
+status = "implemented"
+
+[[check]]
 id = "CLIENT-RETRY"
 summary = "The client retry policy shared by the CLI and the simulated clients (§10.3, §12.2 W36.1): one logical operation keeps its request ID and command across every attempt, follows not_leader at once, backs off with bounded jitter, resends after unknown_outcome or silence or asks the status lookup (a status of unknown means resend, P8), and stops at the attempt, node and deadline bounds of §7.11 with an unresolved outcome, never a new ID"
 kind = "test_group"

@@ -1,0 +1,41 @@
+{
+  "rule": "a run that is not ok cannot pass",
+  "error_at": "/ok",
+  "instance": {
+    "schema": "keyval.dev.sim-run/v2",
+    "ok": false,
+    "label": "simulated scenario run",
+    "manifest": {
+      "scenario_schema": "keyval.scenario/v1",
+      "profile": "swarm",
+      "prng": "splitmix64",
+      "config_fingerprint": "48205fd1b435b33601373568bee9688dd2d780f57d77f83b2a4c2e4c2f9f99dd",
+      "scenario": {
+        "seed": 3
+      }
+    },
+    "verdict": "pass",
+    "failures": [],
+    "incomplete": [],
+    "heal": {
+      "outcome": "converged",
+      "ticks": 222
+    },
+    "checkers": {
+      "ran": [
+        "K-1"
+      ],
+      "not_run": [
+        "K-2"
+      ]
+    },
+    "trace": {
+      "hash": "34ec631c053276db",
+      "lines": 629,
+      "events": 268,
+      "complete": true,
+      "path": null
+    },
+    "virtual_time_us": 1306550
+  }
+}

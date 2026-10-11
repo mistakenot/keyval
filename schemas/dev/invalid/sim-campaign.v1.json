@@ -1,0 +1,35 @@
+{
+  "rule": "a campaign with a failed seed is not ok",
+  "error_at": "/counts/fail",
+  "instance": {
+    "schema": "keyval.dev.sim-campaign/v1",
+    "ok": true,
+    "label": "simulated campaign",
+    "profile": "swarm",
+    "from": 1,
+    "to": 2,
+    "jobs": 2,
+    "counts": {
+      "pass": 1,
+      "fail": 1,
+      "incomplete": 0,
+      "error": 0
+    },
+    "seeds": [
+      {
+        "seed": 1,
+        "verdict": "pass",
+        "trace_hash": "34ec631c053276db",
+        "trace_path": null,
+        "reason": null
+      },
+      {
+        "seed": 2,
+        "verdict": "fail",
+        "trace_hash": "34ec631c053276dc",
+        "trace_path": null,
+        "reason": "the heal used its whole budget"
+      }
+    ]
+  }
+}

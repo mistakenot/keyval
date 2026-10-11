@@ -53,6 +53,8 @@ const IDS: &[&str] = &[
     crate::traceability::SCHEMA,
     crate::coverage::SCHEMA,
     crate::sim::SCHEMA,
+    crate::sim_campaign::RUN_SCHEMA,
+    crate::sim_campaign::CAMPAIGN_SCHEMA,
     crate::demo::SCHEMA,
     crate::cluster::SCHEMA,
     crate::lifecycle::SCHEMA,
@@ -191,6 +193,7 @@ mod tests {
     use crate::output::{self, ErrorKind};
     use crate::prune::{self, Action, Layout, Reason};
     use crate::sim::{self, Verdict as SimVerdict};
+    use crate::sim_campaign::{self, CampaignRequest};
     use crate::staging::Field as DemotionField;
     use crate::steplog::{self, Outcome as StepOutcome, StepLog};
     use crate::test_support::{nested_cargo, scratch_dir};
@@ -951,6 +954,80 @@ mod tests {
         incomplete.trace.complete = false;
         incomplete.facts.restarted = None;
         validators.assert_matches(&incomplete, "an incomplete run");
+    }
+
+    #[test]
+    fn scenario_run_verdicts_match_their_schema() {
+        let verdicts = variants!(SimVerdict: Pass, Fail, Incomplete);
+        assert_enum(
+            sim_campaign::RUN_SCHEMA,
+            "/properties/verdict/enum",
+            &verdicts,
+            false,
+        );
+    }
+
+    #[test]
+    fn sim_scenario_run_reports_match_their_schema() {
+        let validators = Validators::load();
+        let text = sim_campaign::tests::report_text(7, "incomplete");
+        let incomplete = sim_campaign::parse(&text).unwrap();
+        validators.assert_matches(&incomplete, "an unjudged scenario run (incomplete)");
+        let mut failed = incomplete.clone();
+        failed.ok = false;
+        failed.verdict = SimVerdict::Fail;
+        failed.incomplete = Vec::new();
+        failed.failures = vec!["the heal used its whole budget".to_owned()];
+        validators.assert_matches(&failed, "a failed scenario run");
+        let mut judged = incomplete;
+        judged.ok = true;
+        judged.verdict = SimVerdict::Pass;
+        judged.incomplete = Vec::new();
+        judged.checkers.ran = vec!["K-1".to_owned()];
+        judged.checkers.not_run = Vec::new();
+        validators.assert_matches(&judged, "a judged, passing scenario run");
+        let mut unjudged_pass = judged;
+        unjudged_pass.checkers.ran = Vec::new();
+        let instance = serde_json::to_value(&unjudged_pass).unwrap();
+        assert!(
+            !validators.violations(&instance).is_empty(),
+            "rule: a pass that no checker judged is rejected by the schema (P10); {instance}"
+        );
+    }
+
+    #[test]
+    fn sim_campaign_reports_match_their_schema() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let validators = Validators::load();
+        let request = CampaignRequest {
+            from: 1,
+            to: 3,
+            profile: sim_campaign::SWARM.to_owned(),
+            config: PathBuf::from("/r/c.toml"),
+            jobs: 2,
+        };
+        for (case, failing) in [("all pass", None), ("one incomplete, one error", Some(2))] {
+            let report = sim_campaign::campaign_with(
+                &request,
+                &scratch_dir("schemas-sim-campaign"),
+                &|args: &[&str]| {
+                    let at = args.iter().position(|arg| *arg == "--seed").unwrap();
+                    let seed: u64 = args[at + 1].parse().unwrap();
+                    let (verdict, code) = match (failing, seed) {
+                        (Some(bad), seed) if seed == bad => ("incomplete", 1),
+                        (Some(_), 3) => return Err("cargo: not found".to_owned()),
+                        _ => ("pass", 0),
+                    };
+                    Ok(crate::process::Captured {
+                        status: std::process::ExitStatus::from_raw(code << 8),
+                        stdout: sim_campaign::tests::report_text(seed, verdict),
+                        stderr: String::new(),
+                    })
+                },
+            )
+            .unwrap();
+            validators.assert_matches(&report, &format!("a campaign: {case}"));
+        }
     }
 
     #[test]

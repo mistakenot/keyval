@@ -40,6 +40,7 @@ mod registry_gate;
 #[cfg(test)]
 mod schemas;
 mod sim;
+mod sim_campaign;
 mod spec;
 mod spike;
 mod staging;
@@ -277,21 +278,49 @@ enum DemoAction {
 /// `./dev sim` actions.
 #[derive(Clone, Debug, Subcommand)]
 enum SimAction {
-    /// Run one seed of a profile through the `keyval-sim` binary (§12.2 W17); a failed or
-    /// incomplete run exits 1 (P10).
+    /// Run one seed of a profile, or one scenario file, through the `keyval-sim` binary
+    /// (§12.2 W17, W42.1); a failed or incomplete run exits 1 (P10).
     Run {
         /// The master seed.
         #[arg(long, value_name = "N", required_unless_present = "scenario")]
         seed: Option<u64>,
-        /// The run profile; only `slice` exists before W42.
-        #[arg(long, value_name = "P", default_value = "slice")]
+        /// The run profile: `slice` or `swarm` (a generated scenario).
+        #[arg(
+            long,
+            value_name = "P",
+            default_value = "slice",
+            conflicts_with = "scenario"
+        )]
         profile: String,
-        /// A scenario file to replay: refused until W37 brings scenario files.
+        /// A scenario file to replay exactly (it carries its own seed).
         #[arg(long, value_name = "FILE", conflicts_with = "seed")]
         scenario: Option<PathBuf>,
         /// The configuration, relative to the workspace root (default: config/local.toml).
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
+    },
+    /// Run a seed range of the swarm profile in parallel processes and report every seed;
+    /// exits 1 unless every seed passed (P10).
+    Campaign {
+        /// The seeds, `A..B` inclusive (at most 10000).
+        #[arg(long, value_name = "A..B")]
+        seeds: String,
+        /// The most parallel `keyval-sim` processes (1..=64).
+        #[arg(long, value_name = "J", default_value_t = 4)]
+        jobs: usize,
+        /// The run profile; campaigns run `swarm`.
+        #[arg(long, value_name = "P", default_value = "swarm")]
+        profile: String,
+        /// The configuration, relative to the workspace root (default: config/local.toml).
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+    },
+    /// Shrink a crash pack to a minimal failing run: the engine is W44's, so this exits as
+    /// not implemented until then.
+    Shrink {
+        /// The crash pack directory, `artifacts/crashpacks/<seed>-<hash>`.
+        #[arg(value_name = "CRASH_PACK")]
+        pack: PathBuf,
     },
 }
 
@@ -476,8 +505,18 @@ fn run_beads(root: &Path, format: Format, action: BeadsAction) -> Status {
     }
 }
 
-/// `./dev sim run`: one simulated run in a fresh `keyval-sim` process (§12.2 W17).
+/// `./dev sim run|campaign|shrink`: simulated runs in fresh `keyval-sim` processes (§12.2
+/// W17, W42.1).
 fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
+    let artifacts = root.join("artifacts");
+    let cargo = cargo::Cargo::local();
+    let refuse = |refusal: sim::Refusal| {
+        output::report_error(format, refusal.kind, &refusal.message, &refusal.message)
+    };
+    let launch = |args: &[&str]| {
+        let mut cmd = cargo.command(root, args);
+        process::run(&mut cmd, sim::LIMIT).map_err(|err| format!("{}: {err}", cargo.describe(args)))
+    };
     match action {
         SimAction::Run {
             seed,
@@ -485,20 +524,59 @@ fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
             scenario,
             config,
         } => {
-            let request = sim::Request {
-                seed,
-                profile,
-                scenario,
-                config: sim::config_path(root, config),
-            };
-            let artifacts = root.join("artifacts");
-            match sim::run(root, &cargo::Cargo::local(), &request, &artifacts) {
-                Ok(report) => output::emit(format, &report),
-                Err(refusal) => {
-                    output::report_error(format, refusal.kind, &refusal.message, &refusal.message)
+            let config = sim::config_path(root, config);
+            let source = match (scenario, seed) {
+                (Some(file), _) => Some(sim_campaign::Source::File(root.join(file))),
+                (None, Some(seed)) if profile == sim_campaign::SWARM => {
+                    Some(sim_campaign::Source::Seed(seed))
                 }
+                (None, _) => None,
+            };
+            if let Some(source) = source {
+                return match sim_campaign::run_with(&source, &config, &artifacts, launch) {
+                    Ok(report) => output::emit(format, &report),
+                    Err(refusal) => refuse(refusal),
+                };
+            }
+            let Some(seed) = seed else {
+                return refuse(sim::Refusal::new(
+                    ErrorKind::Usage,
+                    "give --seed N or --scenario FILE".to_owned(),
+                ));
+            };
+            let request = sim::Request {
+                seed: Some(seed),
+                profile,
+                scenario: None,
+                config,
+            };
+            match sim::run_with(&request, &artifacts, launch) {
+                Ok(report) => output::emit(format, &report),
+                Err(refusal) => refuse(refusal),
             }
         }
+        SimAction::Campaign {
+            seeds,
+            jobs,
+            profile,
+            config,
+        } => match sim_campaign::parse_range(&seeds) {
+            Err(why) => refuse(sim::Refusal::new(ErrorKind::Usage, why)),
+            Ok((from, to)) => {
+                let request = sim_campaign::CampaignRequest {
+                    from,
+                    to,
+                    profile,
+                    config: sim::config_path(root, config),
+                    jobs,
+                };
+                match sim_campaign::campaign_with(&request, &artifacts, &launch) {
+                    Ok(report) => output::emit(format, &report),
+                    Err(refusal) => refuse(refusal),
+                }
+            }
+        },
+        SimAction::Shrink { pack } => refuse(sim_campaign::shrink(&pack)),
     }
 }
 

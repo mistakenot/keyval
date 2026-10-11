@@ -254,8 +254,10 @@ mod sim_run {
                     "slice",
                     "--scenario",
                     "f",
+                    "--config",
+                    config,
                 ],
-                "unknown flag \"--scenario\"",
+                "--scenario carries its own seed",
             ),
             (&["campaign"], "unknown command \"campaign\""),
         ];

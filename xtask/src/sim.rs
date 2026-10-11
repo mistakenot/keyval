@@ -15,8 +15,9 @@
 //! [`run_with`] takes the launcher, so the tests drive every exit status, stderr and stdout
 //! through the same mapping (check DEV-SIM); [`run`] launches through cargo.
 //!
-//! `--scenario FILE` is part of the plan's surface, and scenario files arrive with W37: it
-//! is refused as not implemented, never ignored.
+//! This module runs the `slice` profile (report v1). `--profile swarm`, `--scenario FILE`
+//! (both report v2), campaigns and `shrink` are in [`crate::sim_campaign`], which `./dev sim`
+//! dispatches to first; a scenario file that reaches [`run_with`] is still refused.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -36,7 +37,7 @@ pub const SCHEMA: &str = "keyval.dev.sim-run/v1";
 pub const TRACE_DIR: &str = "sim";
 
 /// The building and the run together, killed after this long.
-const LIMIT: Duration = Duration::from_mins(20);
+pub const LIMIT: Duration = Duration::from_mins(20);
 
 /// The most bytes of the binary's stderr an error keeps (CD-9).
 const STDERR_TAIL: usize = 2048;
@@ -262,7 +263,7 @@ pub struct Refusal {
 }
 
 impl Refusal {
-    const fn new(kind: ErrorKind, message: String) -> Self {
+    pub const fn new(kind: ErrorKind, message: String) -> Self {
         Self { kind, message }
     }
 }
@@ -387,6 +388,21 @@ fn arguments(
     config: &Path,
     trace: &Path,
 ) -> Result<Vec<String>, Refusal> {
+    arguments_for(
+        &[
+            "--seed".to_owned(),
+            seed.to_string(),
+            "--profile".to_owned(),
+            profile.to_owned(),
+        ],
+        config,
+        trace,
+    )
+}
+
+/// The `cargo` arguments that build `keyval-sim` and run what `from` names (`--seed N
+/// --profile P`, or `--scenario FILE`) under `config`, writing its trace to `trace`.
+pub fn arguments_for(from: &[String], config: &Path, trace: &Path) -> Result<Vec<String>, Refusal> {
     let utf8 = |path: &Path| {
         path.to_str().map(str::to_owned).ok_or_else(|| {
             Refusal::new(
@@ -405,14 +421,11 @@ fn arguments(
         "keyval-sim",
         "--",
         "run",
-        "--seed",
     ]
     .into_iter()
     .map(str::to_owned)
+    .chain(from.iter().cloned())
     .chain([
-        seed.to_string(),
-        "--profile".to_owned(),
-        profile.to_owned(),
         "--config".to_owned(),
         utf8(config)?,
         "--trace".to_owned(),
@@ -446,7 +459,7 @@ pub fn parse(stdout: &str) -> Result<SimRunReport, String> {
 
 /// `keyval-sim`'s own message on `stderr`: from its last line that starts `keyval-sim:`
 /// to the end, without the compiler output cargo replays before it; else the tail.
-fn own_message(stderr: &str) -> String {
+pub fn own_message(stderr: &str) -> String {
     let start = stderr
         .rmatch_indices("keyval-sim: ")
         .map(|(at, _)| at)
@@ -458,7 +471,7 @@ fn own_message(stderr: &str) -> String {
 }
 
 /// The last [`STDERR_TAIL`] bytes of `stderr`, at a character boundary.
-fn tail(stderr: &str) -> String {
+pub fn tail(stderr: &str) -> String {
     let trimmed = stderr.trim_end();
     let mut start = trimmed.len().saturating_sub(STDERR_TAIL);
     while !trimmed.is_char_boundary(start) {
