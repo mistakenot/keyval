@@ -274,7 +274,7 @@ deps = ["W21"]
 reqs = ["O-2", "O-3"]
 area = ["xtask"]
 milestone = "m2"
-accept = []
+accept = ["./dev check CLUSTER-LIFECYCLE"]
 bead = "br-w22-cluster-launcher-qnj"
 
 [[item]]
@@ -371,7 +371,7 @@ deps = ["W03", "W30", "W38"]
 reqs = ["T-12", "§10.8"]
 area = ["conformance"]
 milestone = "m3"
-accept = []
+accept = ["./dev check CONF-HARNESS", "./dev check CONF-SEMANTIC", "./dev check CONF-FIXTURES"]
 bead = "br-w31-conformance-suite-lf0"
 
 [[item]]
@@ -461,7 +461,7 @@ deps = ["W10", "W36", "W37"]
 reqs = ["C-3", "C-4", "C-8", "A-1", "A-2", "A-3", "A-4"]
 area = ["checker"]
 milestone = "m4"
-accept = []
+accept = ["./dev check K-5", "./dev check K-6", "./dev check K-7", "./dev check K-9"]
 bead = "br-w39-read-convergence-liveness-checkers-cvy"
 
 [[item]]
