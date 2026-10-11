@@ -136,13 +136,13 @@ title = "An acknowledged write is never lost"
 [[requirement]]
 id = "C-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A read reflects exactly an applied committed prefix"
 
 [[requirement]]
 id = "C-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "One node's reads never go backwards within an incarnation"
 
 [[requirement]]
@@ -167,7 +167,7 @@ notes = "SHOULD: keeps its level and needs a recorded disposition before release
 [[requirement]]
 id = "C-8"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Each SCAN page comes from one applied prefix"
 
 # §6.5 Availability & fault tolerance
@@ -175,27 +175,27 @@ title = "Each SCAN page comes from one applied prefix"
 [[requirement]]
 id = "A-1"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Valid writes within capacity eventually succeed in the healthy envelope"
 notes = "Owner disposition: availability relative to the healthy envelope (§9.4), accepted as stated 2026-10-01 (§15 Q4)."
 
 [[requirement]]
 id = "A-2"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Reads succeed on any ready node"
 notes = "Owner disposition: availability relative to the healthy envelope (§9.4), accepted as stated 2026-10-01 (§15 Q4)."
 
 [[requirement]]
 id = "A-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A majority elects a new leader without operator action"
 
 [[requirement]]
 id = "A-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Recoverable nodes converge after faults heal, within the heal budget"
 notes = "Owner disposition: availability relative to the healthy envelope (§9.4), accepted as stated 2026-10-01 (§15 Q4)."
 
