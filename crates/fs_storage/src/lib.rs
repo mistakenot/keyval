@@ -60,6 +60,9 @@ use std::sync::{Arc, Mutex};
 
 use types::{ByteCount, ByteStorage, DataDir, JournalRead, ReadLen, StorageError};
 
+#[cfg(feature = "failpoints")]
+pub mod failpoints;
+
 /// The journal's file name in the data directory (§7.6).
 pub const JOURNAL: &str = "journal.log";
 
@@ -191,31 +194,58 @@ struct RealOs;
 
 impl Os for RealOs {
     fn create_dir(&self, dir: &Path) -> io::Result<()> {
-        fs::create_dir(dir)
+        fs::create_dir(dir)?;
+        #[cfg(feature = "failpoints")]
+        failpoints::hit(failpoints::Point::AfterMkdir);
+        Ok(())
     }
 
     fn create_journal(&self, path: &Path) -> io::Result<File> {
-        OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .append(true)
             .create_new(true)
-            .open(path)
+            .open(path)?;
+        #[cfg(feature = "failpoints")]
+        failpoints::hit(failpoints::Point::AfterJournalCreate);
+        Ok(file)
     }
 
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         File::open(dir)?.sync_all()
     }
 
+    #[cfg(not(feature = "failpoints"))]
     fn append(&self, mut journal: &File, bytes: &[u8]) -> io::Result<()> {
         journal.write_all(bytes)
     }
 
+    #[cfg(feature = "failpoints")]
+    fn append(&self, mut journal: &File, bytes: &[u8]) -> io::Result<()> {
+        use failpoints::{Point, hit};
+        hit(Point::BeforeAppend);
+        let (head, tail) = bytes.split_at(bytes.len() / 2);
+        journal.write_all(head)?;
+        hit(Point::MidAppend);
+        journal.write_all(tail)?;
+        hit(Point::AfterAppend);
+        Ok(())
+    }
+
     fn truncate(&self, journal: &File, len: u64) -> io::Result<()> {
-        journal.set_len(len)
+        #[cfg(feature = "failpoints")]
+        failpoints::hit(failpoints::Point::BeforeTruncate);
+        journal.set_len(len)?;
+        #[cfg(feature = "failpoints")]
+        failpoints::hit(failpoints::Point::AfterTruncate);
+        Ok(())
     }
 
     fn sync_data(&self, journal: &File) -> io::Result<()> {
-        journal.sync_data()
+        journal.sync_data()?;
+        #[cfg(feature = "failpoints")]
+        failpoints::hit(failpoints::Point::AfterSync);
+        Ok(())
     }
 }
 

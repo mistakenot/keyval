@@ -1068,6 +1068,54 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 17,
     },
     CheckDef {
+        id: "CRASH-PROBES",
+        summary: "real-file process-crash probes (§10.17, T-14, W24.1): a child process runs \
+                  the real journal engine and file adapter on a real data directory and a \
+                  test-only failpoint stops it at one boundary (before a write, mid-append, \
+                  after a write before sync, after sync before the completion is observed, \
+                  after mkdir, after journal creation, before and after tail truncation); the \
+                  parent SIGKILLs it through its recorded handle, then every acknowledged \
+                  frame is present, a torn tail is discarded, the durable prefix is \
+                  byte-identical to a correct run, a restart never erases a synced frame, a \
+                  half-initialised directory is told apart and refused or resumed, and a second \
+                  process cannot take the lock while the first holds it and can once it is \
+                  killed. Process-crash evidence only: SIGKILL keeps the page cache, so a \
+                  missing fsync is not seen here (W24.2, §10.15 assumption)",
+        kind: Kind::TestGroup,
+        covers: &["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &[
+                "a_kill_",
+                "while_the_first_is_stopped_holding_it",
+                "every_failpoint_has_a_probe",
+            ],
+        },
+        min_cases: 12,
+    },
+    CheckDef {
+        id: "FAILPOINTS-ABSENT",
+        summary: "the test-only `failpoints` feature is absent from production builds (T-2, \
+                  T-6, §10.17, W24.1): no manifest but fs_storage's names it and it is not a \
+                  default feature, a release build of fs_storage with default features \
+                  contains no failpoint code, and the same build with the feature does, so the \
+                  absence is not vacuous",
+        kind: Kind::TestGroup,
+        covers: &["T-2", "T-6"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "fs_storage",
+            filters: &[
+                "only_this_crate_names_the_feature",
+                "a_release_build_has_no_failpoint_code",
+            ],
+        },
+        min_cases: 2,
+    },
+    CheckDef {
         id: "RAFT-READY-LOOP",
         summary: "the Ready loop persists, then releases: no vote grant, append acknowledgement \
                   or other message leaves before its sender has synced the term, vote and \

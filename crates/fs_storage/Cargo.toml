@@ -9,5 +9,16 @@ publish.workspace = true
 [dependencies]
 types = { workspace = true }
 
+[features]
+# Test-only (PLAN.md §10.17, T-2, T-6): stops the process at chosen durability calls so a
+# probe can SIGKILL it there. Off by default; no production crate enables it, and
+# tests/failpoints_absent.rs proves a release build has neither the feature nor the code.
+failpoints = []
+
+[dev-dependencies]
+# The crash probes need the feature on in their own build: a crate may depend on itself.
+fs_storage = { workspace = true, features = ["failpoints"] }
+journal = { workspace = true }
+
 [lints]
 workspace = true

@@ -694,6 +694,30 @@ min_cases = 17
 status = "implemented"
 
 [[check]]
+id = "CRASH-PROBES"
+summary = "real-file process-crash probes (§10.17, T-14, W24.1): a child process runs the real journal engine and file adapter on a real data directory and a test-only failpoint stops it at one boundary (before a write, mid-append, after a write before sync, after sync before the completion is observed, after mkdir, after journal creation, before and after tail truncation); the parent SIGKILLs it through its recorded handle, then every acknowledged frame is present, a torn tail is discarded, the durable prefix is byte-identical to a correct run, a restart never erases a synced frame, a half-initialised directory is told apart and refused or resumed, and a second process cannot take the lock while the first holds it and can once it is killed. Process-crash evidence only: SIGKILL keeps the page cache, so a missing fsync is not seen here (W24.2, §10.15 assumption)"
+kind = "test_group"
+covers = ["DUR-1", "DUR-3", "DUR-7", "DUR-9", "T-14"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check CRASH-PROBES"
+min_cases = 12
+status = "implemented"
+
+[[check]]
+id = "FAILPOINTS-ABSENT"
+summary = "the test-only `failpoints` feature is absent from production builds (T-2, T-6, §10.17, W24.1): no manifest but fs_storage's names it and it is not a default feature, a release build of fs_storage with default features contains no failpoint code, and the same build with the feature does, so the absence is not vacuous"
+kind = "test_group"
+covers = ["T-2", "T-6"]
+api = []
+class = "invariant"
+tier = "T0"
+run = "./dev check FAILPOINTS-ABSENT"
+min_cases = 2
+status = "implemented"
+
+[[check]]
 id = "RAFT-READY-LOOP"
 summary = "the Ready loop persists, then releases: no vote grant, append acknowledgement or other message leaves before its sender has synced the term, vote and entries it depends on, and no entry applies before its frame is synced at the applying node with the term its synced log holds (scripted, seeded and lone-voter runs judged against each node's synced journal), a frame never persists a commit index alone, inputs wait while a sync is outstanding, an old-incarnation SyncDone is ignored, committed entries apply once each in index order and drain past the per-Ready bound before the next input, applied progress is reported, and a hard stop stops the loop (§7.4, DUR-2, K-11, D-28)"
 kind = "test_group"

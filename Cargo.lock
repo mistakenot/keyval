@@ -300,6 +300,8 @@ dependencies = [
 name = "fs_storage"
 version = "0.1.0"
 dependencies = [
+ "fs_storage",
+ "journal",
  "types",
 ]
 
