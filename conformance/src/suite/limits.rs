@@ -6,10 +6,11 @@
 
 #![cfg(test)]
 
-use model::Limits;
+use model::{HistoryLimits, Limits};
 
 use super::support::{
     assert_keys, each_target, error, fresh_id, fresh_prefix, index_of, ok, with_model,
+    with_model_history,
 };
 use crate::poll::Index;
 use crate::tag::{Class, Tag};
@@ -342,6 +343,73 @@ fn live_byte_quota_names_its_limit() {
         assert_eq!(
             details["limit"], "max_live_bytes",
             "rule: the byte quota is named; {details}"
+        );
+    });
+}
+
+const HISTORY: Tag = Tag {
+    test: "history_capacity_refuses_new_writes_before_proposal",
+    class: Class::Semantic,
+    operations: &["putKey", "deleteKey", "getRequestStatus", "getKey"],
+    error_codes: &["history_full"],
+};
+
+// api-test: putKey
+// api-test: deleteKey
+// api-test: getRequestStatus
+// api-test: getKey
+// api-test: history_full
+#[test]
+fn history_capacity_refuses_new_writes_before_proposal() {
+    let history = HistoryLimits::new(2).unwrap();
+    with_model_history(&HISTORY, history, |node| {
+        let first_id = fresh_id();
+        ok(&node.put("cap/a", "1", &first_id), "first write fits");
+        ok(&node.put("cap/b", "2", &fresh_id()), "second write fits");
+        let refused_id = fresh_id();
+        let details = error(
+            &node.put("cap/c", "3", &refused_id),
+            507,
+            "history_full",
+            "a third write at max_log_entries = 2",
+        );
+        assert_keys(
+            &details,
+            &["attempt_state", "limit", "request_id"],
+            "a history_full refusal carries its limit, request_id and attempt_state",
+        );
+        assert_eq!(
+            details["limit"], "max_log_entries",
+            "rule: the limit is named; {details}"
+        );
+        assert_eq!(
+            details["attempt_state"], "not_submitted",
+            "rule: history_full is refused before proposal (DM-7); {details}"
+        );
+        error(
+            &node.delete("cap/a", &fresh_id()),
+            507,
+            "history_full",
+            "a DELETE at capacity is refused too",
+        );
+        let status = node.status(&refused_id);
+        assert_eq!(
+            super::support::body(&status)["state"],
+            "unknown",
+            "rule: a refusal before proposal leaves no history (F-9)"
+        );
+        let got = ok(&node.read("cap/a"), "reads still work at capacity");
+        assert_eq!(
+            got["value"], "1",
+            "rule: reads are unaffected (DM-7); {got}"
+        );
+        let replay = ok(
+            &node.put("cap/a", "1", &first_id),
+            "a retry of an executed request keeps working",
+        );
+        assert_eq!(
+            replay["replayed"], true,
+            "rule: replays are served (DM-7); {replay}"
         );
     });
 }

@@ -401,9 +401,9 @@ fn assert_tag(tag: &Tag) {
     );
 }
 
-/// A fresh in-process reference model server under `limits`.
-fn spawn_model(limits: Limits) -> Node {
-    let config = Config::new(1, "keyval-model", limits, HistoryLimits::DEFAULT)
+/// A fresh in-process reference model server under `limits` and `history`.
+fn spawn_model(limits: Limits, history: HistoryLimits) -> Node {
+    let config = Config::new(1, "keyval-model", limits, history)
         .unwrap_or_else(|error| panic!("rule: the model config is valid; {error}"));
     let server = Server::bind("127.0.0.1:0", config)
         .unwrap_or_else(|error| panic!("rule: the model server binds; {error}"));
@@ -450,7 +450,7 @@ fn run_on(tag: &Tag, node: &Node, check: &impl Fn(&Node)) {
 /// how many targets ran; the model always does, so the count is at least 1.
 pub fn each_target(tag: &Tag, check: impl Fn(&Node)) -> usize {
     assert_tag(tag);
-    let model = spawn_model(Limits::DEFAULT);
+    let model = spawn_model(Limits::DEFAULT, HistoryLimits::DEFAULT);
     run_on(tag, &model, &check);
     let targets = Targets::from_lookup(|name| std::env::var(name).ok())
         .unwrap_or_else(|error| panic!("rule: the target environment is valid; {error}"));
@@ -488,5 +488,12 @@ impl Node {
 /// configuration, which a real node does not let a test change.
 pub fn with_model(tag: &Tag, limits: Limits, check: impl Fn(&Node)) {
     assert_tag(tag);
-    run_on(tag, &spawn_model(limits), &check);
+    run_on(tag, &spawn_model(limits, HistoryLimits::DEFAULT), &check);
+}
+
+/// [`with_model`] with a history capacity (DM-7): the real nodes' default of a million log
+/// entries is out of reach for a conformance run, so capacity is judged on the model.
+pub fn with_model_history(tag: &Tag, history: HistoryLimits, check: impl Fn(&Node)) {
+    assert_tag(tag);
+    run_on(tag, &spawn_model(Limits::DEFAULT, history), &check);
 }

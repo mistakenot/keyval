@@ -573,3 +573,110 @@ fn watch_recovery(cluster: &Cluster, id: u64) {
     // Whether recovery is observable depends on how fast the node recovers; say which it was.
     eprintln!("node {id}: {not_ready} not-ready sample(s) seen before it was ready");
 }
+
+const UNRESOLVED: Tag = Tag {
+    test: "attempts_that_cannot_commit_are_busy_past_the_waiter_bound_and_unknown_outcome",
+    class: Class::Topology,
+    operations: &["putKey"],
+    error_codes: &["busy", "unknown_outcome"],
+};
+
+/// Concurrent attempts sharing one request ID: more than the one proposer plus the 16
+/// waiters a node admits per ID (§7.11).
+const SAME_ID_ATTEMPTS: usize = 24;
+
+// api-test: putKey
+// api-test: busy
+// api-test: unknown_outcome
+#[test]
+pub(super) fn attempts_that_cannot_commit_are_busy_past_the_waiter_bound_and_unknown_outcome() {
+    let Some(cluster) = Cluster::from_env(&UNRESOLVED) else {
+        return;
+    };
+    let _alone = cluster_exclusive();
+    let all: Vec<u64> = cluster.nodes.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        all.len(),
+        5,
+        "rule: losing three followers removes the quorum only in a five-node cluster; nodes={all:?}"
+    );
+    let leader = cluster.stable_leader(&all);
+    let followers: Vec<u64> = all.iter().copied().filter(|id| *id != leader).collect();
+    let mut restore = Restore {
+        cluster: &cluster,
+        killed: Vec::new(),
+    };
+    // Three of five nodes down: the leader keeps its role until check-quorum, but nothing
+    // it proposes can commit, so same-ID attempts pile up on one pending proposal.
+    for id in followers.iter().take(3) {
+        restore.kill(*id);
+    }
+    let request_id = fresh_id();
+    let target = format!("/v1/kv?key={}k", enc(&fresh_prefix()));
+    let payload = put_body("v");
+    let node = cluster.node(leader);
+    let answers: Vec<Response> = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(SAME_ID_ATTEMPTS);
+        for _ in 0..SAME_ID_ATTEMPTS {
+            handles.push(scope.spawn(|| {
+                node.write_unfollowed("PUT", &target, Some(&request_id), Some(&payload))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| panic!("rule: an attempt thread finishes"))
+            })
+            .collect()
+    });
+    let count = |status: u16| answers.iter().filter(|r| r.status == status).count();
+    let (busy, unknown) = (count(429), count(504));
+    // Check-quorum may step the leader down while the attempts land (about 1-2 s after the
+    // third kill): a late attempt then legally gets 503 unavailable or a 307 redirect
+    // (PLAN.md §7.7), so only the two codes under test are required, loosely on purpose.
+    let late = count(503) + count(307);
+    assert!(
+        busy >= 1 && unknown >= 1 && busy + unknown + late == SAME_ID_ATTEMPTS,
+        "rule: with no quorum, {SAME_ID_ATTEMPTS} same-ID attempts end as busy (past the \
+         waiter bound) or unknown_outcome (submitted, never committed), or, after a \
+         step-down, unavailable or not_leader; busy={busy} unknown_outcome={unknown} \
+         late={late}; answers={:?}",
+        answers.iter().map(say).collect::<Vec<_>>()
+    );
+    for response in answers.iter().filter(|r| [429, 504].contains(&r.status)) {
+        let (status, code, state, what) = if response.status == 429 {
+            (
+                429,
+                "busy",
+                "not_submitted",
+                "attempt past the waiter bound",
+            )
+        } else {
+            (504, "unknown_outcome", "submitted", "uncommitted attempt")
+        };
+        let details = error(response, status, code, what);
+        assert_eq!(
+            details["attempt_state"], state,
+            "rule: {code} reports attempt_state {state} (A-5); {details}"
+        );
+        assert_eq!(
+            details["request_id"], request_id,
+            "rule: {code} echoes the ID; {details}"
+        );
+    }
+    restore.restore();
+    // The ID resolves once the cluster is whole again: the same command, same ID, never two
+    // executions.
+    let resolved = ok(
+        &cluster
+            .node(leader)
+            .write("PUT", &target, Some(&request_id), Some(&payload)),
+        "the same ID retried after recovery resolves",
+    );
+    assert!(
+        resolved["index"].is_u64(),
+        "rule: a retried ID reaches a terminal result; {resolved}"
+    );
+}
