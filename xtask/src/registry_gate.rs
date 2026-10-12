@@ -1354,6 +1354,33 @@ impl ErrorCode {
     }
 
     #[test]
+    fn a_closed_w32_subtask_does_not_switch_conditions_5_and_6() {
+        // W32.3-style subtasks carry `sub:W32`, never `plan:W32`; only the parent's own
+        // closure is the switch (§10.13, D-49).
+        let mut texts = with_w32("open");
+        texts.export = [
+            texts.export.clone(),
+            labelled_bead("b32a", &["sub:W32"], "closed", &["b3"]),
+            labelled_bead("b32b", &["sub:W32"], "closed", &["b32a"]),
+        ]
+        .concat();
+        let verdict = texts.judge();
+        assert!(
+            verdict.violations.is_empty()
+                && verdict
+                    .reported
+                    .iter()
+                    .any(|r| r.starts_with("condition 5 (reported"))
+                && verdict
+                    .reported
+                    .iter()
+                    .any(|r| r.starts_with("condition 6 (reported")),
+            "rule: closed W32 subtasks leave 5 and 6 in report mode while the parent is \
+             open (§10.13); verdict={verdict:#?}"
+        );
+    }
+
+    #[test]
     fn condition_7_fails_on_a_bug_variant_without_a_catcher() {
         for (catches, rule) in [
             ("", "a bug variant names a catcher"),
