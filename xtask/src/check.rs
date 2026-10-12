@@ -2136,7 +2136,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["clients_tests::"],
         },
-        min_cases: 7,
+        min_cases: 10,
     },
     CheckDef {
         id: "SIM-OBSERVE",
@@ -2358,7 +2358,7 @@ pub const CATALOGUE: &[CheckDef] = &[
             package: "sim",
             filters: &["swarm_tests::", "scenario_tests::"],
         },
-        min_cases: 35,
+        min_cases: 37,
     },
     CheckDef {
         id: "K-3",

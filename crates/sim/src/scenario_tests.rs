@@ -240,7 +240,7 @@ fn the_manifest_records_what_the_run_was() {
 #[test]
 fn a_scenario_file_reads_back_to_the_scenario() {
     for seed in 0..SEEDS {
-        for profile in [Profile::PutGet, Profile::Mixed] {
+        for profile in Profile::ALL {
             let scenario = generated(seed, profile);
             let text = scenario.to_text();
             assert!(
@@ -1390,4 +1390,49 @@ fn an_armed_crash_must_be_closed_by_a_restart_and_a_bad_arm_line_is_malformed() 
         &first_fault(&|f| f["extra"] = Value::from(1)),
         "an arm with an unknown key",
     );
+}
+
+#[test]
+fn a_fault_dedicated_profile_enables_exactly_its_faults() {
+    for profile in Profile::ALL {
+        let wanted = profile.dedicated_faults();
+        if wanted.is_empty() {
+            continue;
+        }
+        for seed in 0..SEEDS {
+            let scenario = generated(seed, profile);
+            let enabled = match scenario.swarm() {
+                Swarm::Faulty { faults, .. } => faults.kinds(),
+                Swarm::Control => Vec::new(),
+            };
+            assert_eq!(
+                enabled,
+                FaultSet::new(wanted)
+                    .map(FaultSet::kinds)
+                    .unwrap_or_default(),
+                "rule: a fault-dedicated profile enables exactly its fault types (W43.1, \
+                 §10.4); seed={seed} profile={profile:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn profiles_that_leave_the_swarm_to_the_seed_keep_the_seeds_swarm() {
+    for seed in 0..SEEDS {
+        let base = generated(seed, Profile::Mixed).swarm();
+        for profile in [
+            Profile::CasContention,
+            Profile::ReadIsolation,
+            Profile::BoundaryValues,
+            Profile::Misuse,
+        ] {
+            assert_eq!(
+                generated(seed, profile).swarm(),
+                base,
+                "rule: a workload-shaped profile draws the same swarm as the mixed one; \
+                 seed={seed} profile={profile:?}"
+            );
+        }
+    }
 }

@@ -857,7 +857,10 @@ impl Scenario {
     #[must_use]
     pub fn generate(seed: MasterSeed, limits: KeyValueLimits, workload: Workload) -> Self {
         let mut rng = seed.stream(Subsystem::Faults);
-        let swarm = Swarm::draw(&mut rng);
+        let swarm = match workload.dedicated_faults() {
+            [] => Swarm::draw(&mut rng),
+            kinds => Swarm::dedicated(&mut rng, kinds),
+        };
         Self::build(seed, swarm, &mut rng, limits, workload)
     }
 
@@ -1042,7 +1045,8 @@ impl Scenario {
             EventBudget::DEFAULT,
         )
         .map_err(ScenarioError::Cluster)?;
-        let clients = Clients::new(self.plan.clone(), config, seed.stream(Subsystem::Clients));
+        let clients = Clients::new(self.plan.clone(), config, seed.stream(Subsystem::Clients))
+            .with_misuse(self.workload.misuse_ppm());
         Ok((cluster, clients))
     }
 
@@ -1115,11 +1119,9 @@ impl Scenario {
         if value["schema"] != SCHEMA {
             return Err(malformed(format!("schema must be {SCHEMA:?}")));
         }
-        let workload = match str_of(&value, "workload", "scenario")? {
-            "put_get" => Workload::PutGet,
-            "mixed" => Workload::Mixed,
-            other => return Err(malformed(format!("unknown workload {other:?}"))),
-        };
+        let name = str_of(&value, "workload", "scenario")?;
+        let workload =
+            Workload::parse(name).ok_or_else(|| malformed(format!("unknown workload {name:?}")))?;
         let swarm = Swarm::from_json(&value["swarm"]).map_err(malformed)?;
         let faults = array_of(&value, "faults", "scenario")?
             .iter()
@@ -1139,10 +1141,7 @@ impl Scenario {
 
 /// The name of a workload in files and manifests.
 const fn workload_name(workload: Workload) -> &'static str {
-    match workload {
-        Workload::PutGet => "put_get",
-        Workload::Mixed => "mixed",
-    }
+    workload.name()
 }
 
 /// Sorts the steps by time and moves a step that would share an instant with a conflicting

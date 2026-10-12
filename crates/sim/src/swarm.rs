@@ -247,6 +247,17 @@ impl Swarm {
         })
     }
 
+    /// A swarm of exactly `kinds` (a fault-dedicated profile's), at an intensity drawn from
+    /// `rng`; the control if `kinds` is empty.
+    #[must_use]
+    pub fn dedicated(rng: &mut SplitMix64, kinds: &[FaultKind]) -> Self {
+        let at = usize::try_from(rng.next_u64() % Intensity::ALL.len() as u64).unwrap_or(0);
+        FaultSet::new(kinds).map_or(Self::Control, |faults| Self::Faulty {
+            faults,
+            intensity: Intensity::ALL[at],
+        })
+    }
+
     /// Whether `kind` is enabled.
     #[must_use]
     pub const fn enables(self, kind: FaultKind) -> bool {

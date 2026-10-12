@@ -514,3 +514,108 @@ fn a_seed_decides_the_whole_run() {
         "rule: the same seed gives the same sends, outcomes and trace (P4, T-3)"
     );
 }
+
+/// The operation counts of `profile` over the plan seeds, by kind.
+fn shares(profile: Profile, limits: KeyValueLimits) -> BTreeMap<&'static str, u64> {
+    let mut mix = BTreeMap::new();
+    for seed in 0..PLANS {
+        for client in plan(seed, limits, profile).clients {
+            for planned in client.ops {
+                let kind = match planned.intent {
+                    Intent::Put { .. } => "put",
+                    Intent::Delete { .. } => "delete",
+                    Intent::Cas { .. } => "cas",
+                    Intent::Get { .. } => "get",
+                    Intent::Scan { .. } => "scan",
+                };
+                *mix.entry(kind).or_insert(0) += 1;
+            }
+        }
+    }
+    mix
+}
+
+#[test]
+fn the_dedicated_profiles_shape_their_plans() {
+    let limits = config(LOCAL).key_value_limits();
+    let percent = |mix: &BTreeMap<&str, u64>, kinds: &[&str]| {
+        let total: u64 = mix.values().sum();
+        kinds.iter().filter_map(|kind| mix.get(kind)).sum::<u64>() * 100 / total.max(1)
+    };
+    let cas = shares(Profile::CasContention, limits);
+    let read = shares(Profile::ReadIsolation, limits);
+    let contended_keys: BTreeSet<Key> = (0..PLANS)
+        .flat_map(|seed| plan(seed, limits, Profile::CasContention).clients)
+        .flat_map(|client| client.ops)
+        .filter(|planned| planned.intent.request_id().is_some())
+        .filter_map(|planned| planned.intent.key().cloned())
+        .collect();
+    let per_seed_single_key = (0..PLANS).all(|seed| {
+        let keys: BTreeSet<Key> = plan(seed, limits, Profile::CasContention)
+            .clients
+            .into_iter()
+            .flat_map(|client| client.ops)
+            .filter(|planned| planned.intent.request_id().is_some())
+            .filter_map(|planned| planned.intent.key().cloned())
+            .collect();
+        keys.len() <= 1
+    });
+    assert!(
+        percent(&cas, &["cas"]).abs_diff(55) <= 3 && per_seed_single_key,
+        "rule: CAS contention plans 55% CAS and aims every write of a run at one key (§10.3); \
+         mix {cas:?}; distinct write keys across seeds {}",
+        contended_keys.len()
+    );
+    assert!(
+        percent(&read, &["get", "scan"]).abs_diff(70) <= 3,
+        "rule: read isolation plans 70% reads (GET and SCAN) beside a light write load; \
+         mix {read:?}"
+    );
+}
+
+#[test]
+fn boundary_values_draw_only_the_edge_case_values() {
+    let limits = config(LOCAL).key_value_limits();
+    let longest = limits.max_value_bytes();
+    let mut seen = 0_u64;
+    for seed in 0..PLANS {
+        for client in plan(seed, limits, Profile::BoundaryValues).clients {
+            for planned in client.ops {
+                if let Intent::Put { value, .. } | Intent::Cas { value, .. } = planned.intent {
+                    seen += 1;
+                    let text = value.as_str();
+                    assert!(
+                        text.is_empty() || text.len() == longest || text.contains('\u{1}'),
+                        "rule: the boundary profile writes only empty, maximum-size or \
+                         escape-heavy values (§10.3); seed={seed} value={text:?}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        seen > 0,
+        "rule: the boundary profile plans writes; seen={seen}"
+    );
+}
+
+#[test]
+fn profile_names_round_trip_and_only_misuse_runs_misuse() {
+    for profile in Profile::ALL {
+        assert_eq!(
+            Profile::parse(profile.name()),
+            Some(profile),
+            "rule: a profile's name reads back to it; profile={profile:?}"
+        );
+        assert_eq!(
+            profile.misuse_ppm() > 0,
+            profile == Profile::Misuse,
+            "rule: only the misuse profile turns the misuse stream on; profile={profile:?}"
+        );
+    }
+    assert_eq!(
+        Profile::parse("nonsense"),
+        None,
+        "rule: unknown names are refused"
+    );
+}

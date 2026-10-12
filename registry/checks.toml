@@ -1230,7 +1230,7 @@ api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check SIM-CLIENTS"
-min_cases = 7
+min_cases = 10
 status = "implemented"
 
 [[check]]
@@ -1423,7 +1423,7 @@ api = []
 class = "simulation_evidenced"
 tier = "T0"
 run = "./dev check SWARM-SCENARIO"
-min_cases = 35
+min_cases = 37
 status = "implemented"
 
 [[check]]

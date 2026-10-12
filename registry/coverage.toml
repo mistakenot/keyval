@@ -101,10 +101,28 @@ required = [
 [[dimension]]
 name = "outcome"
 owner = "W43"
-required = []
+required = [
+  "success",
+  "mismatch",
+  "conflict",
+  "live_capacity",
+  "history_full",
+  "unknown",
+  "not_leader",
+  "busy",
+  "unavailable",
+  "recovering",
+]
 
 # Completed by W43: every operation of §8.2 reachable.
 [[dimension]]
 name = "operation"
 owner = "W43"
-required = []
+required = [
+  "put",
+  "delete",
+  "cas",
+  "get",
+  "scan",
+  "status",
+]

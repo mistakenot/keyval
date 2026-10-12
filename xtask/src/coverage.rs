@@ -573,17 +573,17 @@ mod tests {
             "rule: the required set names every dimension, in report order"
         );
         for (name, owner, cells) in &required.dimensions {
-            assert_eq!(
-                cells.is_empty(),
-                owner == PENDING_OWNER,
-                "rule: only a W43-owned dimension is still pending (outcome, operation); \
-                 dimension={name} owner={owner}"
+            assert!(
+                !cells.is_empty(),
+                "rule: W43 completed the outcome and operation cells, so no dimension is \
+                 pending; dimension={name} owner={owner}"
             );
         }
         assert_eq!(
             required.cells(),
-            9 + 36 + 4 + 8,
-            "rule: faults, pairs, the four named topologies and crash points are required"
+            9 + 36 + 4 + 8 + 10 + 6,
+            "rule: faults, pairs, the four named topologies, crash points, every outcome and \
+             every operation are required"
         );
     }
 
@@ -712,18 +712,19 @@ mod tests {
         // Empty required: faults 9-5, pairs 36-3, topologies 4-3, crash points 8-3.
         assert_eq!(
             build.required_empty,
-            4 + 33 + 1 + 5,
-            "rule: the fixture leaves these required cells empty; {build:?}"
+            4 + 33 + 1 + 5 + 5 + 2,
+            "rule: the fixture leaves these required cells empty (outcomes conflict, \
+             live_capacity, history_full, busy, recovering; operations delete, scan); {build:?}"
         );
-        assert_eq!(build.required_total, 57, "rule: required cells total");
-        let outcome_unrequired = build
+        assert_eq!(build.required_total, 73, "rule: required cells total");
+        let outcome_required = build
             .empty_cells
             .iter()
             .find(|cell| cell.dimension == "outcome" && cell.cell == "conflict")
             .unwrap();
         assert!(
-            !outcome_unrequired.required,
-            "rule: outcome cells are not required until W43; {outcome_unrequired:?}"
+            outcome_required.required,
+            "rule: W43 made every outcome cell required; {outcome_required:?}"
         );
         let text = fs::read_to_string(root.join(REPORT)).unwrap();
         assert!(
@@ -731,8 +732,8 @@ mod tests {
             "rule: the Markdown flags an empty required cell; text={text}"
         );
         assert!(
-            text.contains("pending (W43)"),
-            "rule: the Markdown lists the pending dimensions; text={text}"
+            !text.contains("pending ("),
+            "rule: no dimension is pending once W43 completed the required set; text={text}"
         );
         assert!(
             report.render_human().contains("required cells empty"),
@@ -763,12 +764,12 @@ mod tests {
         assert_eq!(summed.runs, 10, "rule: runs of one build add");
         assert_eq!(
             summed.required_empty,
-            3 + 33 + 1 + 5,
+            3 + 33 + 1 + 5 + 5 + 2,
             "rule: a cell the second record exercised is no longer empty; {summed:?}"
         );
         assert_eq!(
             report.builds[0].required_empty,
-            4 + 33 + 1 + 5,
+            4 + 33 + 1 + 5 + 5 + 2,
             "rule: coverage never carries across builds"
         );
     }

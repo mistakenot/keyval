@@ -54,6 +54,7 @@ use types::{
 use crate::cluster::{Cluster, ClusterError};
 use crate::entropy::SplitMix64;
 use crate::scheduler::VirtualTime;
+use crate::swarm::FaultKind;
 use crate::trace::ClientId;
 
 /// The clients' reaction step, in virtual milliseconds.
@@ -76,9 +77,154 @@ pub const MAX_THINK_MS: u64 = 300;
 pub enum Profile {
     /// PUT and GET only: W36's acceptance profile (§12.2). Three writes for every two reads.
     PutGet,
-    /// §10.3's initial mix: 30% PUT, 15% DELETE, 25% CAS, 20% GET, 10% SCAN. W43's profiles
-    /// run it; the client model is ready for it.
+    /// §10.3's initial mix: 30% PUT, 15% DELETE, 25% CAS, 20% GET, 10% SCAN.
     Mixed,
+    /// CAS contention: every client's writes go to one key, 55% CAS, so version mismatches
+    /// and conflicts are the common case.
+    CasContention,
+    /// Read isolation: 40% GET and 30% SCAN beside a light write load, so reads run against
+    /// writes in flight.
+    ReadIsolation,
+    /// Boundary values: the mixed operations over only the largest, empty and escape-heavy
+    /// values (§10.3) and the key corpus.
+    BoundaryValues,
+    /// Misuse: the mixed operations, with the misuse stream on (a request ID reused with a
+    /// different command; §10.3).
+    Misuse,
+    /// Delayed retries: the mixed operations under message loss and delay, so clients retry
+    /// and look their requests up.
+    DelayedRetries,
+    /// All-node restart: the mixed operations under whole-cluster crashes.
+    AllNodeRestart,
+    /// Asymmetric links: the mixed operations under one-way link failures.
+    AsymmetricLinks,
+    /// Long pauses: the mixed operations while nodes stop taking turns.
+    LongPauses,
+}
+
+/// The operation kinds a profile's roll chooses among.
+#[derive(Clone, Copy)]
+enum Kind {
+    Put,
+    Delete,
+    Cas,
+    Get,
+    Scan,
+}
+
+impl Profile {
+    /// Every profile, in the order files and help list them.
+    pub const ALL: [Self; 10] = [
+        Self::PutGet,
+        Self::Mixed,
+        Self::CasContention,
+        Self::ReadIsolation,
+        Self::BoundaryValues,
+        Self::Misuse,
+        Self::DelayedRetries,
+        Self::AllNodeRestart,
+        Self::AsymmetricLinks,
+        Self::LongPauses,
+    ];
+
+    /// The profile's name in scenario files, manifests and `--workload`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::PutGet => "put_get",
+            Self::Mixed => "mixed",
+            Self::CasContention => "cas_contention",
+            Self::ReadIsolation => "read_isolation",
+            Self::BoundaryValues => "boundary_values",
+            Self::Misuse => "misuse",
+            Self::DelayedRetries => "delayed_retries",
+            Self::AllNodeRestart => "all_node_restart",
+            Self::AsymmetricLinks => "asymmetric_links",
+            Self::LongPauses => "long_pauses",
+        }
+    }
+
+    /// The profile called `name`, if there is one.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.name() == name)
+    }
+
+    /// The fault types a fault-dedicated profile enables, or none for a profile that leaves
+    /// the swarm to the seed.
+    #[must_use]
+    pub const fn dedicated_faults(self) -> &'static [FaultKind] {
+        match self {
+            Self::DelayedRetries => &[FaultKind::MessageLoss, FaultKind::DelayReorder],
+            Self::AllNodeRestart => &[FaultKind::AllNodeCrash],
+            Self::AsymmetricLinks => &[FaultKind::AsymmetricPartition],
+            Self::LongPauses => &[FaultKind::Pause],
+            Self::PutGet
+            | Self::Mixed
+            | Self::CasContention
+            | Self::ReadIsolation
+            | Self::BoundaryValues
+            | Self::Misuse => &[],
+        }
+    }
+
+    /// The misuse rate, in parts per million, the profile's clients run with: zero unless
+    /// the profile is [`Self::Misuse`].
+    #[must_use]
+    pub const fn misuse_ppm(self) -> u32 {
+        match self {
+            Self::Misuse => 300_000,
+            Self::PutGet
+            | Self::Mixed
+            | Self::CasContention
+            | Self::ReadIsolation
+            | Self::BoundaryValues
+            | Self::DelayedRetries
+            | Self::AllNodeRestart
+            | Self::AsymmetricLinks
+            | Self::LongPauses => 0,
+        }
+    }
+
+    /// The operation a percentile `roll` (0 to 99) picks under the profile.
+    const fn kind(self, roll: u64) -> Kind {
+        match self {
+            Self::PutGet => {
+                if roll < 60 {
+                    Kind::Put
+                } else {
+                    Kind::Get
+                }
+            }
+            Self::CasContention => match roll {
+                0..15 => Kind::Put,
+                15..25 => Kind::Delete,
+                25..80 => Kind::Cas,
+                80..95 => Kind::Get,
+                _ => Kind::Scan,
+            },
+            Self::ReadIsolation => match roll {
+                0..15 => Kind::Put,
+                15..20 => Kind::Delete,
+                20..30 => Kind::Cas,
+                30..70 => Kind::Get,
+                _ => Kind::Scan,
+            },
+            Self::Mixed
+            | Self::BoundaryValues
+            | Self::Misuse
+            | Self::DelayedRetries
+            | Self::AllNodeRestart
+            | Self::AsymmetricLinks
+            | Self::LongPauses => match roll {
+                0..30 => Kind::Put,
+                30..45 => Kind::Delete,
+                45..70 => Kind::Cas,
+                70..90 => Kind::Get,
+                _ => Kind::Scan,
+            },
+        }
+    }
 }
 
 /// One logical operation a client plans.
@@ -198,9 +344,20 @@ fn key_corpus(limits: KeyValueLimits) -> Vec<Key> {
 
 /// A value of a kind drawn from `rng`, for a write to `key` whose last planned value is
 /// `last` (§10.3's value edge cases, as far as `limits` allow).
-fn value(rng: &mut SplitMix64, limits: KeyValueLimits, last: Option<&Value>) -> Value {
+fn value(
+    rng: &mut SplitMix64,
+    limits: KeyValueLimits,
+    last: Option<&Value>,
+    boundary: bool,
+) -> Value {
     let longest = limits.max_value_bytes();
-    let text = match below(rng, 20) {
+    // Boundary values draw only the empty, longest and escape-heavy kinds.
+    let roll = if boundary {
+        [0, 5, 6][pick(rng, 3)]
+    } else {
+        below(rng, 20)
+    };
+    let text = match roll {
         0..=1 => String::new(),
         2..=4 => match last {
             Some(last) => return last.clone(),
@@ -250,16 +407,18 @@ impl Plan {
                 let ops = (0..count)
                     .map(|op| {
                         let request_id = request_id(rng, number, op);
-                        let write_key = if below(rng, 5) < 3 {
+                        let write_key = if profile == Profile::CasContention {
+                            keys[0].clone()
+                        } else if below(rng, 5) < 3 {
                             keys[pick(rng, hot)].clone()
                         } else {
                             keys[pick(rng, keys.len())].clone()
                         };
                         let read_key = keys[pick(rng, keys.len())].clone();
-                        let roll = below(rng, 100);
-                        let intent = match profile {
-                            Profile::PutGet if roll < 60 => {
-                                let value = value(rng, limits, last.get(&write_key));
+                        let boundary = profile == Profile::BoundaryValues;
+                        let intent = match profile.kind(below(rng, 100)) {
+                            Kind::Put => {
+                                let value = value(rng, limits, last.get(&write_key), boundary);
                                 last.insert(write_key.clone(), value.clone());
                                 Intent::Put {
                                     request_id,
@@ -267,36 +426,24 @@ impl Plan {
                                     value,
                                 }
                             }
-                            Profile::PutGet => Intent::Get { key: read_key },
-                            Profile::Mixed => match roll {
-                                0..30 => {
-                                    let value = value(rng, limits, last.get(&write_key));
-                                    last.insert(write_key.clone(), value.clone());
-                                    Intent::Put {
-                                        request_id,
-                                        key: write_key,
-                                        value,
-                                    }
-                                }
-                                30..45 => Intent::Delete {
+                            Kind::Delete => Intent::Delete {
+                                request_id,
+                                key: write_key,
+                            },
+                            Kind::Cas => {
+                                let value = value(rng, limits, last.get(&write_key), boundary);
+                                last.insert(write_key.clone(), value.clone());
+                                Intent::Cas {
                                     request_id,
                                     key: write_key,
-                                },
-                                45..70 => {
-                                    let value = value(rng, limits, last.get(&write_key));
-                                    last.insert(write_key.clone(), value.clone());
-                                    Intent::Cas {
-                                        request_id,
-                                        key: write_key,
-                                        value,
-                                    }
+                                    value,
                                 }
-                                70..90 => Intent::Get { key: read_key },
-                                _ => ScanRange::new(None, None, None, PageSize::DEFAULT)
-                                    .map_or(Intent::Get { key: read_key }, |range| Intent::Scan {
-                                        range,
-                                    }),
-                            },
+                            }
+                            Kind::Get => Intent::Get { key: read_key },
+                            Kind::Scan => ScanRange::new(None, None, None, PageSize::DEFAULT)
+                                .map_or(Intent::Get { key: read_key }, |range| Intent::Scan {
+                                    range,
+                                }),
                         };
                         Planned {
                             intent,
