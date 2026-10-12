@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/corpus-run.v1.schema.json",
+  "title": "keyval.dev.corpus-run/v1",
+  "description": "The `./dev sim corpus [--fast] --json` report (PLAN.md \u00a710.9, \u00a712.2 W42.3): the append-only regression corpus `sim/corpus/` verified against its protected index and run case by case (xtask/src/corpus.rs). `ok` is true exactly when the corpus verified, at least one case ran and every case passed; a corpus that does not verify runs nothing and lists its problems (P9, P10). `corpus_sha256` is the hash a gate receipt records for the protected artefact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "label",
+    "selection",
+    "corpus_sha256",
+    "problems",
+    "counts",
+    "cases"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.corpus-run/v1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "selection": {
+      "enum": [
+        "all",
+        "fast"
+      ]
+    },
+    "corpus_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "problems": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pass",
+        "fail",
+        "incomplete",
+        "error"
+      ],
+      "properties": {
+        "pass": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "incomplete": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case",
+          "kind",
+          "runs",
+          "verdict",
+          "reason",
+          "rerun"
+        ],
+        "properties": {
+          "case": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "check",
+              "seeds",
+              "scenario"
+            ]
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail",
+              "incomplete",
+              "error"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rerun": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "verdict"
+              ],
+              "properties": {
+                "verdict": {
+                  "const": "pass"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "ok exactly when the corpus verified and only passes were counted, at least one.",
+      "if": {
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "problems": {
+            "maxItems": 0
+          },
+          "counts": {
+            "properties": {
+              "pass": {
+                "minimum": 1
+              },
+              "fail": {
+                "const": 0
+              },
+              "incomplete": {
+                "const": 0
+              },
+              "error": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "anyOf": [
+          {
+            "properties": {
+              "problems": {
+                "minItems": 1
+              }
+            }
+          },
+          {
+            "properties": {
+              "counts": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "fail": {
+                        "minimum": 1
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "incomplete": {
+                        "minimum": 1
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "error": {
+                        "minimum": 1
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "pass": {
+                        "const": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

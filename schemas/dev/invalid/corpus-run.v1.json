@@ -1,0 +1,36 @@
+{
+  "rule": "a corpus run with a failed case is not ok",
+  "error_at": "/counts/fail",
+  "instance": {
+    "schema": "keyval.dev.corpus-run/v1",
+    "ok": true,
+    "label": "simulated regression corpus",
+    "selection": "all",
+    "corpus_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "problems": [],
+    "counts": {
+      "pass": 1,
+      "fail": 1,
+      "incomplete": 0,
+      "error": 0
+    },
+    "cases": [
+      {
+        "case": "a.toml",
+        "kind": "check",
+        "runs": 1,
+        "verdict": "pass",
+        "reason": null,
+        "rerun": "./dev check SIM-X --case one"
+      },
+      {
+        "case": "b.toml",
+        "kind": "check",
+        "runs": 1,
+        "verdict": "fail",
+        "reason": "one failed",
+        "rerun": "./dev check SIM-X --case two"
+      }
+    ]
+  }
+}

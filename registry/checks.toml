@@ -1581,3 +1581,15 @@ tier = "T0"
 run = "./dev check CONF-TOPOLOGY"
 min_cases = 3
 status = "implemented"
+
+[[check]]
+id = "CORPUS"
+summary = "The append-only regression corpus runner (§10.9, §12.2 W42.3, T-4, T-8, O-6): sim/corpus/ verifies against its protected INDEX.toml (every file listed with its SHA-256, none missing, none changed, none unlisted) and every case parses as a check, seeds or scenario case with provenance; the fast subset is a fixed list of cases; a run selects the whole corpus or only that subset, is ok only when at least one case ran and all passed (an incomplete or errored case is not a pass), names each failure's re-run command, and a corpus that does not verify runs nothing; the index may only grow from its parent's (adding is the only edit); the protected hash a gate receipt records follows every byte of every corpus file; reports conform to keyval.dev.corpus-run/v1"
+kind = "test_group"
+covers = ["T-4", "T-8", "O-6"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check CORPUS"
+min_cases = 9
+status = "implemented"

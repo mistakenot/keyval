@@ -15,6 +15,7 @@ mod clock;
 mod closure;
 mod cluster;
 mod commit;
+mod corpus;
 mod coverage;
 mod demo;
 mod doctor;
@@ -319,6 +320,19 @@ enum SimAction {
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
     },
+    /// Run the append-only regression corpus `sim/corpus/` (§10.9, W42.3); exits 1 unless the
+    /// corpus verifies against its protected index and every selected case passed (P9, P10).
+    Corpus {
+        /// Only the fixed reviewed fast subset named in `sim/corpus/INDEX.toml`.
+        #[arg(long)]
+        fast: bool,
+        /// The parent commit's `INDEX.toml`: the index may only have grown from it (P9).
+        #[arg(long, value_name = "FILE")]
+        parent_index: Option<PathBuf>,
+        /// The configuration, relative to the workspace root (default: config/local.toml).
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+    },
     /// Shrink a crash pack to a minimal failing run: the engine is W44's, so this exits as
     /// not implemented until then.
     Shrink {
@@ -589,6 +603,26 @@ fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
                 }
             }
         },
+        SimAction::Corpus {
+            fast,
+            parent_index,
+            config,
+        } => {
+            let selection = if fast {
+                corpus::Selection::Fast
+            } else {
+                corpus::Selection::All
+            };
+            match corpus::run_live(
+                root,
+                selection,
+                sim::config_path(root, config),
+                parent_index.as_deref(),
+            ) {
+                Ok(report) => output::emit(format, &report),
+                Err(refusal) => refuse(refusal),
+            }
+        }
         SimAction::Shrink { pack } => refuse(sim_campaign::shrink(&pack)),
     }
 }

@@ -40,6 +40,7 @@ const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 /// listed here, with its schema and its negative fixture.
 const IDS: &[&str] = &[
     crate::output::ERROR_SCHEMA,
+    crate::corpus::SCHEMA,
     crate::doctor::SCHEMA,
     crate::check::SCHEMA,
     crate::gate::SCHEMA,
@@ -997,6 +998,28 @@ mod tests {
             !validators.violations(&instance).is_empty(),
             "rule: a pass that no checker judged is rejected by the schema (P10); {instance}"
         );
+    }
+
+    #[test]
+    fn corpus_run_reports_match_their_schema() {
+        let validators = Validators::load();
+        let root = crate::test_support::workspace_root();
+        let fake = crate::corpus::tests::AlwaysPass;
+        let report = crate::corpus::run(&root, crate::corpus::Selection::Fast, &fake);
+        validators.assert_matches(&report, "a passing fast-subset run of the committed corpus");
+        let mut failed = report;
+        failed.ok = false;
+        failed.counts.pass -= 1;
+        failed.counts.fail = 1;
+        failed.cases[0].verdict = crate::corpus::CaseVerdict::Fail;
+        failed.cases[0].reason = Some("one failed".to_owned());
+        validators.assert_matches(&failed, "a corpus run with a failing case");
+        let unverified = crate::corpus::run(
+            &crate::test_support::scratch_dir("schemas-corpus-none"),
+            crate::corpus::Selection::All,
+            &fake,
+        );
+        validators.assert_matches(&unverified, "a corpus that does not verify");
     }
 
     #[test]

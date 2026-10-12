@@ -43,6 +43,7 @@ use crate::candidate;
 use crate::cargo::{Cargo, Runner};
 use crate::check::{CATALOGUE, CheckDef, Selector, StaticCheck};
 use crate::clock::Utc;
+use crate::corpus;
 use crate::libtest;
 use crate::lint;
 use crate::metadata;
@@ -1642,8 +1643,10 @@ pub fn build_id(tree_id: &str, inputs: &BuildInputs) -> String {
     format!("sha256:{}", sha256_hex(canonical.as_bytes()))
 }
 
+/// The hash of each protected policy file, and of the regression corpus directory
+/// (`sim/corpus`, PLAN.md §10.9, P9) under that name.
 fn policy_hashes(root: &Path) -> BTreeMap<&'static str, String> {
-    POLICY_FILES
+    let mut hashes: BTreeMap<&'static str, String> = POLICY_FILES
         .iter()
         .map(|&file| {
             let hash = fs::read(root.join(file)).map_or_else(
@@ -1652,7 +1655,12 @@ fn policy_hashes(root: &Path) -> BTreeMap<&'static str, String> {
             );
             (file, hash)
         })
-        .collect()
+        .collect();
+    hashes.insert(
+        corpus::DIR,
+        corpus::protected_hash(root).unwrap_or_else(|| "missing".to_owned()),
+    );
+    hashes
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

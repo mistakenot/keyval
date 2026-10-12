@@ -1,0 +1,20 @@
+# Protected index of the regression corpus (PLAN.md §10.9, P9). Append-only: a case file
+# is added here together with its SHA-256, and never changed or removed. `fast` is the fixed,
+# reviewed subset T0 runs (`./dev sim corpus --fast`); extending it is a reviewed edit.
+fast = [
+    "br-50zd-lost-response-at-send.toml",
+    "br-50zd-misuse-ordering-and-dispatch.toml",
+    "br-50zd-phase-mark-placement.toml",
+]
+
+[[file]]
+name = "br-50zd-lost-response-at-send.toml"
+sha256 = "3948f72feff488fa509d3beea256a46c1ec5112f4d653a87ff2e3a8037acfed0"
+
+[[file]]
+name = "br-50zd-misuse-ordering-and-dispatch.toml"
+sha256 = "80f98f5cd998addf592ce136f8ad313395b1ece9b6de49b67d265ab51b870131"
+
+[[file]]
+name = "br-50zd-phase-mark-placement.toml"
+sha256 = "17a121cef2783da20ca0e46cb78f942dc97cfb56003cab8fba4b2c76748ce85a"
