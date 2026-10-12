@@ -210,7 +210,7 @@ title = "An unconfirmed submitted write returns unknown_outcome"
 [[requirement]]
 id = "DUR-1"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A write is acknowledged only after it is committed and applied"
 
 [[requirement]]
@@ -222,7 +222,7 @@ title = "Entries, term and vote are synced before any message depends on them"
 [[requirement]]
 id = "DUR-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "A restarted node recovers from disk and rejoins"
 
 [[requirement]]
@@ -246,7 +246,7 @@ title = "A torn tail is discarded; detected corruption refuses to start"
 [[requirement]]
 id = "DUR-7"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "File and directory creation is synced before dependent actions"
 
 [[requirement]]
@@ -258,7 +258,7 @@ title = "Genesis binding of each data directory, with an exclusive lock"
 [[requirement]]
 id = "DUR-9"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Recovery is correct under the stated crash model"
 
 # §6.7 Operability
@@ -402,6 +402,6 @@ title = "A simulation run passes only if it did meaningful work"
 [[requirement]]
 id = "T-14"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Real-file process-crash probes and a lifecycle smoke test"
 notes = "Owner accepted the real-process addition to v1 2026-10-01 (§15 Q6)."
