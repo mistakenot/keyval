@@ -1535,6 +1535,18 @@ min_cases = 14
 status = "implemented"
 
 [[check]]
+id = "DRAIN-CERTIFIED"
+summary = "certified drain for history-capacity heals (W43.2, §10.2, D-53, DM-7): a drain is certified only when no client work is in flight, every recoverable node is up with no queued inputs, exactly one leader leads in one term and the others follow it, last = commit = applied on every recoverable node at one common index, and every node holds one state digest (map and request history), and only after the same agreement has held for the full default quiet period of 100 ticks; each rule has a negative fixture (client work in flight, queued work, a node down, no leader, two leaders, another term, a non-following follower, last/commit/applied mismatches, a different common index, differing digests, a lookup before 100 ticks, a restarted or changed agreement) and a control that passes. Simulation evidence from the fixtures, not proof"
+kind = "test_group"
+covers = ["A-4"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check DRAIN-CERTIFIED"
+min_cases = 14
+status = "implemented"
+
+[[check]]
 id = "CONF-HARNESS"
 summary = "Conformance harness (§10.8, W31.1): the independent `conformance` package reads api/openapi.yaml (operation IDs and error codes, duplicates and incomplete documents refused), takes the model, single-node and five cluster base URLs (exactly zero or five cluster nodes, strict http://host:port), activates targets per operation (model serves all; a real single node only PUT/GET until W32; the cluster none until W32; topology tests only on the cluster), validates each test's class/operation/error-code tag against the spec, speaks bounded strict HTTP/1.1 (malformed, truncated and oversized responses are errors), polls stale reads until served_by.applied_index reaches the write index with a bounded budget whose timeout fails (P10), and depends on no production crate (T-12; the test-only suite may use the oracle crates, §10.8). Unit tests with injected clocks and local servers: test evidence of the harness, not proof"
 kind = "test_group"

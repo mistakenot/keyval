@@ -23,6 +23,7 @@ use serde_json::{Value as Json, json};
 use types::Config;
 
 use crate::cluster::Cluster;
+use crate::drain::QUIET_TICKS;
 use crate::observe::{self, Meta};
 use crate::phases::{self, Finished, HEAL_BUDGET_TICKS, Heal, Stage};
 use crate::scenario::{SCHEMA as SCENARIO_SCHEMA, Scenario};
@@ -252,7 +253,8 @@ fn evidence(
         max_events: EventBudget::DEFAULT.get(),
         chaos_ticks: finished.chaos_ticks,
         heal_budget_ticks: options.heal_budget_ticks,
-        quiet_ticks: 0,
+        heal: scenario.workload().heal_mode(),
+        quiet_ticks: QUIET_TICKS,
         phases: finished.phases,
     };
     let history = observe::document(&finished.cluster, &finished.clients, config, &meta)

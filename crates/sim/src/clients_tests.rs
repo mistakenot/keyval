@@ -408,6 +408,7 @@ fn check_identity(
             End::Done(_) => "other answer",
             End::Refused => "refused",
             End::Unresolved(_) => "unresolved",
+            End::NotExecuted(_) => "not executed",
         });
     }
 }

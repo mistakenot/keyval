@@ -12,11 +12,13 @@ use types::{Config, KeyValueLimits, NodeId, RequestId};
 
 use crate::clients::{End, Profile};
 use crate::cluster::Observed;
+use crate::drain::QUIET_TICKS;
 use crate::entropy::MasterSeed;
 use crate::nemesis::{CrashPoint, Fault};
 use crate::observe::{Meta, document};
 use crate::phases::{
-    BASELINE_WRITES, Converged, Finished, HEAL_BUDGET_TICKS, Heal, QUORUM, Stage, run, run_with,
+    BASELINE_WRITES, Completion, Converged, Finished, HEAL_BUDGET_TICKS, Heal, QUORUM, Stage, run,
+    run_with,
 };
 use crate::scenario::{Scenario, ScenarioError, Step, Timed};
 use crate::scheduler::{EventBudget, VirtualTime};
@@ -170,6 +172,9 @@ fn the_heal_converges_with_a_unique_marker_on_every_recoverable_node() {
             heal.nodes.len() >= QUORUM && heal.nodes.len() + heal.lost.len() == 5,
             "rule: recoverable plus lost nodes are the five voters; seed={seed} heal={heal:?}"
         );
+        let marker = heal
+            .marker()
+            .expect("rule: the marker heal writes a marker (§10.2)");
         let first = heal.nodes[0];
         for end in &heal.nodes {
             assert_eq!(
@@ -181,7 +186,7 @@ fn the_heal_converges_with_a_unique_marker_on_every_recoverable_node() {
             );
             let ctl = finished.cluster.controller(end.node).unwrap();
             assert!(
-                ctl.state().history().get(&heal.marker).is_some(),
+                ctl.state().history().get(&marker).is_some(),
                 "rule: the marker is applied on every recoverable node; seed={seed} node={:?}",
                 end.node
             );
@@ -194,16 +199,15 @@ fn the_heal_converges_with_a_unique_marker_on_every_recoverable_node() {
             .filter_map(|op| op.intent.request_id())
             .collect();
         assert!(
-            !planned.contains(&heal.marker),
-            "rule: the marker is uniquely identified; seed={seed} marker={}",
-            heal.marker
+            !planned.contains(&marker),
+            "rule: the marker is uniquely identified; seed={seed} marker={marker}",
         );
         let marker_writes = finished
             .clients
             .sends()
             .iter()
             .filter(|send| {
-                matches!(&send.request, types::ClientOp::Write { request_id, .. } if *request_id == heal.marker)
+                matches!(&send.request, types::ClientOp::Write { request_id, .. } if *request_id == marker)
             })
             .count();
         assert!(
@@ -518,7 +522,8 @@ fn the_observation_of_a_run_builds_and_is_complete() {
         max_events: EventBudget::DEFAULT.get(),
         chaos_ticks: finished.chaos_ticks,
         heal_budget_ticks: HEAL_BUDGET_TICKS,
-        quiet_ticks: 0,
+        heal: scenario.workload().heal_mode(),
+        quiet_ticks: QUIET_TICKS,
         phases: finished.phases,
     };
     let built = document(&finished.cluster, &finished.clients, &config, &meta);
@@ -561,4 +566,144 @@ fn many_swarm_seeds_converge_within_the_budget() {
         stalled.is_empty(),
         "rule: a healthy-envelope scenario heals within 600 ticks (§9.4, K-9); stalled={stalled:?}"
     );
+}
+
+/// `local.toml` with the small-limits fixture's capacity limits (DM-6, DM-7): the fixture
+/// itself has three voters, and a scenario drives five. A live-quota profile (DM-6) keeps the
+/// default history budget and log bound, which its writes must not exhaust; a history profile (DM-7) takes
+/// the small one, with the journal bound at the margin formula's minimum.
+fn small_config(profile: Profile) -> Config {
+    let mut limits = vec![
+        ("max_key_bytes = 256", "max_key_bytes = 16"),
+        ("max_value_bytes = 65536", "max_value_bytes = 64"),
+        ("max_live_keys = 10000", "max_live_keys = 8"),
+        ("max_live_bytes = 67108864", "max_live_bytes = 1024"),
+    ];
+    if profile == Profile::HistoryCapacity {
+        limits.push(("max_log_entries = 1000000", "max_log_entries = 100"));
+        limits.push(("max_history_bytes = 3221225472", "max_history_bytes = 4096"));
+        limits.push((
+            "max_journal_bytes = 4294967296",
+            "max_journal_bytes = 67120384",
+        ));
+    }
+    let text = limits.iter().fold(LOCAL.to_owned(), |text, (from, to)| {
+        assert!(text.contains(from), "rule: local.toml carries {from}");
+        text.replace(from, to)
+    });
+    Config::parse(&text, Path::new("config")).unwrap()
+}
+
+/// A scenario of `profile` on the small-limits fixture, run to its end.
+fn drive_small(seed: u64, profile: Profile, control: bool) -> (Scenario, Finished) {
+    let config = small_config(profile);
+    let master = MasterSeed::new(seed);
+    let scenario = if control {
+        Scenario::control(master, config.key_value_limits(), profile)
+    } else {
+        Scenario::generate(master, config.key_value_limits(), profile)
+    };
+    let finished = run(&config, &scenario).unwrap_or_else(|error| {
+        panic!(
+            "rule: a capacity scenario run reaches its end (§10.2); seed={seed} \
+             profile={profile:?} error={error:?}; re-run: ./dev check RUN-PHASES"
+        )
+    });
+    (scenario, finished)
+}
+
+#[test]
+fn a_live_capacity_heal_writes_over_a_precreated_marker_of_equal_size() {
+    for seed in [1, 2] {
+        for control in [true, false] {
+            let (scenario, finished) = drive_small(seed, Profile::LiveCapacity, control);
+            let heal = converged(&finished);
+            let marker = heal.marker().unwrap_or_else(|| {
+                panic!(
+                    "rule: a live-capacity heal still writes a marker (DM-6, D-53); seed={seed} \
+                     control={control} heal={heal:?}"
+                )
+            });
+            assert!(
+                heal.ticks <= HEAL_BUDGET_TICKS,
+                "rule: the heal fits its budget; seed={seed} control={control} ticks={}",
+                heal.ticks
+            );
+            let Completion::Marker(end) = &heal.completion else {
+                panic!("rule: a live-capacity heal completes by marker; seed={seed} heal={heal:?}");
+            };
+            assert!(
+                end.pre_created,
+                "rule: the marker overwrote a baseline-created value of equal size (DM-6); \
+                 seed={seed} control={control} marker={end:?}"
+            );
+            for end in &heal.nodes {
+                let ctl = finished.cluster.controller(end.node).unwrap();
+                assert!(
+                    ctl.state().history().get(&marker).is_some(),
+                    "rule: the marker is applied on every recoverable node; seed={seed} \
+                     control={control} node={:?} scenario={:?}",
+                    end.node,
+                    scenario.seed()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_history_capacity_heal_drains_and_writes_no_marker() {
+    for seed in [1, 2] {
+        for control in [true, false] {
+            let (_, finished) = drive_small(seed, Profile::HistoryCapacity, control);
+            let heal = converged(&finished);
+            let Completion::Drain(certified) = &heal.completion else {
+                panic!(
+                    "rule: a history-capacity heal completes by certified drain, not a marker \
+                     (DM-7, D-53); seed={seed} control={control} heal={heal:?}"
+                );
+            };
+            assert_eq!(
+                certified.quiet_ticks(),
+                QUIET_TICKS,
+                "rule: the drain held for the full default quiet period (§10.2); seed={seed} \
+                 control={control}"
+            );
+            assert!(
+                heal.marker().is_none(),
+                "rule: no marker is written when the history may be full; seed={seed}"
+            );
+            let first = heal.nodes[0];
+            for end in &heal.nodes {
+                assert_eq!(
+                    end.digest, first.digest,
+                    "rule: every recoverable node holds one state after the drain; seed={seed} \
+                     control={control} node={:?}",
+                    end.node
+                );
+            }
+            if !control {
+                let parked = finished
+                    .clients
+                    .outcomes()
+                    .iter()
+                    .filter(|outcome| matches!(outcome.end, End::NotExecuted(_) | End::Refused))
+                    .count();
+                eprintln!("history-capacity seed={seed}: {parked} writes refused or not executed");
+            }
+            for outcome in finished.clients.outcomes() {
+                let resolved = match &outcome.end {
+                    End::Done(_) | End::Refused => true,
+                    End::NotExecuted(lookups) => lookups.len() == heal.nodes.len(),
+                    End::Unresolved(_) => false,
+                };
+                assert!(
+                    resolved,
+                    "rule: after the drain every write is done, refused, or not-executed by a \
+                     lookup on every recoverable node (D-53); seed={seed} control={control} \
+                     outcome={outcome:?}"
+                );
+            }
+        }
+    }
 }

@@ -55,7 +55,7 @@ use serde_json::{Map, Value, json};
 use types::{Config, Key, KeyValueLimits, NodeId, PageSize, RequestId, ScanRange, Value as Val};
 
 use crate::clients::{
-    ClientPlan, Clients, Intent, KEYS, MAX_CLIENTS, MAX_THINK_MS, OPS, Plan, Planned,
+    ClientPlan, Clients, Intent, KEYS, MAX_CLIENTS, MAX_THINK_MS, Plan, Planned,
     Profile as Workload,
 };
 use crate::cluster::{Cluster, ClusterError};
@@ -433,7 +433,7 @@ pub enum Violation {
         /// When.
         at_ms: u64,
     },
-    /// A plan that breaks the shape clients generate: no clients, a client without 6 to 20
+    /// A plan that breaks the shape clients generate: no clients, a client without 6 to 80
     /// operations, a think time over the limit, or an operation on a key outside the plan.
     BadPlan {
         /// Which rule.
@@ -499,6 +499,7 @@ pub fn validate(
     chaos_ms: u64,
     faults: &[Timed],
     plan: &Plan,
+    profile: Workload,
 ) -> Result<(), Violation> {
     if chaos_ms > MAX_CHAOS_MS {
         return Err(Violation::ChaosTooLong { chaos_ms });
@@ -508,7 +509,7 @@ pub fn validate(
             steps: faults.len(),
         });
     }
-    check_plan(plan)?;
+    check_plan(plan, profile)?;
     let mut replay = Replay::new();
     let mut previous = 0;
     for (at, timed) in faults.iter().enumerate() {
@@ -539,7 +540,7 @@ pub fn validate(
 }
 
 /// The plan's shape: what [`Plan::generate`] builds (its documented invariants).
-fn check_plan(plan: &Plan) -> Result<(), Violation> {
+fn check_plan(plan: &Plan, profile: Workload) -> Result<(), Violation> {
     let bad = |rule| Err(Violation::BadPlan { rule });
     let clients = usize::try_from(MAX_CLIENTS).unwrap_or(usize::MAX);
     if plan.clients.is_empty() {
@@ -550,10 +551,11 @@ fn check_plan(plan: &Plan) -> Result<(), Violation> {
             clients: plan.clients.len(),
         });
     }
-    let ops = usize::try_from(OPS.0).unwrap_or(0)..=usize::try_from(OPS.1).unwrap_or(usize::MAX);
+    let ops = usize::try_from(profile.ops().0).unwrap_or(0)
+        ..=usize::try_from(profile.ops().1).unwrap_or(usize::MAX);
     for client in &plan.clients {
         if !ops.contains(&client.ops.len()) {
-            return bad("a client has 6 to 20 operations");
+            return bad("a client has the profile's number of operations");
         }
         for planned in &client.ops {
             if planned.think_ms > MAX_THINK_MS {
@@ -887,7 +889,7 @@ impl Scenario {
             }
         };
         separate(&mut faults);
-        let verdict = validate(swarm, chaos_ms, &faults, &plan);
+        let verdict = validate(swarm, chaos_ms, &faults, &plan, workload);
         types::invariant!(
             verdict.is_ok(),
             "SWARM-ENVELOPE",
@@ -926,7 +928,7 @@ impl Scenario {
                 )));
             }
         }
-        validate(swarm, chaos_ms, &faults, &plan).map_err(ScenarioError::Invalid)?;
+        validate(swarm, chaos_ms, &faults, &plan, workload).map_err(ScenarioError::Invalid)?;
         Ok(Self {
             seed,
             swarm,

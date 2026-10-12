@@ -45,6 +45,9 @@ pub mod cluster;
 mod cluster_tests;
 pub mod crashpack;
 pub mod disk;
+pub mod drain;
+#[cfg(test)]
+mod drain_tests;
 pub mod entropy;
 pub mod god_view;
 pub mod nemesis;

@@ -52,6 +52,7 @@ use types::{
 };
 
 use crate::cluster::{Cluster, ClusterError};
+use crate::drain::Certified;
 use crate::entropy::SplitMix64;
 use crate::scheduler::VirtualTime;
 use crate::swarm::FaultKind;
@@ -71,6 +72,38 @@ pub const OPS: (u64, u64) = (6, 20);
 
 /// The longest think time between a client's operations, in milliseconds.
 pub const MAX_THINK_MS: u64 = 300;
+
+/// The fewest and most operations a capacity profile's client plans: enough writes, with
+/// the small test limits, to reach a live-quota or history limit (§10.2).
+const CAPACITY_OPS: (u64, u64) = (40, 80);
+
+/// The longest think time of a capacity profile's client, in milliseconds.
+pub const CAPACITY_THINK_MS: u64 = 40;
+
+/// How a run's heal finishes (§10.2, D-53).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealMode {
+    /// A new, uniquely identified PUT applied everywhere proves convergence.
+    Marker,
+    /// The marker key was created in the baseline and is overwritten with an equal-size value,
+    /// so a full live quota cannot refuse it (DM-6).
+    PreCreatedMarker,
+    /// No marker: a certified drain, then every outstanding write resolved by status lookup
+    /// on every recoverable node (DM-7).
+    Drain,
+}
+
+impl HealMode {
+    /// The name the run manifest records (`keyval.observation/v1`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Marker => "marker",
+            Self::PreCreatedMarker => "precreated_marker",
+            Self::Drain => "drain",
+        }
+    }
+}
 
 /// The operation mix a run's clients draw from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +133,12 @@ pub enum Profile {
     AsymmetricLinks,
     /// Long pauses: the mixed operations while nodes stop taking turns.
     LongPauses,
+    /// Live capacity (DM-6): many writes of distinct keys against small live-key and
+    /// live-byte limits, healed by an equal-size overwrite of a pre-created marker.
+    LiveCapacity,
+    /// History capacity (DM-7): many writes against small log-entry and history-byte limits,
+    /// healed by a certified drain and status lookups, never a marker.
+    HistoryCapacity,
 }
 
 /// The operation kinds a profile's roll chooses among.
@@ -114,7 +153,7 @@ enum Kind {
 
 impl Profile {
     /// Every profile, in the order files and help list them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::PutGet,
         Self::Mixed,
         Self::CasContention,
@@ -125,6 +164,8 @@ impl Profile {
         Self::AllNodeRestart,
         Self::AsymmetricLinks,
         Self::LongPauses,
+        Self::LiveCapacity,
+        Self::HistoryCapacity,
     ];
 
     /// The profile's name in scenario files, manifests and `--workload`.
@@ -141,6 +182,63 @@ impl Profile {
             Self::AllNodeRestart => "all_node_restart",
             Self::AsymmetricLinks => "asymmetric_links",
             Self::LongPauses => "long_pauses",
+            Self::LiveCapacity => "live_capacity",
+            Self::HistoryCapacity => "history_capacity",
+        }
+    }
+
+    /// How a run of this profile heals (§10.2): by the plain marker, by the pre-created
+    /// marker (DM-6) or by a certified drain (DM-7).
+    #[must_use]
+    pub const fn heal_mode(self) -> HealMode {
+        match self {
+            Self::LiveCapacity => HealMode::PreCreatedMarker,
+            Self::HistoryCapacity => HealMode::Drain,
+            Self::PutGet
+            | Self::Mixed
+            | Self::CasContention
+            | Self::ReadIsolation
+            | Self::BoundaryValues
+            | Self::Misuse
+            | Self::DelayedRetries
+            | Self::AllNodeRestart
+            | Self::AsymmetricLinks
+            | Self::LongPauses => HealMode::Marker,
+        }
+    }
+
+    /// The fewest and most operations a client of this profile plans.
+    #[must_use]
+    pub const fn ops(self) -> (u64, u64) {
+        match self {
+            Self::LiveCapacity | Self::HistoryCapacity => CAPACITY_OPS,
+            Self::PutGet
+            | Self::Mixed
+            | Self::CasContention
+            | Self::ReadIsolation
+            | Self::BoundaryValues
+            | Self::Misuse
+            | Self::DelayedRetries
+            | Self::AllNodeRestart
+            | Self::AsymmetricLinks
+            | Self::LongPauses => OPS,
+        }
+    }
+
+    /// The longest think time of a client of this profile, in milliseconds.
+    const fn think_ms(self) -> u64 {
+        match self {
+            Self::LiveCapacity | Self::HistoryCapacity => CAPACITY_THINK_MS,
+            Self::PutGet
+            | Self::Mixed
+            | Self::CasContention
+            | Self::ReadIsolation
+            | Self::BoundaryValues
+            | Self::Misuse
+            | Self::DelayedRetries
+            | Self::AllNodeRestart
+            | Self::AsymmetricLinks
+            | Self::LongPauses => MAX_THINK_MS,
         }
     }
 
@@ -164,7 +262,9 @@ impl Profile {
             | Self::CasContention
             | Self::ReadIsolation
             | Self::BoundaryValues
-            | Self::Misuse => &[],
+            | Self::Misuse
+            | Self::LiveCapacity
+            | Self::HistoryCapacity => &[],
         }
     }
 
@@ -182,7 +282,9 @@ impl Profile {
             | Self::DelayedRetries
             | Self::AllNodeRestart
             | Self::AsymmetricLinks
-            | Self::LongPauses => 0,
+            | Self::LongPauses
+            | Self::LiveCapacity
+            | Self::HistoryCapacity => 0,
         }
     }
 
@@ -209,6 +311,13 @@ impl Profile {
                 20..30 => Kind::Cas,
                 30..70 => Kind::Get,
                 _ => Kind::Scan,
+            },
+            // Write-heavy: the capacity limits are reached by writes (§10.2).
+            Self::LiveCapacity | Self::HistoryCapacity => match roll {
+                0..75 => Kind::Put,
+                75..85 => Kind::Delete,
+                85..95 => Kind::Cas,
+                _ => Kind::Get,
             },
             Self::Mixed
             | Self::BoundaryValues
@@ -403,7 +512,8 @@ impl Plan {
         let mut last: BTreeMap<Key, Value> = BTreeMap::new();
         let clients = (0..clients)
             .map(|number| {
-                let count = OPS.0 + below(rng, OPS.1 - OPS.0 + 1);
+                let (fewest, most) = profile.ops();
+                let count = fewest + below(rng, most - fewest + 1);
                 let ops = (0..count)
                     .map(|op| {
                         let request_id = request_id(rng, number, op);
@@ -447,7 +557,7 @@ impl Plan {
                         };
                         Planned {
                             intent,
-                            think_ms: below(rng, MAX_THINK_MS + 1),
+                            think_ms: below(rng, profile.think_ms() + 1),
                         }
                     })
                     .collect();
@@ -481,6 +591,10 @@ pub enum End {
     Refused,
     /// The retry bounds ran out first: unresolved, never failed (§8.7).
     Unresolved(Exhausted),
+    /// The write never executed and never can: after a certified drain (§10.2, D-53) a status
+    /// lookup on every recoverable node answered `unknown`. The attempts are those lookups,
+    /// one per recoverable node, the evidence for the resolution.
+    NotExecuted(Vec<AttemptId>),
 }
 
 /// How one logical operation ended.
@@ -586,6 +700,43 @@ pub struct Clients {
     misuse_ppm: u32,
     /// Writes whose retry bounds ran out, each with its client, awaiting [`Self::resume_parked`].
     parked: Vec<(usize, Op)>,
+    /// Writes being resolved by status lookups on every recoverable node after a certified
+    /// drain ([`Self::begin_lookups`]).
+    lookups: Vec<Lookup>,
+}
+
+/// How many status lookups one node gets for one write before the resolution gives up on it
+/// (CD-9): the first and the resends after silence.
+pub const LOOKUP_SENDS: u64 = 6;
+
+/// What a node's status lookup has told so far.
+#[derive(Clone, Debug)]
+enum Told {
+    /// No usable answer yet.
+    Waiting,
+    /// The node stored a terminal result.
+    Known(Response),
+    /// The node has no result for the request ID.
+    Unknown,
+}
+
+/// A status lookup on one node.
+#[derive(Clone, Debug)]
+struct Ask {
+    node: NodeId,
+    /// The latest attempt sent.
+    attempt: AttemptId,
+    timeout_ms: u64,
+    sends: u64,
+    told: Told,
+}
+
+/// A parked write being resolved by status lookups: one [`Ask`] per recoverable node.
+#[derive(Clone, Debug)]
+struct Lookup {
+    client: usize,
+    op: Op,
+    asks: Vec<Ask>,
 }
 
 /// How long, in virtual milliseconds, a run lets in-flight misuse attempts land once every
@@ -619,6 +770,7 @@ impl Clients {
             outcomes: Vec::new(),
             misuse_ppm: 0,
             parked: Vec::new(),
+            lookups: Vec::new(),
         }
     }
 
@@ -738,6 +890,201 @@ impl Clients {
         Ok(resumed)
     }
 
+    /// How many writes are still being resolved by status lookups.
+    #[must_use]
+    pub const fn lookups_open(&self) -> usize {
+        self.lookups.len()
+    }
+
+    /// Starts resolving every parked write by a status lookup on each of `nodes` — the
+    /// recoverable nodes — once `drained` certifies the cluster (§10.2, D-53). A write
+    /// resolves as executed when any node stores its result, and as not executed when every
+    /// node answers `unknown`; lookups lost to silence are resent up to [`LOOKUP_SENDS`]
+    /// times per node. Returns how many writes it started on. A write that never gets every
+    /// answer stays unresolved.
+    ///
+    /// # Errors
+    ///
+    /// [`ClusterError`] from scheduling the lookups.
+    pub fn begin_lookups(
+        &mut self,
+        cluster: &mut Cluster,
+        drained: &Certified,
+        nodes: &[NodeId],
+    ) -> Result<usize, ClusterError> {
+        types::invariant!(
+            drained.quiet_ticks() > 0 && !nodes.is_empty(),
+            "CLIENTS-LOOKUPS",
+            "lookups need a certified drain over a quiet period and at least one node: \
+             quiet_ticks={} nodes={nodes:?}",
+            drained.quiet_ticks()
+        );
+        self.now_ms = self.now_ms.max(cluster.now().as_micros() / 1_000);
+        let parked = std::mem::take(&mut self.parked);
+        let started = parked.len();
+        for (client, op) in parked {
+            let mut asks = Vec::new();
+            for node in nodes {
+                let (attempt, timeout_ms) = self.ask(cluster, client, &op, *node)?;
+                asks.push(Ask {
+                    node: *node,
+                    attempt,
+                    timeout_ms,
+                    sends: 1,
+                    told: Told::Waiting,
+                });
+            }
+            self.lookups.push(Lookup { client, op, asks });
+        }
+        Ok(started)
+    }
+
+    /// Sends one status lookup of `op`'s write to `node`; returns the attempt and its
+    /// silence deadline.
+    fn ask(
+        &mut self,
+        cluster: &mut Cluster,
+        client: usize,
+        op: &Op,
+        node: NodeId,
+    ) -> Result<(AttemptId, u64), ClusterError> {
+        let Some(request_id) = op.request_id() else {
+            types::invariant!(
+                false,
+                "LOOKUP-REQUEST",
+                "a lookup is only asked for a write with a request id: client={client} op={}",
+                op.index
+            );
+            return Err(ClusterError::Setup("a lookup needs a request id"));
+        };
+        let request = ClientOp::Status { request_id };
+        let id = ClientId::new(u64::try_from(client).unwrap_or(u64::MAX));
+        let attempt = cluster.submit(
+            VirtualTime::from_micros(self.now_ms.saturating_mul(1_000)),
+            id,
+            node,
+            request.clone(),
+        )?;
+        self.sends.push(SentAttempt {
+            client: id,
+            op: op.index,
+            attempt,
+            node,
+            at_ms: self.now_ms,
+            request,
+            misuse: false,
+        });
+        Ok((
+            attempt,
+            self.now_ms.saturating_add(self.response_timeout_ms),
+        ))
+    }
+
+    /// Records `response` to the lookup attempt `attempt`, if a lookup waits on it. Returns
+    /// whether one did.
+    fn hear_lookup(&mut self, attempt: AttemptId, response: &Response) -> bool {
+        // A non-answer waits a full response timeout before the resend, not a busy loop.
+        let retry_at = self.now_ms.saturating_add(self.response_timeout_ms);
+        for lookup in &mut self.lookups {
+            let Some(ask) = lookup.asks.iter_mut().find(|ask| ask.attempt == attempt) else {
+                continue;
+            };
+            match ask.told {
+                Told::Waiting => match response {
+                    Response::Status {
+                        state: RequestState::Known(_),
+                        ..
+                    } => ask.told = Told::Known(response.clone()),
+                    Response::Status {
+                        state: RequestState::Unknown,
+                        ..
+                    } => ask.told = Told::Unknown,
+                    // Not an answer about the request (refused, unavailable, ...): ask again
+                    // at the next look.
+                    Response::Written { .. }
+                    | Response::Conflict { .. }
+                    | Response::Found { .. }
+                    | Response::NotFound { .. }
+                    | Response::Page(_)
+                    | Response::Refused(_) => ask.timeout_ms = retry_at,
+                },
+                Told::Known(_) | Told::Unknown => {}
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Resends the lookups whose answer did not come in time.
+    fn hear_lookup_silences(&mut self, cluster: &mut Cluster) -> Result<(), ClusterError> {
+        for at in 0..self.lookups.len() {
+            for ask_at in 0..self.lookups[at].asks.len() {
+                let ask = &self.lookups[at].asks[ask_at];
+                let silent = matches!(ask.told, Told::Waiting)
+                    && ask.timeout_ms <= self.now_ms
+                    && ask.sends < LOOKUP_SENDS;
+                if !silent {
+                    continue;
+                }
+                let node = ask.node;
+                let client = self.lookups[at].client;
+                let op = self.lookups[at].op.clone();
+                let (attempt, timeout_ms) = self.ask(cluster, client, &op, node)?;
+                let ask = &mut self.lookups[at].asks[ask_at];
+                ask.attempt = attempt;
+                ask.timeout_ms = timeout_ms;
+                ask.sends += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Settles every lookup that has its answer: any stored result resolves the write as
+    /// executed; every node saying `unknown` resolves it as not executed.
+    fn settle_lookups(&mut self) {
+        let mut open = Vec::new();
+        for lookup in std::mem::take(&mut self.lookups) {
+            let known = lookup.asks.iter().find_map(|ask| match &ask.told {
+                Told::Known(response) => Some((ask.attempt, response.clone())),
+                Told::Waiting | Told::Unknown => None,
+            });
+            let all_unknown = lookup
+                .asks
+                .iter()
+                .all(|ask| matches!(ask.told, Told::Unknown));
+            let sends: u64 = lookup.asks.iter().map(|ask| ask.sends).sum();
+            let (end, decided_by) = match known {
+                Some((attempt, response)) => (End::Done(response), Some(attempt)),
+                None if all_unknown => (
+                    End::NotExecuted(lookup.asks.iter().map(|ask| ask.attempt).collect()),
+                    None,
+                ),
+                None => {
+                    open.push(lookup);
+                    continue;
+                }
+            };
+            let client = ClientId::new(u64::try_from(lookup.client).unwrap_or(u64::MAX));
+            let found = self
+                .outcomes
+                .iter_mut()
+                .find(|outcome| outcome.client == client && outcome.op == lookup.op.index);
+            types::invariant!(
+                found.is_some(),
+                "LOOKUP-OUTCOME",
+                "a settled lookup has its outcome record: client={client:?} op={}",
+                lookup.op.index
+            );
+            if let Some(ended) = found {
+                ended.end = end;
+                ended.decided_by = decided_by;
+                ended.sends += sends;
+                ended.at_ms = self.now_ms;
+            }
+        }
+        self.lookups = open;
+    }
+
     /// These clients with the misuse stream on: each write that ends with a terminal result
     /// is followed by one misuse attempt with probability `ppm` in a million (capped at all
     /// of them).
@@ -772,6 +1119,7 @@ impl Clients {
             .iter()
             .zip(&self.plan.clients)
             .all(|(progress, plan)| progress.running.is_none() && progress.next >= plan.ops.len())
+            && self.lookups.is_empty()
     }
 
     /// Runs the cluster and the clients until `until`, or until every client has finished.
@@ -792,6 +1140,8 @@ impl Clients {
             self.now_ms = step.as_micros() / 1_000;
             self.hear_answers(cluster)?;
             self.hear_silences(cluster)?;
+            self.hear_lookup_silences(cluster)?;
+            self.settle_lookups();
             self.start_ready(cluster)?;
         }
         if self.misuse_ppm > 0 {
@@ -817,6 +1167,9 @@ impl Clients {
             .collect();
         self.heard += fresh.len();
         for (client, attempt, response) in fresh {
+            if self.hear_lookup(attempt, &response) {
+                continue;
+            }
             let Some(at) = usize::try_from(client.get())
                 .ok()
                 .filter(|at| *at < self.progress.len())

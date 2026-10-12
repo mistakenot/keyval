@@ -13,7 +13,7 @@ use std::path::Path;
 use serde_json::Value;
 use types::Config;
 
-use crate::clients::{Clients, Plan, Profile};
+use crate::clients::{Clients, HealMode, Plan, Profile};
 use crate::cluster::Cluster;
 use crate::entropy::{MasterSeed, Subsystem};
 use crate::net::{LinkProfile, NetConfig, Ppm, QueueBound};
@@ -80,6 +80,7 @@ fn run(seed: u64, misuse: u32) -> (Clients, Cluster, Config, Meta) {
         max_events: EventBudget::DEFAULT.get(),
         chaos_ticks: 1,
         heal_budget_ticks: 1,
+        heal: HealMode::Marker,
         quiet_ticks: 1,
         phases: Phases {
             setup: start,
@@ -432,6 +433,7 @@ fn a_phase_follows_every_record_made_before_its_mark() {
             max_events: EventBudget::DEFAULT.get(),
             chaos_ticks: 1,
             heal_budget_ticks: 1,
+            heal: HealMode::Marker,
             quiet_ticks: 1,
             phases: Phases {
                 setup: marks[0],

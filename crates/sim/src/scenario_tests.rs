@@ -68,7 +68,7 @@ fn plan() -> Plan {
 }
 
 fn judge(chaos_ms: u64, faults: &[Timed]) -> Result<(), Violation> {
-    validate(everything(), chaos_ms, faults, &plan())
+    validate(everything(), chaos_ms, faults, &plan(), Profile::PutGet)
 }
 
 #[test]
@@ -106,7 +106,8 @@ fn generated_scenarios_stay_inside_the_healthy_envelope_by_construction() {
                     scenario.swarm(),
                     scenario.chaos_ms(),
                     scenario.faults(),
-                    scenario.plan()
+                    scenario.plan(),
+                    scenario.workload()
                 ),
                 Ok(()),
                 "rule: a generated scenario passes the §9.4 checks; seed={seed} profile={profile:?}"
@@ -757,13 +758,16 @@ fn the_control_and_a_disabled_type_refuse_every_fault_but_not_a_quiet_schedule()
         timed(300, Step::Pause { node: node(1) }),
         timed(800, Step::Resume { node: node(1) }),
     ];
-    assert_eq!(validate(swarm, 3_000, &steps, &plan()), Ok(()));
     assert_eq!(
-        validate(Swarm::Control, 3_000, &steps, &plan()),
+        validate(swarm, 3_000, &steps, &plan(), Profile::PutGet),
+        Ok(())
+    );
+    assert_eq!(
+        validate(Swarm::Control, 3_000, &steps, &plan(), Profile::PutGet),
         Err(Violation::ControlInjects { at_ms: 300 })
     );
     assert_eq!(
-        validate(Swarm::Control, 3_000, &[], &plan()),
+        validate(Swarm::Control, 3_000, &[], &plan(), Profile::PutGet),
         Ok(()),
         "rule: the control with nothing scheduled is valid"
     );
@@ -778,7 +782,7 @@ fn the_control_and_a_disabled_type_refuse_every_fault_but_not_a_quiet_schedule()
         timed(900, Step::Restart { node: node(1) }),
     ];
     assert_eq!(
-        validate(swarm, 3_000, &crash, &plan()),
+        validate(swarm, 3_000, &crash, &plan(), Profile::PutGet),
         Err(Violation::DisabledFault {
             at_ms: 300,
             kind: FaultKind::CrashRestart
@@ -1287,7 +1291,8 @@ fn an_arm_step_is_judged_like_a_crash() {
                 only_pauses,
                 10_000,
                 &[arm(2, CrashPoint::BeforeReply, 1_000)],
-                &plan()
+                &plan(),
+                Profile::PutGet
             ),
             Err(Violation::DisabledFault {
                 kind: FaultKind::CrashRestart,
@@ -1302,7 +1307,8 @@ fn an_arm_step_is_judged_like_a_crash() {
                 Swarm::Control,
                 10_000,
                 &[arm(2, CrashPoint::BeforeReply, 1_000)],
-                &plan()
+                &plan(),
+                Profile::PutGet
             ),
             Err(Violation::ControlInjects { .. })
         ),

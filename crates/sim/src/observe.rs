@@ -32,7 +32,7 @@ use types::{
 };
 use types::{Refusal, ScanItem};
 
-use crate::clients::{Clients, End, Outcome, SentAttempt};
+use crate::clients::{Clients, End, HealMode, Outcome, SentAttempt};
 use crate::cluster::{Cluster, Observed};
 use crate::scheduler::{NodeIncarnation, VirtualTime};
 
@@ -96,6 +96,8 @@ pub struct Meta {
     pub chaos_ticks: u64,
     /// The heal's budget in ticks.
     pub heal_budget_ticks: u64,
+    /// How the heal completes.
+    pub heal: HealMode,
     /// The drain's quiet period in ticks.
     pub quiet_ticks: u64,
     /// When each phase began.
@@ -558,6 +560,13 @@ fn resolution(outcome: Option<&Outcome>) -> (&'static str, Option<u64>, Vec<u64>
             ..
         }) => ("executed", Some(result.index().get()), evidence),
         End::Refused => ("refused", None, evidence),
+        // After a certified drain every recoverable node answered `unknown`: the lookups are
+        // the evidence (§10.2).
+        End::NotExecuted(lookups) => (
+            "not_executed",
+            None,
+            lookups.iter().map(|attempt| attempt.get()).collect(),
+        ),
         End::Done(
             Response::Status {
                 state: RequestState::Unknown,
@@ -787,7 +796,7 @@ fn manifest(config: &Config, meta: &Meta) -> Result<Value, ObserveError> {
         "scenario_version": safe("scenario version", meta.scenario_version)?,
         "seed": safe("seed", meta.seed)?,
         "profile": meta.profile,
-        "heal": "marker",
+        "heal": meta.heal.name(),
         "build_id": meta.build_id,
         "config_fingerprint": config.semantic_fingerprint().to_string(),
         "prng": meta.prng,

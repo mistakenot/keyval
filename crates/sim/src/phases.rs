@@ -16,6 +16,12 @@
 //!    budget is [`HEAL_BUDGET_TICKS`] ticks (§9.4).
 //! 5. **Check:** the run's observations are complete and the checkers judge them (W38+).
 //!
+//! A capacity profile adapts the heal (W43.2; §10.2, D-53). A live-quota run (DM-6) creates
+//! the marker key in the baseline, so the marker overwrites it with a value of the same size
+//! and cannot be refused. A history run (DM-7) writes no marker, which a full history would
+//! refuse: it waits for a certified drain ([`crate::drain`]) and then resolves each
+//! outstanding write by status lookup on every recoverable node.
+//!
 //! The heal ends two ways. [`Heal::Converged`] carries what K-7 compares (each recoverable
 //! node's applied index and state digest once the marker is applied everywhere) and what K-9
 //! times. [`Heal::Stalled`] is the run's own finding that the heal did not finish within its
@@ -36,8 +42,9 @@
 use statemachine::StateDigest;
 use types::{Config, Key, KeyValueLimits, LogIndex, NodeId, RequestId, Value};
 
-use crate::clients::{Clients, End, Intent, Planned};
+use crate::clients::{Clients, End, HealMode, Intent, Planned};
 use crate::cluster::{Cluster, ClusterError};
+use crate::drain::{Certified, QUIET_TICKS, QuietClock, Sample};
 use crate::nemesis::Fault;
 use crate::observe::{Mark, Phases};
 use crate::scenario::{HEALTHY_CLIENT, HEALTHY_PEER, Scenario, ScenarioError};
@@ -121,25 +128,55 @@ pub struct NodeEnd {
     pub digest: StateDigest,
 }
 
-/// A heal that finished: every outstanding write resolved and the marker applied on every
-/// recoverable node.
+/// The catch-up marker a heal wrote.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Converged {
-    /// The catch-up marker's request ID.
-    pub marker: RequestId,
+pub struct MarkerEnd {
+    /// The marker's request ID.
+    pub id: RequestId,
     /// The marker's key.
     pub key: Key,
     /// The marker's value.
     pub value: Value,
-    /// How many ticks the heal took, from its start to the marker applied everywhere.
+    /// Whether the key was created in the baseline, so the marker overwrote a value of the
+    /// same size (DM-6).
+    pub pre_created: bool,
+}
+
+/// What proved a heal converged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Completion {
+    /// The marker was applied on every recoverable node.
+    Marker(MarkerEnd),
+    /// No marker: the drain was certified and every outstanding write resolved by status
+    /// lookup on every recoverable node (DM-7).
+    Drain(Certified),
+}
+
+/// A heal that finished: every outstanding write resolved and the cluster proven converged
+/// by its [`Completion`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Converged {
+    /// How convergence was proved.
+    pub completion: Completion,
+    /// How many ticks the heal took, from its start to its completion.
     pub ticks: u64,
-    /// Each recoverable node, in node order, with its state when the marker was applied
-    /// everywhere.
+    /// Each recoverable node, in node order, with its state at completion.
     pub nodes: Vec<NodeEnd>,
     /// The nodes lost for good, in node order.
     pub lost: Vec<NodeId>,
     /// How many unresolved writes the heal resumed (counting a write each time).
     pub resumed: usize,
+}
+
+impl Converged {
+    /// The catch-up marker's request ID, if the heal wrote one.
+    #[must_use]
+    pub const fn marker(&self) -> Option<RequestId> {
+        match &self.completion {
+            Completion::Marker(marker) => Some(marker.id),
+            Completion::Drain(_) => None,
+        }
+    }
 }
 
 /// The stage a stalled heal was in.
@@ -220,10 +257,25 @@ pub fn run_with(
     // Baseline: no fault is scheduled, and the plan's clients wait.
     let baseline = Mark::of(&cluster);
     clients.hold_plan();
-    let writes = baseline_writes(scenario, limits);
+    let mode = scenario.workload().heal_mode();
+    let mut writes = baseline_writes(scenario, limits);
+    if mode == HealMode::PreCreatedMarker {
+        // DM-6: the marker key exists before chaos, so the heal's marker only overwrites it
+        // with a value of the same size and a full live quota cannot refuse it.
+        let origin = Marker::origin(config, scenario);
+        types::invariant!(
+            origin.is_some(),
+            "HEAL-ORIGIN",
+            "a pre-created-marker profile has a marker to pre-create: seed={}",
+            scenario.seed().get()
+        );
+        writes.extend(origin);
+    }
+    let expected = writes.len();
     let client = clients.add_client(writes, 0);
     let deadline = VirtualTime::from_micros(BASELINE_BUDGET_MS * MS);
-    while cluster.now() < deadline && !baseline_done(&clients, client_index(client.get())) {
+    while cluster.now() < deadline && !baseline_done(&clients, client_index(client.get()), expected)
+    {
         advance(&mut cluster, &mut clients, SLICE_MS)?;
     }
     let done = clients
@@ -231,7 +283,7 @@ pub fn run_with(
         .iter()
         .filter(|outcome| outcome.client == client && matches_done(&outcome.end))
         .count();
-    if done != BASELINE_WRITES {
+    if done != expected {
         return Err(RunError::Baseline { done });
     }
 
@@ -247,7 +299,14 @@ pub fn run_with(
 
     // Heal.
     let heal_mark = Mark::of(&cluster);
-    let heal = heal(config, scenario, &mut cluster, &mut clients, budget_ticks)?;
+    let heal = heal(
+        config,
+        scenario,
+        mode,
+        &mut cluster,
+        &mut clients,
+        budget_ticks,
+    )?;
     let check = Mark::of(&cluster);
     Ok(Finished {
         cluster,
@@ -296,21 +355,21 @@ fn client_index(number: u64) -> usize {
     usize::try_from(number).unwrap_or(usize::MAX)
 }
 
-/// Whether the baseline client has ended every operation.
-fn baseline_done(clients: &Clients, client: usize) -> bool {
+/// Whether the baseline client has ended all `expected` operations.
+fn baseline_done(clients: &Clients, client: usize, expected: usize) -> bool {
     clients
         .outcomes()
         .iter()
         .filter(|outcome| client_index(outcome.client.get()) == client)
         .count()
-        >= BASELINE_WRITES
+        >= expected
 }
 
 /// Whether an end is a terminal answer (not a refusal and not unresolved).
 const fn matches_done(end: &End) -> bool {
     match end {
         End::Done(_) => true,
-        End::Refused | End::Unresolved(_) => false,
+        End::Refused | End::Unresolved(_) | End::NotExecuted(_) => false,
     }
 }
 
@@ -354,6 +413,29 @@ impl Marker {
             id: role_request_id(scenario, MARKER_ROLE, 0),
             key: Key::parse("heal-marker".to_owned(), limits).ok()?,
             value: Value::parse(format!("marker-{}", scenario.seed().get()), limits).ok()?,
+        })
+    }
+
+    /// The baseline write that creates the marker's key with a value of the marker's length
+    /// (DM-6): `origin-<seed>` against `marker-<seed>`.
+    fn origin(config: &Config, scenario: &Scenario) -> Option<Planned> {
+        let marker = Self::of(config, scenario)?;
+        let limits = config.key_value_limits();
+        let value = Value::parse(format!("origin-{}", scenario.seed().get()), limits).ok()?;
+        types::invariant!(
+            value.byte_len() == marker.value.byte_len(),
+            "HEAL-ORIGIN",
+            "the pre-created marker value has the marker's size: {} vs {}",
+            value.byte_len(),
+            marker.value.byte_len()
+        );
+        Some(Planned {
+            intent: Intent::Put {
+                request_id: role_request_id(scenario, MARKER_ROLE, 1),
+                key: marker.key,
+                value,
+            },
+            think_ms: 0,
         })
     }
 
@@ -408,6 +490,7 @@ fn restore(cluster: &mut Cluster, recoverable: &[NodeId]) -> Result<Vec<Fault>, 
 fn heal(
     config: &Config,
     scenario: &Scenario,
+    mode: HealMode,
     cluster: &mut Cluster,
     clients: &mut Clients,
     budget_ticks: u64,
@@ -430,62 +513,24 @@ fn heal(
     let restores = restore(cluster, &recoverable)?;
 
     let deadline = VirtualTime::from_micros(began.as_micros() + budget_ticks * tick_ms * MS);
-    let mut resumed = 0;
-    let mut marker: Option<Marker> = None;
-    let outcome = loop {
-        resumed += clients.resume_parked(cluster)?;
-        let stage = stage_of(cluster, clients, &recoverable, marker.as_ref());
-        if let Some(marker) = &marker {
-            let refused = clients.outcomes().iter().any(|outcome| {
-                outcome.request_id == Some(marker.id) && outcome.end == End::Refused
-            });
-            if refused {
-                return Err(RunError::MarkerRefused);
-            }
-        }
-        if stage.is_none() {
-            if let Some(marker) = marker {
-                break Heal::Converged(Converged {
-                    marker: marker.id,
-                    key: marker.key,
-                    value: marker.value,
-                    ticks: ticks_since(cluster, began, tick_ms),
-                    nodes: node_ends(cluster, &recoverable),
-                    lost,
-                    resumed,
-                });
-            }
-            // Every write is resolved: the marker goes out now, as its own client.
-            let Some(made) = Marker::of(config, scenario) else {
-                types::invariant!(false, "HEAL-MARKER", "the marker fits the limits");
-                break stalled(
-                    Stage::Marker,
-                    cluster,
-                    began,
-                    tick_ms,
-                    clients,
-                    &recoverable,
-                    None,
-                );
-            };
-            clients.add_client(vec![made.planned()], ms_of(cluster.now()));
-            marker = Some(made);
-        }
-        if cluster.now() >= deadline {
-            break stalled(
-                stage.unwrap_or(Stage::Marker),
-                cluster,
-                began,
-                tick_ms,
-                clients,
-                &recoverable,
-                marker.as_ref().map(|marker| marker.id),
-            );
-        }
-        let to = VirtualTime::from_micros(
-            (cluster.now().as_micros() + SLICE_MS * MS).min(deadline.as_micros()),
-        );
-        advance_to(cluster, clients, to)?;
+    let outcome = match mode {
+        HealMode::Drain => drain_heal(
+            cluster,
+            clients,
+            (began, deadline),
+            tick_ms,
+            lost,
+            &recoverable,
+        )?,
+        HealMode::Marker | HealMode::PreCreatedMarker => marker_heal(
+            (config, scenario),
+            mode == HealMode::PreCreatedMarker,
+            cluster,
+            clients,
+            (began, deadline),
+            lost,
+            &recoverable,
+        )?,
     };
 
     // Exactly the restores were scheduled since the heal began, each once.
@@ -501,6 +546,142 @@ fn heal(
         return Err(RunError::FaultDuringHeal { faults: extra });
     }
     Ok(outcome)
+}
+
+/// The marker heal: resume the unresolved writes, write the marker, wait until every
+/// recoverable node has applied it.
+fn marker_heal(
+    (config, scenario): (&Config, &Scenario),
+    pre_created: bool,
+    cluster: &mut Cluster,
+    clients: &mut Clients,
+    (began, deadline): (VirtualTime, VirtualTime),
+    lost: Vec<NodeId>,
+    recoverable: &[NodeId],
+) -> Result<Heal, RunError> {
+    let tick_ms = config.tick_ms();
+    let mut resumed = 0;
+    let mut marker: Option<Marker> = None;
+    loop {
+        resumed += clients.resume_parked(cluster)?;
+        let stage = stage_of(cluster, clients, recoverable, marker.as_ref());
+        if let Some(marker) = &marker {
+            let refused = clients.outcomes().iter().any(|outcome| {
+                outcome.request_id == Some(marker.id) && outcome.end == End::Refused
+            });
+            if refused {
+                return Err(RunError::MarkerRefused);
+            }
+        }
+        if stage.is_none() {
+            if let Some(marker) = marker {
+                return Ok(Heal::Converged(Converged {
+                    completion: Completion::Marker(MarkerEnd {
+                        id: marker.id,
+                        key: marker.key,
+                        value: marker.value,
+                        pre_created,
+                    }),
+                    ticks: ticks_since(cluster, began, tick_ms),
+                    nodes: node_ends(cluster, recoverable),
+                    lost,
+                    resumed,
+                }));
+            }
+            // Every write is resolved: the marker goes out now, as its own client.
+            let Some(made) = Marker::of(config, scenario) else {
+                types::invariant!(false, "HEAL-MARKER", "the marker fits the limits");
+                return Ok(stalled(
+                    Stage::Marker,
+                    cluster,
+                    began,
+                    tick_ms,
+                    clients,
+                    recoverable,
+                    None,
+                ));
+            };
+            clients.add_client(vec![made.planned()], ms_of(cluster.now()));
+            marker = Some(made);
+        }
+        if cluster.now() >= deadline {
+            return Ok(stalled(
+                stage.unwrap_or(Stage::Marker),
+                cluster,
+                began,
+                tick_ms,
+                clients,
+                recoverable,
+                marker.as_ref().map(|marker| marker.id),
+            ));
+        }
+        let to = VirtualTime::from_micros(
+            (cluster.now().as_micros() + SLICE_MS * MS).min(deadline.as_micros()),
+        );
+        advance_to(cluster, clients, to)?;
+    }
+}
+
+/// The drain heal (DM-7, §10.2, D-53): no marker, because a full history would refuse it.
+/// Clients have stopped; in-flight operations run to their ends. Once the cluster has shown
+/// a drain for the whole quiet period, every write left unresolved is looked up on every
+/// recoverable node, and the heal converges when each lookup resolved. It never resumes a
+/// write: a resend could be refused or executed, and the lookup is what decides.
+fn drain_heal(
+    cluster: &mut Cluster,
+    clients: &mut Clients,
+    (began, deadline): (VirtualTime, VirtualTime),
+    tick_ms: u64,
+    lost: Vec<NodeId>,
+    recoverable: &[NodeId],
+) -> Result<Heal, RunError> {
+    // Packets still in flight from the chaos phase are bounded by the longest chaos delay;
+    // the quiet period must outlast it, or "no change" could hide a delivery yet to come.
+    types::invariant!(
+        QUIET_TICKS.saturating_mul(tick_ms).saturating_mul(1_000)
+            > crate::swarm::Intensity::High.max_delay_us(),
+        "DRAIN-QUIET",
+        "the quiet period outlasts the longest chaos delay: ticks={QUIET_TICKS} tick_ms={tick_ms}"
+    );
+    let mut clock = QuietClock::new(QUIET_TICKS, tick_ms);
+    let mut certified: Option<Certified> = None;
+    loop {
+        if certified.is_none() {
+            let sample = Sample::of(cluster, recoverable, clients.in_flight());
+            certified = clock.observe(cluster.now(), &sample.judge());
+            if let Some(drained) = &certified {
+                clients.begin_lookups(cluster, drained, recoverable)?;
+            }
+        }
+        if let Some(drained) = certified
+            && clients.in_flight() == 0
+            && clients.parked() == 0
+            && clients.lookups_open() == 0
+        {
+            return Ok(Heal::Converged(Converged {
+                completion: Completion::Drain(drained),
+                ticks: ticks_since(cluster, began, tick_ms),
+                nodes: node_ends(cluster, recoverable),
+                lost,
+                resumed: 0,
+            }));
+        }
+        if cluster.now() >= deadline {
+            return Ok(stalled(
+                Stage::Resolving,
+                cluster,
+                began,
+                tick_ms,
+                clients,
+                recoverable,
+                None,
+            ));
+        }
+        let to = VirtualTime::from_micros(
+            (cluster.now().as_micros() + SLICE_MS * MS).min(deadline.as_micros()),
+        );
+        advance_to(cluster, clients, to)?;
+    }
 }
 
 /// Whole ticks from `began` to now, rounded up.
@@ -573,7 +754,7 @@ fn stalled(
     Heal::Stalled(Stalled {
         stage,
         ticks: ticks_since(cluster, began, tick_ms),
-        unresolved: clients.in_flight() + clients.parked(),
+        unresolved: clients.in_flight() + clients.parked() + clients.lookups_open(),
         lagging: marker.map_or_else(Vec::new, |id| lagging(cluster, recoverable, id)),
     })
 }
