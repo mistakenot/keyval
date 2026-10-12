@@ -6,6 +6,7 @@
 use serde_json::json;
 
 use super::support::{assert_keys, each_target, error, fresh_id, fresh_prefix, index_of, ok};
+use crate::poll::Index;
 use crate::tag::{Class, Tag};
 
 const KNOWN: Tag = Tag {
@@ -26,7 +27,10 @@ pub(super) fn status_of_an_executed_write_is_known_and_replayed() {
         let key = format!("{}k", fresh_prefix());
         let (put_id, delete_id, cas_id) = (fresh_id(), fresh_id(), fresh_id());
         let put = ok(&node.put(&key, "v", &put_id), "PUT");
-        let status = ok(&node.status(&put_id), "status of the PUT");
+        let status = ok(
+            &node.status_after(&put_id, index_of(&put)),
+            "status of the PUT",
+        );
         assert_keys(
             &status,
             &["result", "served_by", "state"],
@@ -48,7 +52,10 @@ pub(super) fn status_of_an_executed_write_is_known_and_replayed() {
             );
         }
         let delete = ok(&node.delete(&key, &delete_id), "DELETE");
-        let status = ok(&node.status(&delete_id), "status of the DELETE");
+        let status = ok(
+            &node.status_after(&delete_id, index_of(&delete)),
+            "status of the DELETE",
+        );
         assert_eq!(
             status["state"], "known",
             "rule: a DELETE is known; body={status}"
@@ -65,7 +72,10 @@ pub(super) fn status_of_an_executed_write_is_known_and_replayed() {
         let wrong = json!({"kind": "version", "version": 1});
         let mismatch = node.cas(&key, &wrong, "x", &cas_id);
         let details = error(&mismatch, 409, "version_mismatch", "CAS on a deleted key");
-        let status = ok(&node.status(&cas_id), "status of the mismatched CAS");
+        let status = ok(
+            &node.status_after(&cas_id, Index(details["index"].as_u64().unwrap_or(0))),
+            "status of the mismatched CAS",
+        );
         assert_eq!(
             status["state"], "known",
             "rule: a committed mismatch is known; {status}"

@@ -2526,6 +2526,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 12,
     },
+    CheckDef {
+        id: "CONF-TOPOLOGY",
+        summary: "Topology conformance (§10.8, W32.2): three HTTP-only tests that need a real five-node cluster (CONFORMANCE_CLUSTER_URLS) and, for the two that kill nodes, the config ./dev cluster manages (CONFORMANCE_CLUSTER_CONFIG). A follower answers every write shape (PUT, DELETE, CAS) 307 not_leader with Location the leader's URL for the same path and query (F-7) and the request ID echoed; with a quorum killed through ./dev cluster kill, writes are 503 unavailable with attempt_state not_submitted and the five client URLs, and are never acknowledged; a node restarted through ./dev cluster restart reports starting or recovering on liveness, readiness and writes until it is ready, then serves the data it had committed (O-1, §7.7). Killed nodes are always restarted and the tests take an exclusive gate against the semantic runs. With no cluster named the tests exercise nothing (CONFORMANCE_REQUIRE_CLUSTER makes that a failure), so the T0 run is test evidence of the harness; the cluster run is test evidence against a real cluster, not proof",
+        kind: Kind::TestGroup,
+        covers: &["F-7", "O-1"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "conformance",
+            filters: &["suite::topology::"],
+        },
+        min_cases: 3,
+    },
 ];
 
 /// Outcome of one requested check.

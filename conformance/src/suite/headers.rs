@@ -2,7 +2,9 @@
 
 #![cfg(test)]
 
-use super::support::{Node, assert_no_store, each_target, enc, fresh_id, fresh_prefix, ok, say};
+use super::support::{
+    Node, assert_no_store, each_target, enc, fresh_id, fresh_prefix, index_of, ok, say,
+};
 use crate::http::Response;
 use crate::tag::{Class, Tag};
 
@@ -192,7 +194,7 @@ fn health_and_cluster_report_their_required_fields() {
             &node.put(&format!("{}k", fresh_prefix()), "v", &fresh_id()),
             "PUT",
         );
-        let cluster = ok(&node.get("/v1/cluster"), "cluster status");
+        let cluster = ok(&node.cluster_after(index_of(&put)), "cluster status");
         for field in [
             "node_id",
             "cluster_id",

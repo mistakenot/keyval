@@ -11,6 +11,7 @@ use model::Limits;
 use super::support::{
     assert_keys, each_target, error, fresh_id, fresh_prefix, index_of, ok, with_model,
 };
+use crate::poll::Index;
 use crate::tag::{Class, Tag};
 
 /// A key of exactly `bytes` UTF-8 bytes under `prefix`, padded with `filler`.
@@ -299,7 +300,10 @@ fn live_key_quota_refuses_new_keys_as_a_terminal_result() {
             replay["index"], details["index"],
             "rule: the same terminal result"
         );
-        let status = ok(&node.status(&refused_id), "status of the refused write");
+        let status = ok(
+            &node.status_after(&refused_id, Index(details["index"].as_u64().unwrap_or(0))),
+            "status of the refused write",
+        );
         assert_eq!(
             status["state"], "known",
             "rule: a terminal refusal is known; {status}"

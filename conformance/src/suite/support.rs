@@ -5,8 +5,8 @@
 use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,6 +21,49 @@ use crate::poll::{self, Index, Policy, PollError, SystemClock};
 use crate::spec::Spec;
 use crate::tag::{Class, Tag, validate_all};
 use crate::target::{BaseUrl, Kind, Targets};
+
+/// Orders semantic runs on the real cluster against the tests that kill and restart its
+/// nodes: a semantic run holds the shared side, a disruptive topology test the exclusive one,
+/// so no semantic request meets a half-dead cluster.
+static CLUSTER_GATE: RwLock<()> = RwLock::new(());
+
+/// The shared side of [`CLUSTER_GATE`]: a test that only talks to a healthy cluster.
+pub fn cluster_shared() -> RwLockReadGuard<'static, ()> {
+    CLUSTER_GATE.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The exclusive side of [`CLUSTER_GATE`]: a test that kills or restarts cluster nodes.
+pub fn cluster_exclusive() -> RwLockWriteGuard<'static, ()> {
+    CLUSTER_GATE.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Redirect hops a write follows before the last answer is returned as is.
+const MAX_REDIRECTS: usize = 3;
+
+/// Splits an absolute `Location` into its base URL and origin-form target.
+fn split_location(location: &str) -> (BaseUrl, String) {
+    let rest = location
+        .strip_prefix("http://")
+        .unwrap_or_else(|| panic!("rule: Location is an absolute http URL; got {location:?}"));
+    let slash = rest.find('/').unwrap_or(rest.len());
+    let base = BaseUrl::parse(&format!("http://{}", &rest[..slash]))
+        .unwrap_or_else(|error| panic!("rule: Location names a node; {location:?}: {error}"));
+    (base, rest[slash..].to_owned())
+}
+
+/// A write request of any method, with an optional `Idempotency-Key` and JSON body.
+fn write_request(method: &str, target: &str, id: Option<&str>, body: Option<&str>) -> Request {
+    let mut request = Request::new(method, target);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    if let Some(id) = id {
+        request
+            .headers
+            .push(("Idempotency-Key".to_owned(), id.to_owned()));
+    }
+    request
+}
 
 /// One target a test talks to.
 #[derive(Debug, Clone)]
@@ -59,16 +102,43 @@ impl Node {
         id: Option<&str>,
         body: Option<&str>,
     ) -> Response {
-        let mut request = Request::new(method, target);
-        if let Some(body) = body {
-            request = request.json(body);
+        self.follow_redirects(&write_request(method, target, id, body))
+    }
+
+    /// The same write, sent once to this node: a `307` is returned, not followed.
+    pub fn write_unfollowed(
+        &self,
+        method: &str,
+        target: &str,
+        id: Option<&str>,
+        body: Option<&str>,
+    ) -> Response {
+        self.send(&write_request(method, target, id, body))
+    }
+
+    /// Sends a write the way a standard client does (PLAN.md §8.7): a `307` is followed to
+    /// its `Location` with the same request ID and body, so a semantic test sees the leader's
+    /// answer whichever node it was aimed at. Topology tests use [`Node::send`] and assert on
+    /// the `307` itself.
+    fn follow_redirects(&self, request: &Request) -> Response {
+        let mut at = self.clone();
+        for _ in 0..MAX_REDIRECTS {
+            let response = at.send(request);
+            if response.status != 307 {
+                return response;
+            }
+            let location = response
+                .header("Location")
+                .unwrap_or_else(|| panic!("rule: a 307 carries Location (F-7); from {}", at.base));
+            let (base, target) = split_location(location);
+            assert_eq!(
+                target, request.target,
+                "rule: a 307 Location keeps the same path and query (F-7); from {}",
+                at.base
+            );
+            at.base = base;
         }
-        if let Some(id) = id {
-            request
-                .headers
-                .push(("Idempotency-Key".to_owned(), id.to_owned()));
-        }
-        self.send(&request)
+        at.send(request)
     }
 
     /// `PUT /v1/kv` of a raw (not yet escaped) key.
@@ -108,6 +178,12 @@ impl Node {
         self.get(&format!("/v1/requests/{id}"))
     }
 
+    /// `GET /v1/requests/{id}`, polled until the node has applied `wanted` (C-7): a node that
+    /// has not applied the write yet answers `unknown`, which says nothing about the write.
+    pub fn status_after(&self, id: &str, wanted: Index) -> Response {
+        self.poll_get(&format!("/v1/requests/{id}"), wanted)
+    }
+
     /// `GET /v1/kv` of a raw key, once, with no staleness discipline.
     pub fn read(&self, key: &str) -> Response {
         self.get(&format!("/v1/kv?key={}", enc(key)))
@@ -132,6 +208,23 @@ impl Node {
         policy: Policy,
     ) -> Result<Response, PollError<String>> {
         self.try_poll_get(&format!("/v1/kv?key={}", enc(key)), wanted, policy)
+    }
+
+    /// `GET /v1/cluster`, polled until the node has applied `wanted` (C-7): the view of a
+    /// follower trails the leader's write.
+    pub fn cluster_after(&self, wanted: Index) -> Response {
+        let read = || -> Result<(Index, Response), String> {
+            let response = self.get("/v1/cluster");
+            let view = response.json().map_err(|error| error.to_string())?;
+            let applied = view
+                .get("applied_index")
+                .and_then(Value::as_u64)
+                .map(Index)
+                .ok_or_else(|| format!("rule: cluster status has applied_index; body={view}"))?;
+            Ok((applied, response))
+        };
+        poll::wait_applied(wanted, Policy::DEFAULT, &mut SystemClock::start(), read)
+            .unwrap_or_else(|error| panic!("rule: a cluster view catches up (C-7); {error}"))
     }
 
     /// Polls `GET target` within [`Policy::DEFAULT`]; running out of budget fails the test.
@@ -362,6 +455,7 @@ pub fn each_target(tag: &Tag, check: impl Fn(&Node)) -> usize {
     let targets = Targets::from_lookup(|name| std::env::var(name).ok())
         .unwrap_or_else(|error| panic!("rule: the target environment is valid; {error}"));
     let mut ran = 1;
+    let _healthy = cluster_shared();
     for (kind, base) in targets.selected(tag.class, tag.operations) {
         let node = Node {
             kind,
@@ -372,6 +466,22 @@ pub fn each_target(tag: &Tag, check: impl Fn(&Node)) -> usize {
         ran += 1;
     }
     ran
+}
+
+impl Node {
+    /// A node of a real target at `base`.
+    pub fn at(kind: Kind, base: BaseUrl) -> Self {
+        Self {
+            kind,
+            base,
+            fault: fixtures::active(),
+        }
+    }
+
+    /// The node's base URL.
+    pub const fn base(&self) -> &BaseUrl {
+        &self.base
+    }
 }
 
 /// Runs `check` on a fresh model server under `limits` only: a limit is server

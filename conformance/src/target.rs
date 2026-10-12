@@ -40,12 +40,32 @@ impl Kind {
     }
 }
 
-/// Operations a real single node serves today (PUT/GET, W18). Edit this table when the
-/// server wiring lands, and only then (§10.8).
-const SINGLE_NODE_OPERATIONS: [&str; 2] = ["putKey", "getKey"];
+/// Operations a real single node serves: all nine (W18 PUT/GET, W32.1 the rest). Edit this
+/// table when the server wiring changes, and only then (§10.8).
+const SINGLE_NODE_OPERATIONS: [&str; 9] = [
+    "getKey",
+    "putKey",
+    "deleteKey",
+    "compareAndSwap",
+    "scanKeys",
+    "getRequestStatus",
+    "getLiveness",
+    "getReadiness",
+    "getClusterStatus",
+];
 
-/// Operations a real cluster serves today: none until W32.
-const CLUSTER_OPERATIONS: [&str; 0] = [];
+/// Operations a real cluster node serves: all nine (W32).
+const CLUSTER_OPERATIONS: [&str; 9] = [
+    "getKey",
+    "putKey",
+    "deleteKey",
+    "compareAndSwap",
+    "scanKeys",
+    "getRequestStatus",
+    "getLiveness",
+    "getReadiness",
+    "getClusterStatus",
+];
 
 /// Whether a target of `kind` serves `operation`.
 #[must_use]
@@ -263,20 +283,20 @@ mod tests {
 
     #[test]
     fn activation_follows_the_plan_per_operation() {
-        let put_get = ["putKey", "getKey"];
-        assert_eq!(
-            active_kinds(Class::Semantic, &put_get),
-            [Kind::Model, Kind::SingleNode],
-            "rule: PUT/GET run on model and single node at W18; the cluster waits for W32"
-        );
         assert_eq!(
             active_kinds(Class::Semantic, &["putKey", "scanKeys"]),
+            Kind::ALL,
+            "rule: at W32 every semantic test runs on model, single node and cluster"
+        );
+        assert_eq!(
+            active_kinds(Class::Semantic, &["putKey", "noSuchOperation"]),
             [Kind::Model],
             "rule: one unserved operation keeps a real target out"
         );
-        assert!(
-            active_kinds(Class::Topology, &["getClusterStatus"]).is_empty(),
-            "rule: topology tests never run on the model server, and the cluster serves nothing yet"
+        assert_eq!(
+            active_kinds(Class::Topology, &["getClusterStatus"]),
+            [Kind::ClusterNode],
+            "rule: topology tests run on the cluster only, never the model or a single node"
         );
     }
 

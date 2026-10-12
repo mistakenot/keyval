@@ -155,6 +155,8 @@ struct Inner {
     records: Vec<Value>,
     attempts: u64,
     overflowed: bool,
+    /// The highest index any write answered, which a status lookup waits for (C-7).
+    highest: u64,
     /// Logical writes, in first-invocation order.
     ids: BTreeMap<String, Value>,
 }
@@ -214,6 +216,9 @@ impl Recorder {
     /// Records an answer the client received.
     fn answer(&self, attempt: u64, op: &str, outcome: &Value) {
         let mut inner = self.lock();
+        if outcome["code"] == "ok" {
+            inner.highest = inner.highest.max(outcome["index"].as_u64().unwrap_or(0));
+        }
         inner.push(json!({"kind": "response", "attempt": attempt,
             "from": {"node": 1, "incarnation": 0}, "generation": attempt, "op": op,
             "outcome": outcome}));
@@ -232,7 +237,8 @@ impl Recorder {
     /// One status lookup of `id`; the index of its known result, if the write is known.
     fn lookup(&self, client: u64, node: &Node, id: &str) -> Option<(u64, u64)> {
         let attempt = self.invoke(client, &json!({"op": "status", "request_id": id}), None);
-        let response = node.status(id);
+        let wanted = Index(self.lock().highest);
+        let response = node.status_after(id, wanted);
         let body = response
             .json()
             .unwrap_or_else(|error| panic!("rule: a body is JSON; {error}; {}", say(&response)));
