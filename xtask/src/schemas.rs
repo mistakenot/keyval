@@ -55,6 +55,8 @@ const IDS: &[&str] = &[
     crate::sim::SCHEMA,
     crate::sim_campaign::RUN_SCHEMA,
     crate::sim_campaign::CAMPAIGN_SCHEMA,
+    crate::sim_campaign::CRASHPACK_SCHEMA,
+    crate::sim_campaign::BUILD_SCHEMA,
     crate::demo::SCHEMA,
     crate::cluster::SCHEMA,
     crate::lifecycle::SCHEMA,
@@ -979,6 +981,8 @@ mod tests {
         failed.incomplete = Vec::new();
         failed.failures = vec!["the heal used its whole budget".to_owned()];
         validators.assert_matches(&failed, "a failed scenario run");
+        failed.crash_pack = Some("artifacts/crashpacks/7-0123abcd".to_owned());
+        validators.assert_matches(&failed, "a failed scenario run that wrote a crash pack");
         let mut judged = incomplete;
         judged.ok = true;
         judged.verdict = SimVerdict::Pass;
@@ -993,6 +997,22 @@ mod tests {
             !validators.violations(&instance).is_empty(),
             "rule: a pass that no checker judged is rejected by the schema (P10); {instance}"
         );
+    }
+
+    #[test]
+    fn crash_pack_build_identities_match_their_schema() {
+        let inputs = crate::gate::BuildInputs {
+            rustc: "rustc 1.99.0".to_owned(),
+            cargo: "cargo 1.99.0".to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            lockfile_sha256: "c".repeat(64),
+            features: "all",
+            raft_patch_sha256: None,
+            raft_vendor_sha256: Some("d".repeat(64)),
+        };
+        let identity =
+            sim_campaign::build_identity(&"a".repeat(40), &"b".repeat(40), true, &inputs);
+        Validators::load().assert_matches(&identity, "a crash pack's build identity");
     }
 
     #[test]

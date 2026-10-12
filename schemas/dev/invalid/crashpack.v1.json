@@ -1,0 +1,36 @@
+{
+  "rule": "a crash pack records a failure, never a pass",
+  "error_at": "/verdict",
+  "instance": {
+    "schema": "keyval.dev.crashpack/v1",
+    "seed": 13,
+    "profile": "swarm",
+    "scenario_schema": "keyval.scenario/v1",
+    "verdict": "pass",
+    "finding": [
+      "the heal used its whole budget"
+    ],
+    "failing_checker": null,
+    "violating_operations": [],
+    "build_id": "sha256:abababababababababababababababababababababababababababababababab",
+    "config_fingerprint": "48205fd1b435b33601373568bee9688dd2d780f57d77f83b2a4c2e4c2f9f99dd",
+    "heal_budget_ticks": 1,
+    "heal": {
+      "outcome": "stalled"
+    },
+    "trace_hash": "c78ed71017e646f3",
+    "events": 10,
+    "virtual_time_us": 5,
+    "replay": "./dev sim run --scenario artifacts/crashpacks/13-c78ed710/scenario.json --heal-budget-ticks 1",
+    "files": [
+      "manifest.json",
+      "scenario.json",
+      "build.json",
+      "history.json",
+      "trace.txt",
+      "faults.json",
+      "godview.json",
+      "REPLAY.md"
+    ]
+  }
+}

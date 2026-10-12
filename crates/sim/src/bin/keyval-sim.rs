@@ -4,6 +4,7 @@
 //! ```text
 //! keyval-sim run --seed N --profile slice|swarm --config FILE [--trace FILE]
 //! keyval-sim run --scenario FILE --config FILE [--trace FILE]
+//!     [--heal-budget-ticks N] [--build FILE --crashpacks DIR]
 //! ```
 //!
 //! With `--profile slice` it runs the slice ([`sim::slice`]) under the configuration in
@@ -13,6 +14,10 @@
 //! one (the seed is in the file, so `--seed` and `--profile` are refused there); either way
 //! it drives the scenario through the run phases ([`sim::scenario_run`]) and prints
 //! `keyval.dev.sim-run/v2`.
+//!
+//! A failed scenario run writes its crash pack ([`sim::crashpack`], PLAN.md §10.9) under
+//! `--crashpacks`, with `--build` (the build identity JSON) as `build.json`, and names the
+//! pack's directory in the report's `crash_pack`.
 //!
 //! Exit status: 0 the run passed; 1 it failed or is incomplete (P10); 2 the arguments or
 //! the configuration were unusable, and nothing ran; 3 the run happened but its trace or
@@ -25,9 +30,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sim::clients::Profile as Workload;
+use sim::crashpack;
 use sim::entropy::MasterSeed;
 use sim::scenario::Scenario;
 use sim::scenario_run;
+use sim::scenario_run::Options;
 use sim::scheduler::EventBudget;
 use sim::slice::{self, Profile, Verdict};
 use types::Config;
@@ -36,7 +43,8 @@ use types::Config;
 const SWARM: &str = "swarm";
 
 const USAGE: &str = "usage: keyval-sim run --seed N --profile slice|swarm --config FILE \
-[--trace FILE]\n       keyval-sim run --scenario FILE --config FILE [--trace FILE]";
+[--trace FILE]\n       keyval-sim run --scenario FILE --config FILE [--trace FILE] \
+[--heal-budget-ticks N] [--build FILE --crashpacks DIR]";
 
 /// Why keyval-sim stopped without printing a report.
 enum Stop {
@@ -61,6 +69,9 @@ struct Args {
     source: Source,
     config: PathBuf,
     trace: Option<PathBuf>,
+    heal_budget_ticks: Option<u64>,
+    build: Option<PathBuf>,
+    crashpacks: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -98,6 +109,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
     }
     let (mut seed, mut profile, mut config, mut trace, mut scenario) =
         (None, None, None, None, None);
+    let (mut budget, mut build, mut crashpacks) = (None, None, None);
     let mut rest = flags.iter();
     while let Some(flag) = rest.next() {
         let Some(value) = rest.next() else {
@@ -109,6 +121,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--config" => &mut config,
             "--trace" => &mut trace,
             "--scenario" => &mut scenario,
+            "--heal-budget-ticks" => &mut budget,
+            "--build" => &mut build,
+            "--crashpacks" => &mut crashpacks,
             _ => return Err(format!("unknown flag {flag:?}")),
         };
         if slot.replace(value.clone()).is_some() {
@@ -140,10 +155,29 @@ fn parse(args: &[String]) -> Result<Args, String> {
             }
         }
     };
+    if crashpacks.is_some() && build.is_none() {
+        return Err(
+            "--crashpacks needs --build FILE: a pack names the build it came from".to_owned(),
+        );
+    }
+    let heal_budget_ticks = budget
+        .map(|text| {
+            text.parse::<u64>()
+                .map_err(|err| format!("--heal-budget-ticks: {err}"))
+        })
+        .transpose()?;
+    if matches!(source, Source::Slice(_))
+        && (crashpacks.is_some() || build.is_some() || heal_budget_ticks.is_some())
+    {
+        return Err("--crashpacks, --build and --heal-budget-ticks apply to swarm and scenario runs, not the slice".to_owned());
+    }
     Ok(Args {
         source,
         config,
         trace: trace.map(PathBuf::from),
+        heal_budget_ticks,
+        build: build.map(PathBuf::from),
+        crashpacks: crashpacks.map(PathBuf::from),
     })
 }
 
@@ -168,14 +202,14 @@ fn run(args: &Args) -> Result<Verdict, Stop> {
         }
         Source::Swarm(seed) => {
             let scenario = Scenario::generate(*seed, config.key_value_limits(), Workload::PutGet);
-            scenario_report(&config, &scenario, SWARM, path)
+            scenario_report(&config, &scenario, SWARM, path, args)?
         }
         Source::Scenario(file) => {
             let text = fs::read_to_string(file)
                 .map_err(|err| Stop::Usage(format!("cannot read {}: {err}", file.display())))?;
             let scenario = Scenario::parse(&text, config.key_value_limits())
                 .map_err(|err| Stop::Usage(format!("{}: {err}", file.display())))?;
-            scenario_report(&config, &scenario, "scenario", path)
+            scenario_report(&config, &scenario, "scenario", path, args)?
         }
     };
     if let Some(path) = path {
@@ -187,13 +221,48 @@ fn run(args: &Args) -> Result<Verdict, Stop> {
     Ok(verdict)
 }
 
-/// Runs `scenario` and returns its trace, report and verdict.
+/// Runs `scenario` and returns its trace, report and verdict. A failed run also writes its
+/// crash pack (PLAN.md §10.9) under `--crashpacks`, and the report names it.
 fn scenario_report(
     config: &Config,
     scenario: &Scenario,
     profile: &'static str,
     path: Option<&str>,
-) -> (String, serde_json::Value, Verdict) {
-    let run = scenario_run::run(config, scenario, profile);
-    (run.trace.clone(), run.report(path), run.verdict)
+    args: &Args,
+) -> Result<(String, serde_json::Value, Verdict), Stop> {
+    let build = match &args.build {
+        Some(file) => {
+            let text = fs::read_to_string(file)
+                .map_err(|err| Stop::Usage(format!("cannot read {}: {err}", file.display())))?;
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|err| Stop::Usage(format!("{}: {err}", file.display())))?
+        }
+        None => serde_json::Value::Null,
+    };
+    let mut options = Options::default();
+    if let Some(ticks) = args.heal_budget_ticks {
+        options.heal_budget_ticks = ticks;
+    }
+    if let Some(id) = build.get("build_id").and_then(serde_json::Value::as_str) {
+        id.clone_into(&mut options.build_id);
+    }
+    let run = scenario_run::run_as(config, scenario, profile, options);
+    let mut report = run.report(path);
+    if let Some(root) = &args.crashpacks {
+        let root_text = root
+            .to_str()
+            .ok_or_else(|| Stop::Usage(format!("{} is not UTF-8", root.display())))?;
+        if let Some(pack) = crashpack::pack(&run, scenario, &build, root_text) {
+            let dir = root.join(&pack.name);
+            fs::create_dir_all(&dir)
+                .map_err(|err| Stop::Io(format!("cannot create {}: {err}", dir.display())))?;
+            for (name, contents) in &pack.files {
+                let file = dir.join(name);
+                fs::write(&file, contents)
+                    .map_err(|err| Stop::Io(format!("cannot write {}: {err}", file.display())))?;
+            }
+            report["crash_pack"] = serde_json::Value::String(dir.display().to_string());
+        }
+    }
+    Ok((run.trace.clone(), report, run.verdict))
 }

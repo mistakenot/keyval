@@ -1,0 +1,20 @@
+{
+  "rule": "a build ID is a sha256 digest",
+  "error_at": "/build_id",
+  "instance": {
+    "schema": "keyval.dev.crashpack-build/v1",
+    "build_id": "not-a-digest",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "working_tree_differs": false,
+    "inputs": {
+      "rustc": "rustc 1.99.0",
+      "cargo": "cargo 1.99.0",
+      "target": "x86_64-unknown-linux-gnu",
+      "lockfile_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "features": "all",
+      "raft_patch_sha256": null,
+      "raft_vendor_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  }
+}

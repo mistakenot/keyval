@@ -298,6 +298,10 @@ enum SimAction {
         /// The configuration, relative to the workspace root (default: config/local.toml).
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
+        /// The heal budget in ticks; a small one forces a failing run, for a crash pack
+        /// (swarm and scenario runs).
+        #[arg(long, value_name = "N")]
+        heal_budget_ticks: Option<u64>,
     },
     /// Run a seed range of the swarm profile in parallel processes and report every seed;
     /// exits 1 unless every seed passed (P10).
@@ -523,6 +527,7 @@ fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
             profile,
             scenario,
             config,
+            heal_budget_ticks,
         } => {
             let config = sim::config_path(root, config);
             let source = match (scenario, seed) {
@@ -533,7 +538,15 @@ fn run_sim(root: &Path, format: Format, action: SimAction) -> Status {
                 (None, _) => None,
             };
             if let Some(source) = source {
-                return match sim_campaign::run_with(&source, &config, &artifacts, launch) {
+                let identity = sim_campaign::write_build_identity(root, &artifacts).map(|build| {
+                    sim_campaign::Extras {
+                        heal_budget_ticks,
+                        crash_packs: Some((build, artifacts.join(sim_campaign::CRASHPACK_DIR))),
+                    }
+                });
+                return match identity.and_then(|extras| {
+                    sim_campaign::run_with_extras(&source, &config, &artifacts, &extras, launch)
+                }) {
                     Ok(report) => output::emit(format, &report),
                     Err(refusal) => refuse(refusal),
                 };

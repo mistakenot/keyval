@@ -23,6 +23,8 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.sim-run/v1` | `sim-run.v1.schema.json` | `./dev sim run` (printed by the `keyval-sim` binary, re-emitted) |
 | `keyval.dev.sim-run/v2` | `sim-run.v2.schema.json` | `./dev sim run --profile swarm|--scenario FILE` (printed by `keyval-sim`, re-emitted) |
 | `keyval.dev.sim-campaign/v1` | `sim-campaign.v1.schema.json` | `./dev sim campaign --seeds A..B` |
+| `keyval.dev.crashpack/v1` | `crashpack.v1.schema.json` | a crash pack's `manifest.json`, written by `keyval-sim` for a failed scenario run (`./dev sim run`) |
+| `keyval.dev.crashpack-build/v1` | `crashpack-build.v1.schema.json` | a crash pack's `build.json`, written by `./dev sim run` |
 | `keyval.dev.demo/v1` | `demo.v1.schema.json` | `./dev demo m1` |
 | `keyval.dev.cluster/v1` | `cluster.v1.schema.json` | `./dev cluster init|up|status|down` |
 | `keyval.dev.smoke/v1` | `smoke.v1.schema.json` | `./dev smoke lifecycle` |

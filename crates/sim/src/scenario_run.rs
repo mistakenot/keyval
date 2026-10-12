@@ -22,8 +22,11 @@
 use serde_json::{Value as Json, json};
 use types::Config;
 
-use crate::phases::{self, HEAL_BUDGET_TICKS, Heal, Stage};
+use crate::cluster::Cluster;
+use crate::observe::{self, Meta};
+use crate::phases::{self, Finished, HEAL_BUDGET_TICKS, Heal, Stage};
 use crate::scenario::{SCHEMA as SCENARIO_SCHEMA, Scenario};
+use crate::scheduler::EventBudget;
 use crate::slice::{PRNG, Verdict};
 use crate::trace::{INCOMPLETE_MARKER, TraceHash, marks_incomplete};
 
@@ -44,6 +47,38 @@ pub const UNJUDGED: &str = "no checker has judged this run's history yet (the ch
 const CHECKERS: [&str; 12] = [
     "K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8", "K-9", "K-10", "K-11", "K-12",
 ];
+
+/// What a crash pack keeps of a failed run beyond its trace (PLAN.md §10.9, T-8).
+#[derive(Clone, Debug)]
+pub struct Evidence {
+    /// The operation history, `keyval.observation/v1`, or the reason it could not be built.
+    pub history: Json,
+    /// Every node's state when the run ended.
+    pub god_view: Json,
+    /// The faults the run injected, in order, with their virtual times.
+    pub fault_timeline: Json,
+}
+
+/// What a run is started with beyond its scenario.
+#[derive(Clone, Debug)]
+pub struct Options {
+    /// The heal's budget in ticks.
+    pub heal_budget_ticks: u64,
+    /// The build ID the manifest records (T-3).
+    pub build_id: String,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            heal_budget_ticks: HEAL_BUDGET_TICKS,
+            build_id: UNKNOWN_BUILD.to_owned(),
+        }
+    }
+}
+
+/// The build ID of a run whose caller did not say which build it is.
+pub const UNKNOWN_BUILD: &str = "unknown";
 
 /// One run of a scenario.
 #[derive(Clone, Debug)]
@@ -69,6 +104,10 @@ pub struct ScenarioRun {
     pub events: u64,
     /// The virtual time the run ended at, in microseconds.
     pub end_us: u64,
+    /// What a crash pack keeps, kept only when the verdict is a failure.
+    pub evidence: Option<Evidence>,
+    /// The options the run was started with.
+    pub options: Options,
 }
 
 impl ScenarioRun {
@@ -106,6 +145,7 @@ impl ScenarioRun {
                 "path": trace_path,
             },
             "virtual_time_us": self.end_us,
+            "crash_pack": Json::Null,
         })
     }
 }
@@ -124,6 +164,22 @@ pub fn run_with(
     profile: &'static str,
     budget_ticks: u64,
 ) -> ScenarioRun {
+    let options = Options {
+        heal_budget_ticks: budget_ticks,
+        ..Options::default()
+    };
+    run_as(config, scenario, profile, options)
+}
+
+/// [`run`] started with `options`.
+#[must_use]
+pub fn run_as(
+    config: &Config,
+    scenario: &Scenario,
+    profile: &'static str,
+    options: Options,
+) -> ScenarioRun {
+    let budget_ticks = options.heal_budget_ticks;
     let base = ScenarioRun {
         scenario: scenario.manifest(),
         profile,
@@ -135,6 +191,8 @@ pub fn run_with(
         trace: format!("{INCOMPLETE_MARKER}\n"),
         events: 0,
         end_us: 0,
+        evidence: None,
+        options,
     };
     match phases::run_with(config, scenario, budget_ticks) {
         Ok(finished) => {
@@ -156,6 +214,13 @@ pub fn run_with(
                         stalled.unresolved,
                         stalled.lagging.len()
                     ));
+                    run.evidence = Some(evidence(
+                        &finished,
+                        config,
+                        scenario,
+                        run.profile,
+                        &run.options,
+                    ));
                 }
                 Heal::Converged(_) => run.incomplete.push(UNJUDGED.to_owned()),
             }
@@ -168,6 +233,64 @@ pub fn run_with(
             run
         }
     }
+}
+
+/// What a failed run leaves for its crash pack.
+fn evidence(
+    finished: &Finished,
+    config: &Config,
+    scenario: &Scenario,
+    profile: &str,
+    options: &Options,
+) -> Evidence {
+    let meta = Meta {
+        seed: scenario.seed().get(),
+        scenario_version: 1,
+        profile: profile.to_owned(),
+        build_id: options.build_id.clone(),
+        prng: PRNG.to_owned(),
+        max_events: EventBudget::DEFAULT.get(),
+        chaos_ticks: finished.chaos_ticks,
+        heal_budget_ticks: options.heal_budget_ticks,
+        quiet_ticks: 0,
+        phases: finished.phases,
+    };
+    let history = observe::document(&finished.cluster, &finished.clients, config, &meta)
+        .unwrap_or_else(|error| json!({ "unavailable": format!("{error:?}") }));
+    Evidence {
+        history,
+        god_view: god_view(&finished.cluster),
+        fault_timeline: json!(
+            finished
+                .cluster
+                .faults()
+                .map(
+                    |(at, fault)| json!({ "at_us": at.as_micros(), "fault": format!("{fault:?}") })
+                )
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+/// Every node's state when the run ended: what the cluster reports of it.
+fn god_view(cluster: &Cluster) -> Json {
+    json!({
+        "leader": cluster.leader().map(types::NodeId::get),
+        "nodes": cluster.nodes().map(|node| {
+            let controller = cluster.controller(node);
+            json!({
+                "node": node.get(),
+                "incarnation": cluster.incarnation(node).map(|inc| format!("{inc:?}")),
+                "running": controller.is_some(),
+                "paused": cluster.is_paused(node),
+                "lost": cluster.is_lost(node),
+                "role": controller.map(|ctl| format!("{:?}", ctl.status().role)),
+                "commit": controller.map(|ctl| format!("{:?}", ctl.status().commit)),
+                "applied": controller.map(|ctl| format!("{:?}", ctl.state().applied_index())),
+                "state_digest": controller.map(|ctl| format!("{:?}", ctl.state().digest())),
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 const fn stage_name(stage: Stage) -> &'static str {

@@ -16,7 +16,8 @@
     "heal",
     "checkers",
     "trace",
-    "virtual_time_us"
+    "virtual_time_us",
+    "crash_pack"
   ],
   "allOf": [
     {
@@ -258,6 +259,13 @@
     "virtual_time_us": {
       "type": "integer",
       "minimum": 0
+    },
+    "crash_pack": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The directory of the crash pack (PLAN.md \u00a710.9) a failed run wrote under --crashpacks, else null."
     }
   }
 }

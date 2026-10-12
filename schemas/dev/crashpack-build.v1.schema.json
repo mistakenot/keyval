@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/crashpack-build.v1.schema.json",
+  "title": "keyval.dev.crashpack-build/v1",
+  "description": "The build identity a crash pack keeps as `build.json` (PLAN.md \u00a710.9: enough to rebuild the failing binary), written by `./dev sim run` (xtask/src/sim_campaign.rs `build_identity`): the build ID, the commit and tree it was built from, whether the working tree differed from them, and the toolchain, lockfile and Raft patch inputs the build ID hashes (T-3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "build_id",
+    "commit",
+    "tree",
+    "working_tree_differs",
+    "inputs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.crashpack-build/v1"
+    },
+    "build_id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "working_tree_differs": {
+      "type": "boolean"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rustc",
+        "cargo",
+        "target",
+        "lockfile_sha256",
+        "features",
+        "raft_patch_sha256",
+        "raft_vendor_sha256"
+      ],
+      "properties": {
+        "rustc": {
+          "type": "string"
+        },
+        "cargo": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "lockfile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "features": {
+          "type": "string"
+        },
+        "raft_patch_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raft_vendor_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

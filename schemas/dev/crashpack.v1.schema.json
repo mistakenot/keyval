@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/dev/crashpack.v1.schema.json",
+  "title": "keyval.dev.crashpack/v1",
+  "description": "The manifest (`manifest.json`) of a crash pack (PLAN.md \u00a710.9, T-8), written by `keyval-sim` (crates/sim/src/crashpack.rs) when a scenario run fails: the seed, the finding that failed the run, the build, the trace hash and the exact replay command. `failing_checker` is null and `violating_operations` empty until history checkers are wired to the simulator (br-skf5); the finding is then the run's own.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "seed",
+    "profile",
+    "scenario_schema",
+    "verdict",
+    "finding",
+    "failing_checker",
+    "violating_operations",
+    "build_id",
+    "config_fingerprint",
+    "heal_budget_ticks",
+    "heal",
+    "trace_hash",
+    "events",
+    "virtual_time_us",
+    "replay",
+    "files"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.dev.crashpack/v1"
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenario_schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verdict": {
+      "const": "fail"
+    },
+    "finding": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "failing_checker": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "violating_operations": {
+      "type": "array"
+    },
+    "build_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config_fingerprint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "heal_budget_ticks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "heal": {
+      "type": "object"
+    },
+    "trace_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "events": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "virtual_time_us": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "replay": {
+      "type": "string",
+      "pattern": "^\\./dev sim run --scenario \\S+/scenario\\.json --heal-budget-ticks [0-9]+$"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

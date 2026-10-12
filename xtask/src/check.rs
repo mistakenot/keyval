@@ -2104,6 +2104,25 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 9,
     },
     CheckDef {
+        id: "CRASH-PACK",
+        summary: "A failed scenario run leaves a crash pack (§10.9, §12.2 W42.2, T-8): a \
+                  forced failure writes every pack file (manifest conforming to \
+                  keyval.dev.crashpack/v1, scenario, build identity, history, full canonical \
+                  trace, fault timeline, god-view snapshot, REPLAY.md) in a directory named by \
+                  seed and short trace hash; the replay command in the pack reproduces the \
+                  failure with the same verdict and a byte-identical trace (T-4); a run that \
+                  did not fail writes no pack, and a pack without a build identity is refused",
+        kind: Kind::TestGroup,
+        covers: &["T-4", "T-8", "O-6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["crashpack::"],
+        },
+        min_cases: 3,
+    },
+    CheckDef {
         id: "CLIENT-RETRY",
         summary: "The client retry policy shared by the CLI and the simulated clients (§10.3, \
                   §12.2 W36.1): one logical operation keeps its request ID and command across \

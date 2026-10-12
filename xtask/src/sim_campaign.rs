@@ -93,6 +93,8 @@ pub struct ScenarioReport {
     pub trace: TraceSummary,
     /// The virtual time the run ended at.
     pub virtual_time_us: u64,
+    /// The crash pack a failed run wrote (PLAN.md §10.9), when packs were asked for.
+    pub crash_pack: Option<String>,
 }
 
 impl ScenarioReport {
@@ -198,6 +200,30 @@ pub fn run_with(
     artifacts: &Path,
     launch: impl FnOnce(&[&str]) -> Result<Captured, String>,
 ) -> Result<ScenarioReport, Refusal> {
+    run_with_extras(source, config, artifacts, &Extras::default(), launch)
+}
+
+/// What a single run may be given beyond its source (`./dev sim run`).
+#[derive(Clone, Debug, Default)]
+pub struct Extras {
+    /// The heal budget in ticks (`--heal-budget-ticks`), when not the default.
+    pub heal_budget_ticks: Option<u64>,
+    /// The build identity file and the crash pack root (`--build`, `--crashpacks`).
+    pub crash_packs: Option<(PathBuf, PathBuf)>,
+}
+
+/// [`run_with`] with `extras`.
+///
+/// # Errors
+///
+/// A [`Refusal`] if the run could not be made, or `keyval-sim`'s report is unusable.
+pub fn run_with_extras(
+    source: &Source,
+    config: &Path,
+    artifacts: &Path,
+    extras: &Extras,
+    launch: impl FnOnce(&[&str]) -> Result<Captured, String>,
+) -> Result<ScenarioReport, Refusal> {
     let dir = artifacts.join(TRACE_DIR);
     fs::create_dir_all(&dir).map_err(|err| {
         Refusal::new(
@@ -230,7 +256,18 @@ pub fn run_with(
             String::new(),
         ],
     };
-    let from: Vec<String> = from.into_iter().filter(|arg| !arg.is_empty()).collect();
+    let mut from: Vec<String> = from.into_iter().filter(|arg| !arg.is_empty()).collect();
+    if let Some(ticks) = extras.heal_budget_ticks {
+        from.extend(["--heal-budget-ticks".to_owned(), ticks.to_string()]);
+    }
+    if let Some((build, packs)) = &extras.crash_packs {
+        from.extend([
+            "--build".to_owned(),
+            utf8(build)?,
+            "--crashpacks".to_owned(),
+            utf8(packs)?,
+        ]);
+    }
     let args = arguments_for(&from, config, &trace)?;
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let captured = launch(&args).map_err(|why| Refusal::new(ErrorKind::Internal, why))?;
@@ -254,6 +291,76 @@ pub fn run_with(
             ),
         )),
     }
+}
+
+/// The identifier of a crash pack's manifest, which `keyval-sim` writes
+/// (crates/sim/src/crashpack.rs); xtask only catalogues its schema.
+#[cfg(test)]
+pub const CRASHPACK_SCHEMA: &str = "keyval.dev.crashpack/v1";
+
+/// The identifier of the build identity a crash pack keeps as `build.json`.
+pub const BUILD_SCHEMA: &str = "keyval.dev.crashpack-build/v1";
+
+/// The directory crash packs go in, under `artifacts/`.
+pub const CRASHPACK_DIR: &str = "crashpacks";
+
+/// The build identity document ([`BUILD_SCHEMA`]) of the build at `commit` and `tree`.
+#[must_use]
+pub fn build_identity(
+    commit: &str,
+    tree: &str,
+    working_tree_differs: bool,
+    inputs: &crate::gate::BuildInputs,
+) -> Value {
+    serde_json::json!({
+        "schema": BUILD_SCHEMA,
+        "build_id": crate::gate::build_id(tree, inputs),
+        "commit": commit,
+        "tree": tree,
+        "working_tree_differs": working_tree_differs,
+        "inputs": inputs,
+    })
+}
+
+/// Writes the build identity a crash pack keeps as `build.json` (PLAN.md §10.9: enough to
+/// rebuild the failing binary) to `<artifacts>/crashpacks/build-identity.json`: the build ID,
+/// the commit and tree it was built from, whether the working tree differed from them, and
+/// the toolchain, lockfile and Raft patch inputs.
+///
+/// # Errors
+///
+/// A [`Refusal`] if git or the toolchain cannot be asked, or the file cannot be written.
+pub fn write_build_identity(root: &Path, artifacts: &Path) -> Result<PathBuf, Refusal> {
+    let internal = |why: String| Refusal::new(ErrorKind::Internal, why);
+    let git = |args: &[&str]| -> Result<String, Refusal> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .map_err(|err| internal(format!("git {args:?}: {err}")))?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(internal(format!(
+                "git {args:?} exited with {}",
+                output.status
+            )))
+        }
+    };
+    let tree = git(&["rev-parse", "HEAD:"])?;
+    let commit = git(&["rev-parse", "HEAD"])?;
+    let dirty = !git(&["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    let inputs = crate::gate::build_inputs(root).map_err(internal)?;
+    let identity = build_identity(&commit, &tree, dirty, &inputs);
+    let dir = artifacts.join(CRASHPACK_DIR);
+    fs::create_dir_all(&dir)
+        .map_err(|err| internal(format!("cannot create {}: {err}", dir.display())))?;
+    let file = dir.join("build-identity.json");
+    let text = serde_json::to_string_pretty(&identity)
+        .map_err(|err| internal(format!("cannot encode the build identity: {err}")))?;
+    fs::write(&file, text)
+        .map_err(|err| internal(format!("cannot write {}: {err}", file.display())))?;
+    Ok(file)
 }
 
 fn utf8(path: &Path) -> Result<String, Refusal> {
