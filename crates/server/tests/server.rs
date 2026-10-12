@@ -1221,6 +1221,82 @@ mod serve_tests {
     }
 
     #[test]
+    fn an_oversized_body_is_answered_413_and_the_client_can_read_it() {
+        use std::io::{Read, Write};
+        let dir = scratch("serve-too-large");
+        let (_, serving) = served(&dir);
+        let address = serving.address();
+        let body = vec![b'x'; 3 * 1024 * 1024];
+        let head = format!(
+            "PUT /v1/kv?key=big HTTP/1.1\r\nHost: x\r\nIdempotency-Key: {INSTANCE}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut outcomes = Vec::new();
+        for attempt in 0..20 {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let sent = stream
+                .write_all(head.as_bytes())
+                .and_then(|()| stream.write_all(&body));
+            let mut reply = Vec::new();
+            let read = stream.read_to_end(&mut reply);
+            let text = String::from_utf8_lossy(&reply).into_owned();
+            if !(read.is_ok() && text.starts_with("HTTP/1.1 413") && text.contains("too_large")) {
+                outcomes.push(format!(
+                    "attempt {attempt}: send={sent:?} read={read:?} reply={:?}",
+                    &text[..text.len().min(80)]
+                ));
+            }
+        }
+        stop(serving);
+        assert!(
+            outcomes.is_empty(),
+            "rule: a body over 512 KiB is refused with a readable 413 too_large, never a reset \
+             connection (§7.11, §8.4); failures={outcomes:#?}"
+        );
+    }
+
+    #[test]
+    fn a_closing_connection_is_not_held_open_by_a_client_that_trickles_bytes() {
+        use std::io::{Read, Write};
+        let dir = scratch("serve-trickle");
+        let (_, serving) = served(&dir);
+        let mut stream = std::net::TcpStream::connect(serving.address()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        stream.write_all(b"GARBAGE\r\n\r\n").unwrap();
+        let start = std::time::Instant::now();
+        let mut reply = Vec::new();
+        // Keep trickling a byte at a time while reading the reply to its end.
+        stream.set_nonblocking(false).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let trickle = std::thread::spawn(move || {
+            for _ in 0..16 {
+                std::thread::sleep(Duration::from_millis(500));
+                if writer.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let read = stream.read_to_end(&mut reply);
+        let waited = start.elapsed();
+        trickle.join().unwrap();
+        stop(serving);
+        assert!(
+            read.is_ok() && String::from_utf8_lossy(&reply).starts_with("HTTP/1.1 400"),
+            "rule: a malformed request is answered 400 and read to its end; read={read:?}"
+        );
+        assert!(
+            waited < Duration::from_secs(5),
+            "rule: the close drain is bounded in total time (CD-9); waited={waited:?}"
+        );
+    }
+
+    #[test]
     fn malformed_requests_are_refused_over_the_wire_and_a_connection_is_kept_alive() {
         let dir = scratch("serve-strict");
         let (_, serving) = served(&dir);

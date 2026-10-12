@@ -19,8 +19,8 @@
 //!   Each failure is counted in [`Serving::accept_errors`] (a saturating `u64`).
 
 use std::collections::BTreeMap;
-use std::io::{self, BufReader};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{self, BufReader, Read};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -343,6 +343,42 @@ fn accept_loop<A: Accept>(acceptor: &A, shared: &Arc<Shared>) {
     }
 }
 
+/// The most request bytes a connection that is closing reads and discards, so that a client
+/// still sending a body the server refused (§7.11: a body over 512 KiB is not read) can read the
+/// refusal. Past it the connection closes regardless: the bound is per connection, held on its
+/// thread's stack, and a client that sends more gets the reset it earned.
+const CLOSE_DRAIN_BYTES: u64 = 4 * 1024 * 1024;
+
+/// How long a closing connection waits for the client's next bytes while it drains.
+const CLOSE_DRAIN_WAIT: Duration = Duration::from_secs(2);
+
+/// Closes a connection after its last response without resetting it: sends the FIN, then reads
+/// and drops what the client still sends, within [`CLOSE_DRAIN_BYTES`] and a total of
+/// [`CLOSE_DRAIN_WAIT`] (CD-9: a trickling client cannot hold the thread). Closing with unread
+/// request bytes makes the kernel send an RST that can overtake the response in the client's
+/// receive queue.
+fn close_gracefully(stream: &TcpStream, reader: &mut impl Read) {
+    if stream.shutdown(Shutdown::Write).is_err() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + CLOSE_DRAIN_WAIT;
+    let mut remaining = CLOSE_DRAIN_BYTES;
+    let mut scratch = [0_u8; 16 * 1024];
+    while remaining > 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
+        let want = scratch
+            .len()
+            .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        match reader.read(&mut scratch[..want]) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => remaining = remaining.saturating_sub(read as u64),
+        }
+    }
+}
+
 /// Serves one connection's requests in order until it closes.
 fn connection(stream: &TcpStream, shared: &Shared) -> io::Result<()> {
     stream.set_read_timeout(Some(IDLE_TIMEOUT))?;
@@ -355,13 +391,16 @@ fn connection(stream: &TcpStream, shared: &Shared) -> io::Result<()> {
             Ok(request) => request,
             Err(ReadError::Closed | ReadError::Io(_)) => return Ok(()),
             Err(ReadError::Malformed(why)) => {
-                return http::write_response(&mut writer, &api::malformed(&why));
+                let written = http::write_response(&mut writer, &api::malformed(&why));
+                close_gracefully(stream, &mut reader);
+                return written;
             }
         };
         let mut response = answer(&request, shared);
         response.close |= request.close;
         http::write_response(&mut writer, &response)?;
         if response.close {
+            close_gracefully(stream, &mut reader);
             return Ok(());
         }
     }
