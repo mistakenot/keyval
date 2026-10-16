@@ -25,6 +25,10 @@
 //! - [`scenario_run`]: a scenario driven through the run phases and reported as
 //!   `keyval.dev.sim-run/v2` (W42.1), the program behind `keyval-sim run --profile swarm` and
 //!   `--scenario FILE`.
+//! - [`exhaustion`]: the journal-exhaustion failure-mode scenario (W43.3, DM-7): one follower at
+//!   its local journal hard stop fails, drops peer messages and answers `recovering`; the rest
+//!   keep serving; a restart fails again at the first append past the stop. Outside the healthy
+//!   envelope, so it claims no liveness (§9.4, D-61).
 //! - [`replay`]: checker K-14, replay identity: the same seed in fresh OS processes gives
 //!   byte-identical canonical traces, and a mismatch reports its first differing event.
 //!
@@ -49,6 +53,9 @@ pub mod drain;
 #[cfg(test)]
 mod drain_tests;
 pub mod entropy;
+pub mod exhaustion;
+#[cfg(test)]
+mod exhaustion_tests;
 pub mod god_view;
 pub mod judge;
 #[cfg(test)]

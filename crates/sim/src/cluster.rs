@@ -555,6 +555,9 @@ struct Slot {
     held: BoundedQueue<Input>,
     /// A crash armed to fire at the node's next sync.
     armed: Option<(CrashPoint, Survival)>,
+    /// The node's own journal hard stop, when it is not the configuration's: a local
+    /// setting (DM-7, not fingerprinted) that holds from the node's next start.
+    journal_limit: Option<ByteCount>,
 }
 
 /// The trace's event kinds, made once.
@@ -697,6 +700,7 @@ impl Cluster {
                     paused: false,
                     held: BoundedQueue::with_items(bound),
                     armed: None,
+                    journal_limit: None,
                 },
             );
             cluster.boot(node)?;
@@ -728,6 +732,7 @@ impl Cluster {
     fn boot(&mut self, node: NodeId) -> Result<(), ClusterError> {
         let storage_error = |error| ClusterError::Storage { node, error };
         let bound = self.bound;
+        let bounds = self.bounds(node);
         let slot = self
             .nodes
             .get_mut(&node)
@@ -737,14 +742,8 @@ impl Cluster {
         storage.lock().map_err(storage_error)?;
         let reader = slot.disk.open();
         let len = storage.journal_len().map_err(storage_error)?;
-        let recovered = journal::recover(
-            &reader,
-            len,
-            &self.config,
-            node,
-            LogBounds::of(&self.config),
-        )
-        .map_err(|error| ClusterError::Recovery { node, error })?;
+        let recovered = journal::recover(&reader, len, &self.config, node, bounds)
+            .map_err(|error| ClusterError::Recovery { node, error })?;
         let end = usize::try_from(recovered.log().end()).unwrap_or(usize::MAX);
         let bytes = slot.disk.journal().unwrap_or_default();
         let limit = self.config.max_log_entries().get();
@@ -928,6 +927,23 @@ impl Cluster {
     pub fn crash_at(&mut self, at: VirtualTime, node: NodeId) -> Result<(), ClusterError> {
         let crashed = self.schedule(at, Some(node), Happening::Crash { node });
         self.settle(crashed)
+    }
+
+    /// Sets `node`'s own journal hard stop to `limit` from its next start (DM-7,
+    /// `max_journal_bytes` is local, so a node can run with a limit the configuration's
+    /// margin formula would refuse; W43.3's journal-exhaustion scenario uses it). A running
+    /// node keeps the stop it started with.
+    ///
+    /// # Errors
+    ///
+    /// [`ClusterError::UnknownNode`] for a node outside the cluster.
+    pub fn limit_journal(&mut self, node: NodeId, limit: ByteCount) -> Result<(), ClusterError> {
+        let slot = self
+            .nodes
+            .get_mut(&node)
+            .ok_or(ClusterError::UnknownNode { node })?;
+        slot.journal_limit = Some(limit);
+        Ok(())
     }
 
     /// Schedules `node`'s restart at `at`; it does nothing if the node is running then.
@@ -1137,17 +1153,23 @@ impl Cluster {
         Ok(())
     }
 
+    /// `node`'s log bounds: the configuration's, with the node's own journal hard stop if
+    /// it has one.
+    fn bounds(&self, node: NodeId) -> LogBounds {
+        let configured = LogBounds::of(&self.config);
+        self.nodes
+            .get(&node)
+            .and_then(|slot| slot.journal_limit)
+            .map_or(configured, |limit| {
+                LogBounds::new(configured.cache_bytes(), limit)
+            })
+    }
+
     /// The logical log a journal image recovers to.
     fn recover_image(&self, node: NodeId, bytes: Vec<u8>) -> Result<LogicalLog, ClusterError> {
         let len = ByteCount::new(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-        let recovered = journal::recover(
-            &Image(bytes),
-            len,
-            &self.config,
-            node,
-            LogBounds::of(&self.config),
-        )
-        .map_err(|error| ClusterError::Recovery { node, error })?;
+        let recovered = journal::recover(&Image(bytes), len, &self.config, node, self.bounds(node))
+            .map_err(|error| ClusterError::Recovery { node, error })?;
         Ok(recovered.into_parts().1)
     }
 

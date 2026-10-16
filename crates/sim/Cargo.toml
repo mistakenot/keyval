@@ -11,13 +11,13 @@ types = { workspace = true }
 statemachine = { workspace = true }
 node = { workspace = true }
 journal = { workspace = true }
+raft_adapter = { workspace = true }
 checker = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 jsonschema = { workspace = true }
 model = { workspace = true }
-raft_adapter = { workspace = true }
 
 [lints]
 workspace = true

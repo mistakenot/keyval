@@ -1559,6 +1559,18 @@ min_cases = 14
 status = "implemented"
 
 [[check]]
+id = "JOURNAL-EXHAUSTION"
+summary = "journal-exhaustion failure-mode scenario (W43.3, §6 DM-7, §9.4, D-61): one follower of five, given a local journal hard stop, fails at the first append that would pass it; the failed node stops feeding Raft, drops and counts peer envelopes, answers a write and a read `recovering` and shows a failed lifecycle, while the other four keep serving and agree on one digest; a restart recovers normally and fails again before the first append past the stop; the journal never passes the stop; the report states the node is outside the healthy envelope and claims no quorum-exhaustion liveness; each observed fact has a negative fixture and a control passes. Simulation evidence from the scenario, not proof"
+kind = "test_group"
+covers = ["DM-7"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check JOURNAL-EXHAUSTION"
+min_cases = 11
+status = "implemented"
+
+[[check]]
 id = "CONF-HARNESS"
 summary = "Conformance harness (§10.8, W31.1): the independent `conformance` package reads api/openapi.yaml (operation IDs and error codes, duplicates and incomplete documents refused), takes the model, single-node and five cluster base URLs (exactly zero or five cluster nodes, strict http://host:port), activates targets per operation (model serves all; a real single node only PUT/GET until W32; the cluster none until W32; topology tests only on the cluster), validates each test's class/operation/error-code tag against the spec, speaks bounded strict HTTP/1.1 (malformed, truncated and oversized responses are errors), polls stale reads until served_by.applied_index reaches the write index with a bounded budget whose timeout fails (P10), and depends on no production crate (T-12; the test-only suite may use the oracle crates, §10.8). Unit tests with injected clocks and local servers: test evidence of the harness, not proof"
 kind = "test_group"
