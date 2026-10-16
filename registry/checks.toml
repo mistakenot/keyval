@@ -778,6 +778,18 @@ min_cases = 4
 status = "implemented"
 
 [[check]]
+id = "PENDING-STORE"
+summary = "the CLI pending store layer (O-4, C-6): a persist takes the D-59 steps in order (temp file, fsync, rename, fsync directory); a crash matrix over a simulated disk that loses unsynced data and directory entries, killed at every step of a persist and of a delete, never loses a record whose persist returned, nor a record before its delete, and a matrix over a disk with a skipped sync is caught; leftover temps are finished or discarded without taking a read error for an incomplete file; a different command under a recorded ID is refused, also between processes; counts and sizes are bounded on write; corrupt, misfiled, unversioned or unknown-field records are reported, never skipped. Simulation evidence for the store layer only; the pending and resume commands are not part of this check"
+kind = "test_group"
+covers = ["O-4", "C-6"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check PENDING-STORE"
+min_cases = 14
+status = "implemented"
+
+[[check]]
 id = "DOCTOR-CLI"
 summary = "keyval doctor, run as the real binary on real data directories, reaches startup recovery's verdict on every recovery golden (clean, the torn tail it would discard, the refusal), verifies the genesis binding against --config/--node, refuses a live directory unexamined, prints a keyval.cli.doctor/v2 report that validates against its schema, and leaves every file byte for byte as it was (O-7, O-6)"
 kind = "test_group"

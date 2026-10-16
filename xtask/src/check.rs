@@ -1211,6 +1211,33 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 4,
     },
     CheckDef {
+        id: "PENDING-STORE",
+        summary: "the CLI pending store layer (O-4, C-6): a persist takes \
+                  the D-59 steps in order (temp file, fsync, rename, fsync \
+                  directory); a crash matrix over a simulated disk that \
+                  loses unsynced data and directory entries, killed at \
+                  every step of a persist and of a delete, never loses a \
+                  record whose persist returned, nor a record before its \
+                  delete, and a matrix over a disk with a skipped sync is \
+                  caught; leftover temps are finished or discarded without \
+                  taking a read error for an incomplete file; a different \
+                  command under a recorded ID is refused, also between \
+                  processes; counts and sizes are bounded on write; \
+                  corrupt, misfiled, unversioned or unknown-field records \
+                  are reported, never skipped. Simulation evidence for the \
+                  store layer only; the pending and resume commands are \
+                  not part of this check",
+        kind: Kind::TestGroup,
+        covers: &["O-4", "C-6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "cli",
+            filters: &["pending::tests::"],
+        },
+        min_cases: 14,
+    },
+    CheckDef {
         id: "DOCTOR-CLI",
         summary: "keyval doctor, run as the real binary on real data directories, \
                   reaches startup recovery's verdict on every recovery golden (clean, \
