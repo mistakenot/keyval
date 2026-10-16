@@ -505,7 +505,7 @@ deps = ["W27", "W28", "W29", "W36", "W37", "W41"]
 reqs = ["§10.3"]
 area = ["sim"]
 milestone = "m4"
-accept = []
+accept = ["./dev check COVERAGE-REPORT", "./dev check SIM-CLIENTS", "./dev check SWARM-SCENARIO", "./dev check DRAIN-CERTIFIED", "./dev check RUN-PHASES", "./dev check JOURNAL-EXHAUSTION"]
 bead = "br-w43-full-operation-profiles-zui"
 
 [[item]]
