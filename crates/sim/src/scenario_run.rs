@@ -6,24 +6,24 @@
 //! `keyval.dev.sim-run/v2`. The report names the scenario (seed, swarm, workload, sizes), the
 //! heal's outcome, the canonical trace by hash, and a verdict.
 //!
-//! **The verdict is honest about what judged it (P10, T-13).** No checker is wired to this
-//! driver yet: the history checkers read `keyval.observation/v1` and the god-view, heal and
-//! vacuity documents, and producing those from a finished run is separate work. So:
+//! **The verdict is honest about what judged it (P10, T-13).** A run that converged is judged
+//! by [`crate::judge`]: its `keyval.observation/v1` document goes through K-1 to K-12 and K-13.
+//! So:
 //! - a heal that used its whole budget in a valid scenario is a [`Verdict::Fail`], a finding
 //!   of the run itself (liveness is K-9's to name precisely);
 //! - a run the harness could not drive to its end is [`Verdict::Incomplete`];
-//! - a run whose heal converged is also [`Verdict::Incomplete`], with the reason
-//!   [`UNJUDGED`]: nothing has judged its history, and a run that was not judged is never
-//!   a pass.
+//! - a run whose heal converged is a [`Verdict::Fail`] if any checker found a violation, a
+//!   [`Verdict::Incomplete`] if a checker could not read the document or K-13 found the run
+//!   vacuous, and a [`Verdict::Pass`] only if all thirteen ran and held.
 //!
-//! The report therefore has `ok: false` for every run until the checkers are wired, and its
-//! `checkers` object lists which ran (none) and which did not.
+//! The report's `checkers` object lists which ran and which did not.
 
 use serde_json::{Value as Json, json};
 use types::Config;
 
 use crate::cluster::Cluster;
 use crate::drain::QUIET_TICKS;
+use crate::judge;
 use crate::observe::{self, Meta};
 use crate::phases::{self, Finished, HEAL_BUDGET_TICKS, Heal, Stage};
 use crate::scenario::{SCHEMA as SCENARIO_SCHEMA, Scenario};
@@ -39,14 +39,9 @@ pub const LABEL: &str = "simulated scenario run: five production node cores over
                          disk, network, clock and entropy in one process, under a generated or \
                          read scenario; not a real server or cluster (P6)";
 
-/// Why a run whose heal converged is still not a pass.
-pub const UNJUDGED: &str = "no checker has judged this run's history yet (the checkers are \
-                            not wired to the simulator); an unjudged run is incomplete, never \
-                            a pass (P10)";
-
-/// The checkers a complete run needs (K-13's list), none of which ran.
-const CHECKERS: [&str; 12] = [
-    "K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8", "K-9", "K-10", "K-11", "K-12",
+/// The checkers a complete run needs: K-1 to K-12 and the non-vacuity checker K-13.
+const CHECKERS: [&str; 13] = [
+    "K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8", "K-9", "K-10", "K-11", "K-12", "K-13",
 ];
 
 /// What a crash pack keeps of a failed run beyond its trace (PLAN.md §10.9, T-8).
@@ -107,6 +102,9 @@ pub struct ScenarioRun {
     pub end_us: u64,
     /// What a crash pack keeps, kept only when the verdict is a failure.
     pub evidence: Option<Evidence>,
+    /// The checkers that ran on the run's history, K-13 last; empty for a run that was not
+    /// judged.
+    pub ran: Vec<&'static str>,
     /// The options the run was started with.
     pub options: Options,
 }
@@ -137,7 +135,13 @@ impl ScenarioRun {
             "failures": self.failures,
             "incomplete": self.incomplete,
             "heal": self.heal,
-            "checkers": { "ran": Vec::<&str>::new(), "not_run": CHECKERS },
+            "checkers": {
+                "ran": self.ran,
+                "not_run": CHECKERS
+                    .iter()
+                    .filter(|name| !self.ran.contains(name))
+                    .collect::<Vec<_>>(),
+            },
             "trace": {
                 "hash": format!("{:016x}", self.hash().get()),
                 "lines": self.trace.lines().count(),
@@ -193,6 +197,7 @@ pub fn run_as(
         events: 0,
         end_us: 0,
         evidence: None,
+        ran: Vec::new(),
         options,
     };
     match phases::run_with(config, scenario, budget_ticks) {
@@ -223,7 +228,21 @@ pub fn run_as(
                         &run.options,
                     ));
                 }
-                Heal::Converged(_) => run.incomplete.push(UNJUDGED.to_owned()),
+                Heal::Converged(_) => {
+                    let kept = evidence(&finished, config, scenario, run.profile, &run.options);
+                    let judged = judge::judge(&kept.history);
+                    run.verdict = match judged.overall {
+                        checker::Verdict::Pass => Verdict::Pass,
+                        checker::Verdict::Fail => Verdict::Fail,
+                        checker::Verdict::Incomplete => Verdict::Incomplete,
+                    };
+                    run.failures.extend(judged.failures);
+                    run.incomplete.extend(judged.incomplete);
+                    run.ran = judged.ran;
+                    if run.verdict == Verdict::Fail {
+                        run.evidence = Some(kept);
+                    }
+                }
             }
             run
         }
@@ -369,22 +388,35 @@ mod tests {
     }
 
     #[test]
-    fn a_run_nothing_judged_is_incomplete_and_not_ok() {
+    fn a_run_whose_record_has_no_node_side_is_incomplete_and_not_ok() {
         let run = run(&config(), &scenario(5), "swarm");
+        let report = run.report(None);
         assert_eq!(
             (
                 run.verdict,
-                run.report(None)["ok"].as_bool(),
-                run.heal["outcome"].as_str()
+                report["ok"].as_bool(),
+                run.heal["outcome"].as_str(),
+                run.failures.len(),
+                report["checkers"]["ran"].as_array().map(Vec::len),
+                report["checkers"]["not_run"].as_array().map(Vec::len),
             ),
-            (Verdict::Incomplete, Some(false), Some("converged")),
-            "rule: with no checker wired, a converged run is incomplete, never a pass (P10); \
-             run={run:?}"
+            (
+                Verdict::Incomplete,
+                Some(false),
+                Some("converged"),
+                0,
+                Some(0),
+                Some(13)
+            ),
+            "rule: a converged run whose observation lacks the node side is incomplete with no \
+             checker run and no invented violation, never a pass (P10, T-13); run={run:?}"
         );
-        assert_eq!(
-            run.incomplete,
-            vec![UNJUDGED.to_owned()],
-            "rule: the reason says nothing judged the history"
+        assert!(
+            run.incomplete
+                .iter()
+                .any(|reason| reason.contains("node-side")),
+            "rule: the reason names the missing node-side records; incomplete={:?}",
+            run.incomplete
         );
     }
 

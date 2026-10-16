@@ -50,6 +50,9 @@ pub mod drain;
 mod drain_tests;
 pub mod entropy;
 pub mod god_view;
+pub mod judge;
+#[cfg(test)]
+mod judge_tests;
 pub mod nemesis;
 #[cfg(test)]
 mod nemesis_tests;

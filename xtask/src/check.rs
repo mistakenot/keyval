@@ -2084,6 +2084,23 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 5,
     },
     CheckDef {
+        id: "SIM-JUDGE",
+        summary: "The history checkers judge a run (§10.5, §10.16, §12.2 br-skf5): K-1 to K-12 \
+                  and K-13 run over the run's observation document and give a verdict with the \
+                  checkers that ran; a clean run passes, a corrupted one fails with a named \
+                  finding, an unreadable document or a document without the node side's records \
+                  is incomplete and runs no invented violation, never a pass (P10, T-13)",
+        kind: Kind::TestGroup,
+        covers: &["T-13", "P10"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["judge_tests::"],
+        },
+        min_cases: 5,
+    },
+    CheckDef {
         id: "DEV-SIM-CAMPAIGN",
         summary: "./dev sim run --scenario/--profile swarm, campaign and shrink (§10.9, §12.2 \
                   W42.1): a v2 report is parsed strictly; --scenario FILE reaches keyval-sim \

@@ -11,6 +11,7 @@ types = { workspace = true }
 statemachine = { workspace = true }
 node = { workspace = true }
 journal = { workspace = true }
+checker = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

@@ -43,6 +43,7 @@ journal = { path = "crates/journal" }
 fs_storage = { path = "crates/fs_storage" }
 statemachine = { path = "crates/statemachine" }
 model = { path = "crates/model" }
+checker = { path = "crates/checker" }
 raft_adapter = { path = "crates/raft_adapter" }
 node = { path = "crates/node" }
 # Third-party crates (each one ledgered in DEPENDENCIES.md).

@@ -1198,6 +1198,18 @@ min_cases = 5
 status = "implemented"
 
 [[check]]
+id = "SIM-JUDGE"
+summary = "The history checkers judge a run (§10.5, §10.16, §12.2 br-skf5): K-1 to K-12 and K-13 run over the run's observation document and give a verdict with the checkers that ran; a clean run passes, a corrupted one fails with a named finding, an unreadable document or a document without the node side's records is incomplete and runs no invented violation, never a pass (P10, T-13)"
+kind = "test_group"
+covers = ["T-13", "P10"]
+api = []
+class = "simulation_evidenced"
+tier = "T0"
+run = "./dev check SIM-JUDGE"
+min_cases = 5
+status = "implemented"
+
+[[check]]
 id = "DEV-SIM-CAMPAIGN"
 summary = "./dev sim run --scenario/--profile swarm, campaign and shrink (§10.9, §12.2 W42.1): a v2 report is parsed strictly; --scenario FILE reaches keyval-sim alone and a seed run as --seed N --profile swarm; exit statuses map as for the slice, never to a pass (P10); seed ranges A..B parse inclusive and bounded; a campaign runs every seed once in parallel within --jobs, lists them in seed order with re-run commands, is ok only if all pass, and records a seed with no report as an error line; unusable requests are refused before anything runs; shrink is refused as not implemented until W44"
 kind = "test_group"
