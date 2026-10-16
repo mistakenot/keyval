@@ -495,7 +495,7 @@ deps = ["W41"]
 reqs = ["T-4", "T-8", "O-6"]
 area = ["sim"]
 milestone = "m4"
-accept = []
+accept = ["./dev check DEV-SIM-CAMPAIGN", "./dev check SIM-SCENARIO-RUN", "./dev check CRASH-PACK", "./dev check CORPUS"]
 bead = "br-w42-sim-commands-crashpacks-corpus-hj8"
 
 [[item]]
