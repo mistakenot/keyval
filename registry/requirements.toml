@@ -62,61 +62,61 @@ notes = "Owner disposition: history capacity and journal hard stop accepted as s
 [[requirement]]
 id = "F-1"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "PUT sets a key and returns its new version and execution index"
 
 [[requirement]]
 id = "F-2"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "GET returns value and version, or not_found, with served_by"
 
 [[requirement]]
 id = "F-3"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "DELETE removes a key and reports whether it existed"
 
 [[requirement]]
 id = "F-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "SCAN returns bounded, continuable pages of a key range"
 
 [[requirement]]
 id = "F-5"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "COMPARE_SWAP against absent or a version; a mismatch is terminal"
 
 [[requirement]]
 id = "F-6"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Writes carry idempotency keys: replay, conflict, no retention window"
 
 [[requirement]]
 id = "F-7"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Any node accepts any request, with a fixed write decision order"
 
 [[requirement]]
 id = "F-8"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Invalid input is rejected before proposal, with no side effect"
 
 [[requirement]]
 id = "F-9"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Request status lookup never proposes; unknown does not mean not done"
 
 [[requirement]]
 id = "F-10"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Every outcome is distinguishable, terminal from non-terminal"
 
 # §6.4 Consistency
@@ -266,7 +266,7 @@ title = "Recovery is correct under the stated crash model"
 [[requirement]]
 id = "O-1"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Liveness, readiness and cluster status endpoints"
 
 [[requirement]]
