@@ -341,7 +341,7 @@ title = "Same seed and build give a byte-identical canonical trace"
 [[requirement]]
 id = "T-4"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Every simulation failure is replayable with one command"
 
 [[requirement]]
@@ -365,7 +365,7 @@ title = "An independent reference model defines expected semantics"
 [[requirement]]
 id = "T-8"
 level = "MUST"
-status = "planned"
+status = "active"
 title = "Every simulation failure produces a crash pack"
 
 [[requirement]]
