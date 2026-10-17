@@ -175,11 +175,23 @@ fn only_one_campaign_runs_at_a_time_and_a_running_one_is_visible() {
         "rule: a live holder keeps it running: {t1:?}"
     );
     drop(held);
-    let status = execute(&root, &Action::Status, NOW);
-    let t1 = status.jobs.iter().find(|j| j.job == Job::T1).unwrap();
+    // A child that another test forked just before the drop keeps the flock's open file
+    // description alive until it execs, so the release can lag by an instant.
+    let mut t1 = None;
+    for _ in 0..100 {
+        let status = execute(&root, &Action::Status, NOW);
+        let seen = status.jobs.into_iter().find(|j| j.job == Job::T1).unwrap();
+        let released = seen.recent.iter().any(|r| r.state == State::Incomplete);
+        t1 = Some(seen);
+        if released {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let t1 = t1.unwrap();
     assert!(
         t1.recent.iter().any(|r| r.state == State::Incomplete),
-        "rule: a running record whose holder is gone reads as incomplete, never passed: {t1:?}"
+        "rule: a running record whose holder is gone reads as incomplete, never passed (waited 5s for the release): {t1:?}"
     );
 }
 
