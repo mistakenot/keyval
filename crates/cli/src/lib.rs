@@ -6,6 +6,7 @@
 //! parses arguments and prints; everything it reports is built here, so tests call it
 //! directly as well as through the binary.
 
+pub mod client;
 pub mod doctor;
 pub mod output;
 pub mod pending;

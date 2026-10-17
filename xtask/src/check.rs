@@ -2802,6 +2802,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 9,
     },
+    CheckDef {
+        id: "CLIENT-OPS",
+        summary: "the CLI client operations (O-4, C-6): put, get, delete, cas, scan, status and cluster over HTTP; a write takes a fresh 32-lowercase-hex request ID, is persisted before its first send and deleted only after a terminal result, and every resend carries the same ID and bytes; a 307 is followed to the leader_hint node, busy backs off on the same node, unavailable and recovering back off to another node, unknown_outcome and silence resend or ask the status lookup under the same ID; the 10-attempt, 5-node and 15 s bounds end in an unresolved report that names the ID and keeps the record, never in failed; history_full is a refusal only when no send may have been submitted; version_mismatch, capacity_exceeded and request_id_conflict are terminal, 400-class refusals are rejections; scan pages that break the spec and unreadable answers are silence, never a panic; the transport is exercised over a real loopback socket (connect failure is not-sent, a broken response is unknown). Test evidence over a scripted network, virtual clock and seeded entropy, not proof; the pending and resume commands, subcommand wiring and JSON schemas are W33.3",
+        kind: Kind::TestGroup,
+        covers: &["O-4", "C-6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "cli",
+            filters: &["client::tests::"],
+        },
+        min_cases: 36,
+    },
 ];
 
 /// Outcome of one requested check.
