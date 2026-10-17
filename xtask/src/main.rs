@@ -39,6 +39,8 @@ mod raft_audit;
 mod registry;
 mod registry_gate;
 mod run_tree;
+mod schedule;
+mod schedule_plan;
 #[cfg(test)]
 mod schemas;
 mod sim;
@@ -85,6 +87,37 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+/// `./dev schedule` actions.
+#[derive(Debug, Subcommand)]
+enum ScheduleAction {
+    /// Write the systemd user units (hourly T1, nightly T2); `--apply` also enables them.
+    Install {
+        /// Link and enable the timers with `systemctl --user`.
+        #[arg(long)]
+        apply: bool,
+        /// Where to write the units (default `~/.config/systemd/user`).
+        #[arg(long, value_name = "DIR")]
+        units_dir: Option<PathBuf>,
+    },
+    /// Show what is due, running, queued, incomplete and missed.
+    Status,
+    /// Run a job if it is owed and the machine allows it (what the timers invoke).
+    Run {
+        /// The job: `t1` or `t2`.
+        #[arg(value_enum)]
+        job: ScheduleJob,
+    },
+}
+
+/// A scheduled job on the command line.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ScheduleJob {
+    /// T1 integration, hourly.
+    T1,
+    /// T2 campaign, nightly.
+    T2,
 }
 
 /// The `./dev` commands. Each one lands with the bead that implements it (§11.13).
@@ -159,6 +192,11 @@ enum Command {
         /// Report what would be removed, and remove nothing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Local T1/T2 timers, their ledger and arbitration (§10.10, §11.12).
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleAction,
     },
     /// Run a gate tier on an exact tree and write a receipt (§10.10).
     Gate {
@@ -415,11 +453,8 @@ fn run(cli: Cli) -> Status {
     match cli.command {
         Command::Doctor => {
             let pin = workspace::pinned_toolchain(&root).map_err(|err| err.to_string());
-            let raft_codegen = vendor::codegen_pin(&root);
-            output::emit(
-                format,
-                &doctor::run(&root, pin, doctor::TOOLS, raft_codegen),
-            )
+            let codegen = vendor::codegen_pin(&root);
+            output::emit(format, &doctor::run(&root, pin, doctor::TOOLS, codegen))
         }
         Command::Check { ids, case } => {
             let report = check::run(
@@ -487,6 +522,7 @@ fn run(cli: Cli) -> Status {
         Command::Cluster { action } => run_cluster(&root, format, action),
         Command::Smoke { action } => run_smoke(&root, format, action),
         Command::Prune { dry_run } => run_prune(&root, format, dry_run),
+        Command::Schedule { action } => run_schedule(&root, format, action),
         Command::Accept { bead, tree } => {
             let tracker = tracker::LiveTracker { root: root.clone() };
             let report = accept::run(
@@ -713,6 +749,24 @@ struct GateArgs {
     artifacts: Option<PathBuf>,
     parent_checks: Option<PathBuf>,
     allow_demotion: Vec<String>,
+}
+
+fn run_schedule(root: &Path, format: Format, action: ScheduleAction) -> Status {
+    let action = match action {
+        ScheduleAction::Install { apply, units_dir } => schedule::Action::Install {
+            apply,
+            dir: units_dir,
+        },
+        ScheduleAction::Status => schedule::Action::Status,
+        ScheduleAction::Run { job } => schedule::Action::Run(match job {
+            ScheduleJob::T1 => schedule_plan::Job::T1,
+            ScheduleJob::T2 => schedule_plan::Job::T2,
+        }),
+    };
+    output::emit(
+        format,
+        &schedule::execute(root, &action, schedule::now_unix()),
+    )
 }
 
 fn run_prune(root: &Path, format: Format, dry_run: bool) -> Status {

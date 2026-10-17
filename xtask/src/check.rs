@@ -1329,6 +1329,51 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 5,
     },
     CheckDef {
+        id: "SCHEDULE-PLAN",
+        summary: "the scheduler's rules (§10.10, §10.11, §11.12): T1 slots fall \
+                  hourly and T2 slots at 02:00 UTC; slots a machine slept \
+                  through are reported missed and never passed, and only the \
+                  latest slot is owed; an interrupted run stays incomplete with \
+                  its seeds explicit and resumes as a new attempt naming it; T0 \
+                  goes before T1 and T1 before T2 with one campaign at a time, \
+                  and a job that has to wait is queued; the systemd units run at \
+                  the lowest priority from a persistent timer. Test evidence on \
+                  fixtures",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["schedule_plan::tests::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
+        id: "SCHEDULE-RUN",
+        summary: "the scheduler's effects (§10.10, §11.12): a gate report is \
+                  read into a passed, failed or incomplete record (no report is \
+                  never a pass), a finished slot is not run twice, an \
+                  interrupted slot is resumed as a new attempt and the \
+                  interrupted record stays on the ledger, a job queues while a \
+                  T0 commit holds the commit lock or another campaign holds the \
+                  campaign lock and runs from the same record afterwards, a \
+                  running record with no lock holder reads as incomplete, status \
+                  writes nothing, and install writes the units without enabling \
+                  them. Test evidence with a scripted gate; the live systemd \
+                  timers, a real T1 or T2 run and a wake from sleep are not \
+                  exercised",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["schedule::tests::"],
+        },
+        min_cases: 14,
+    },
+    CheckDef {
         id: "DOCTOR-CLI",
         summary: "keyval doctor, run as the real binary on real data directories, \
                   reaches startup recovery's verdict on every recovery golden (clean, \

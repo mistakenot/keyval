@@ -1,0 +1,47 @@
+{
+  "rule": "a run that ended in a pass says when it ended",
+  "error_at": "/jobs/0/recent/0/finished_at",
+  "instance": {
+    "schema": "keyval.dev.schedule/v1",
+    "ok": true,
+    "action": "status",
+    "now": 1729126830,
+    "at": "2024-10-17T00:00:30Z",
+    "jobs": [
+      {
+        "job": "t1",
+        "latest_slot": 1729126800,
+        "due": { "due": "done", "slot": 1729126800, "record": "t1-1729126800-a1" },
+        "missed": [1729123200],
+        "recent": [
+          {
+            "id": "t1-1729126800-a1",
+            "job": "t1",
+            "slot": 1729126800,
+            "attempt": 1,
+            "state": "passed",
+            "queued_at": 1729126800,
+            "started_at": 1729126801,
+            "finished_at": null,
+            "resumes": null,
+            "blocked_by": null,
+            "tree": "0123456789abcdef0123456789abcdef01234567",
+            "receipt": "artifacts/receipts/gate-t1.json",
+            "seeds": { "target": 2000, "completed": 2000, "remaining": 0 },
+            "detail": null
+          }
+        ]
+      },
+      {
+        "job": "t2",
+        "latest_slot": null,
+        "due": { "due": "not_yet" },
+        "missed": [],
+        "recent": []
+      }
+    ],
+    "install": null,
+    "run": null,
+    "error": null
+  }
+}

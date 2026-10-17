@@ -17,6 +17,7 @@ holds one JSON Schema (draft 2020-12) per identifier the code emits:
 | `keyval.dev.close/v2` | `close.v2.schema.json` | `./dev commit --close` (embeds the commit report) |
 | `keyval.dev.beads-import/v1` | `beads-import.v1.schema.json` | `./dev beads import` |
 | `keyval.dev.prune/v1` | `prune.v1.schema.json` | `./dev prune`, report and receipt |
+| `keyval.dev.schedule/v1` | `schedule.v1.schema.json` | `./dev schedule install, status, run` |
 | `keyval.dev.step/v1` | `step.v1.schema.json` | step records (stderr, `steps.jsonl`) |
 | `keyval.dev.traceability/v2` | `traceability.v2.schema.json` | `./dev report traceability` |
 | `keyval.dev.coverage/v1` | `coverage.v1.schema.json` | `./dev report coverage` |

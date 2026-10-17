@@ -51,6 +51,7 @@ const IDS: &[&str] = &[
     crate::closure::SCHEMA,
     crate::beads::SCHEMA,
     crate::prune::SCHEMA,
+    crate::schedule::SCHEMA,
     crate::steplog::SCHEMA,
     crate::traceability::SCHEMA,
     crate::coverage::SCHEMA,
@@ -1285,6 +1286,46 @@ mod tests {
                 validators.assert_matches(&read_json(Path::new(path)), &format!("{case}: receipt"));
             }
         }
+    }
+
+    #[test]
+    fn schedule_reports_match_their_schema() {
+        use crate::schedule::{Action, execute};
+        use crate::schedule_plan::Job;
+        let validators = Validators::load();
+        let root = scratch_dir("schemas-schedule-root");
+        let now = 20_000 * 86_400 + 5 * 3_600 + 30;
+        let units = root.join("units");
+        // A run that spawns the gate would race the lock tests of `schedule::tests` (a forked
+        // child shares a held flock until it execs), so this sequence only queues: T2 waits
+        // behind the owed T1, and a `running` record with no lock holder reads as incomplete.
+        let mut interrupted = crate::schedule_plan::Record {
+            state: crate::schedule_plan::State::Running,
+            ..crate::schedule::new_record(Job::T1, now - 30, 1, now - 30)
+        };
+        interrupted.started_at = Some(now - 20);
+        crate::schedule::save(&root.join(crate::schedule::DIR), &interrupted).unwrap();
+        let actions = [
+            Action::Status,
+            Action::Install {
+                apply: false,
+                dir: Some(units),
+            },
+            Action::Run(Job::T2),
+            Action::Status,
+        ];
+        for (n, action) in actions.iter().enumerate() {
+            let report = execute(&root, action, now);
+            validators.assert_matches(&report, &format!("schedule step {n}: {action:?}"));
+        }
+        let status = execute(&root, &Action::Status, now);
+        assert!(
+            status
+                .jobs
+                .iter()
+                .any(|j| !j.recent.is_empty() && !j.missed.is_empty()),
+            "the sequence leaves an incomplete record and missed slots for the schema to see; {status:#?}"
+        );
     }
 
     #[test]

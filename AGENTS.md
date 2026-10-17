@@ -421,6 +421,17 @@ output only together with its schema, and bump the version when the change break
     valid marker is only reported;
   - logs every removal (or, with `--dry-run`, every removal it would make) in a
     `keyval.dev.prune/v1` receipt. Gate-run retention comes with W46.
+- `./dev schedule install [--apply] [--units-dir DIR] | status | run t1|t2` — the local
+  T1 (hourly) and T2 (nightly, 02:00 UTC) timers (§10.10, §11.12; W46.2). `install` writes
+  persistent systemd user units (lowest CPU/IO priority) and enables them only with
+  `--apply`; the timers invoke `run`, which does nothing unless the latest slot is owed.
+  The ledger is `.local/schedule/records/`; one `campaign.lock` allows one campaign at a
+  time; a job waits (`queued`) while a T0 commit holds the commit lock, and T2 waits for an
+  owed T1; a run then starts whatever else is owed. A gate refusal (for example a dirty
+  checkout) leaves the slot queued with the reason, and T1's timer retries every ten
+  minutes. Logged-out firing needs `loginctl enable-linger`. Slots a sleeping machine missed stay *missed* (never passed); an interrupted
+  run stays `incomplete` with its seeds explicit and the next run resumes it as a new
+  attempt. `--json` prints `keyval.dev.schedule/v1`.
 - `./dev sim run --seed N [--profile slice] [--config FILE]` — one simulated run (§12.2 W17)
   in a fresh `keyval-sim` process, built and run by local cargo (never `rch`: the trace must
   be on this machine). It writes the canonical trace to `artifacts/sim/<profile>-seed-<N>.trace`
