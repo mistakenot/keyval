@@ -38,6 +38,7 @@ mod prune;
 mod raft_audit;
 mod registry;
 mod registry_gate;
+mod run_tree;
 #[cfg(test)]
 mod schemas;
 mod sim;
@@ -48,6 +49,8 @@ mod staging;
 mod steplog;
 #[cfg(test)]
 mod test_support;
+mod tier_plan;
+mod tier_run;
 mod tiers;
 mod traceability;
 mod tracker;
@@ -159,7 +162,7 @@ enum Command {
     },
     /// Run a gate tier on an exact tree and write a receipt (§10.10).
     Gate {
-        /// The tier; only `fast` exists before W46.
+        /// The tier: `fast` (T0), `integration` (T1), `campaign` (T2) or `release` (T3).
         #[arg(value_enum)]
         tier: gate::GateTier,
         /// Candidate mode: the tree ID of this directory's content, recorded by the commit
@@ -722,13 +725,18 @@ fn run_prune(root: &Path, format: Format, dry_run: bool) -> Status {
 }
 
 fn run_gate(root: &Path, format: Format, tier: gate::GateTier, args: GateArgs) -> Status {
-    if tier != gate::GateTier::Fast {
-        let message = format!(
-            "gate tier `{}` is not implemented yet (W46); a missing tier never counts as a \
-             pass (P10)",
-            gate::tier_name(tier)
+    // T1–T3 judge their own materialised tree; the process that finds none given makes it
+    // and runs the tree's own `./dev` there (§10.10 "Tree isolation").
+    if tier != gate::GateTier::Fast && args.tree.is_none() {
+        return run_gate_in_run_tree(root, format, tier, args);
+    }
+    if tier != gate::GateTier::Fast && !run_tree::is_run_tree(root) {
+        let why = format!(
+            "{} judges a run tree, not {}: run it without --tree (§10.10 tree isolation)",
+            gate::tier_name(tier),
+            root.display()
         );
-        return output::report_error(format, ErrorKind::NotImplemented, &message, &message);
+        return output::report_error(format, ErrorKind::Refused, &why, &why);
     }
     // The forward-only rule's baseline (D-56): a candidate's comes from the commit wrapper;
     // a clean checkout's is HEAD's parent.
@@ -755,9 +763,119 @@ fn run_gate(root: &Path, format: Format, tier: gate::GateTier, args: GateArgs) -
         parent,
         allow_demotions: args.allow_demotion,
     };
-    match gate::run_fast(&ctx) {
+    match gate::run_tier(&ctx, tier) {
         Ok(report) => output::emit(format, &report),
         Err(why) => output::report_error(format, ErrorKind::Internal, &why, &why),
+    }
+}
+
+/// How long one T1–T3 run may take. A tier is never cut off by a wall-clock budget
+/// (§10.11); this only bounds a hung process.
+const TIER_RUN_LIMIT: std::time::Duration = std::time::Duration::from_hours(24);
+
+/// `./dev gate integration|campaign|release` from the shared checkout: materialises the
+/// clean `HEAD^{tree}` into `.local/gates/<run-id>/tree`, verifies it, runs that tree's
+/// own `./dev gate <tier> --tree <id>` there under git isolation, and verifies the tree
+/// again afterwards (W46.1).
+fn run_gate_in_run_tree(
+    root: &Path,
+    format: Format,
+    tier: gate::GateTier,
+    args: GateArgs,
+) -> Status {
+    let refuse = |why: String| output::report_error(format, ErrorKind::Refused, &why, &why);
+    let tree = match gate::resolve_tree(root, None, Vec::new()) {
+        Ok(tree) => tree,
+        Err(why) => return refuse(why),
+    };
+    let parent = match gate::Parent::of_head(root) {
+        Ok(gate::Parent::Checks(text)) => text,
+        Ok(gate::Parent::Absent) => String::new(),
+        Ok(gate::Parent::Unknown) => {
+            return refuse("the parent commit's registry is unknown".to_owned());
+        }
+        Err(why) => return refuse(why),
+    };
+    match gate::resolve_tree(root, None, Vec::new()) {
+        Ok(again) if again.id == tree.id => {}
+        Ok(_) => {
+            return refuse("HEAD moved while the run was being set up; run it again".to_owned());
+        }
+        Err(why) => return refuse(why),
+    }
+    let git = git::Git::new(root);
+    let id = run_tree::run_id(
+        tier,
+        &tree.id,
+        &clock::Utc::now().compact(),
+        std::process::id(),
+    );
+    let base = root.join(run_tree::DIR);
+    let run = match run_tree::prepare(&git, &base, &id, &tree.id) {
+        Ok(run) => run,
+        Err(why) => return refuse(why),
+    };
+    let parent_file = base.join(&id).join("parent-checks.toml");
+    if let Err(err) = std::fs::write(&parent_file, parent) {
+        return refuse(format!("cannot write {}: {err}", parent_file.display()));
+    }
+    let target = match cargo::checkout_target_dir(&cargo::target_base(root), &run.dir) {
+        Ok(target) => target,
+        Err(why) => return refuse(why),
+    };
+    let shared = match args.artifacts {
+        Some(dir) if dir.is_relative() => root.join(dir),
+        Some(dir) => dir,
+        None => root.join("artifacts"),
+    };
+    // The inner run writes into its own artifacts directory, seeded with what is already
+    // there, so a receipt reaches the shared one (and T2 can reuse it) only once the tree
+    // has been verified after the run.
+    let own = base.join(&id).join("artifacts");
+    if let Err(why) = run_tree::copy_missing(&shared, &own) {
+        return refuse(why);
+    }
+    let inner = run_tree::inner_args(
+        tier,
+        &run,
+        &parent_file,
+        &own,
+        &args.allow_demotion,
+        format == Format::Json,
+    );
+    let mut cmd = std::process::Command::new(run.dir.join("dev"));
+    cmd.args(&inner).current_dir(&run.dir);
+    for (key, value) in accept::isolated_env(&run.dir, &target) {
+        cmd.env(key, value);
+    }
+    let captured = match process::run(&mut cmd, TIER_RUN_LIMIT) {
+        Ok(captured) => captured,
+        Err(err) => {
+            return refuse(format!(
+                "cannot run {}: {err}",
+                run.dir.join("dev").display()
+            ));
+        }
+    };
+    let wrote = output::write_line(&mut std::io::stdout().lock(), captured.stdout.trim_end());
+    if !captured.stderr.is_empty() {
+        let _ = output::write_line(&mut std::io::stderr().lock(), captured.stderr.trim_end());
+    }
+    if let Err(why) = run_tree::verify(&git, &run) {
+        return refuse(format!(
+            "the {} run modified its run tree {}: {why}; its receipts stay in {} and are not \
+             published",
+            gate::tier_name(tier),
+            run.dir.display(),
+            own.display()
+        ));
+    }
+    if let Err(why) = run_tree::copy_missing(&own, &shared) {
+        return refuse(why);
+    }
+    match wrote {
+        Ok(()) if captured.status.success() => Status::Ok,
+        Ok(()) | Err(_) => Status::Failed,
     }
 }
 

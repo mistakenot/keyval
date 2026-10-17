@@ -104,10 +104,13 @@ mod schemas {
     }
 
     #[test]
-    fn an_unimplemented_gate_tier_prints_a_valid_error_envelope() {
-        let args = ["gate", "integration", "--json"];
+    fn a_refused_tier_gate_run_prints_a_valid_error_envelope() {
+        // T1 is implemented (W46.1). A tier judges only a run tree, so `--tree` from the
+        // shared checkout is refused before anything runs; this checks the envelope without
+        // starting a tier.
+        let args = ["gate", "integration", "--tree", "not-a-tree", "--json"];
         let envelope = assert_output_matches(&args, &[1], "keyval.dev.error/v1");
-        assert_eq!(envelope["error"]["kind"], "not_implemented");
+        assert_eq!(envelope["error"]["kind"], "refused");
     }
 
     #[test]

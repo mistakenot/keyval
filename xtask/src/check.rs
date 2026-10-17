@@ -1238,6 +1238,97 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 14,
     },
     CheckDef {
+        id: "TIER-PLAN",
+        summary: "the gate tier rules (§10.10, §10.11): T0 selects the \
+                  changed crates plus their reverse dependencies and T1 to \
+                  T3 the whole workspace; T2 reuses the latest passing T1 \
+                  conformance, probe and bug-variant evidence and re-runs \
+                  none of those suites, refusing reuse without it; the \
+                  replay pair counts are exactly 2, 16, 64 and 100; T3 needs \
+                  at least 100000 fresh release seeds, every required \
+                  coverage cell non-zero, no planned check in its contents \
+                  and no checker violation or incomplete run, and fails on \
+                  any unmeasured fact; durations and coverage are \
+                  measurements, never a percentage or wall-clock cutoff, and \
+                  a sustained T0 overrun is recorded, not failed. Test \
+                  evidence for the pure tier rules; live replay, seed and \
+                  coverage measurement and the scheduler are not part of \
+                  this check",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["tier_plan::tests::"],
+        },
+        min_cases: 30,
+    },
+    CheckDef {
+        id: "RUN-TREE",
+        summary: "the T1 to T3 per-run tree (§10.10 tree isolation): a run \
+                  tree holds exactly the judged tree and no .git directory, \
+                  a run directory is used once and never refreshed, a \
+                  modified or stray file fails the post-run verification, \
+                  malformed tree and run IDs are refused before anything is \
+                  written, and the inner ./dev judges the asserted tree with \
+                  the parent registry and no changed list. Test evidence for \
+                  the run-tree helper",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["run_tree::tests::"],
+        },
+        min_cases: 8,
+    },
+    CheckDef {
+        id: "TIER-RUN",
+        summary: "the tier gate's receipt inputs (§10.10, §10.11): the \
+                  protected-artifact hashes cover the plan, API contract and \
+                  registry and report an edit by name, T2's evidence is read \
+                  only from T1 gate receipts with their passed steps, and \
+                  the T0 duration history is read in time order. Test \
+                  evidence for the receipt readers",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &["tier_run::tests::"],
+        },
+        min_cases: 4,
+    },
+    CheckDef {
+        id: "TIER-GATE",
+        summary: "the tiered gate run (§10.10, §10.11): a T0 receipt keeps \
+                  its steps and records its tier plan and the protected-artifact hashes; T1 and above append the pass-criteria and \
+                  protected-artifacts steps; T1 reports unmeasured replay, \
+                  seed and coverage facts without failing while T3 fails on \
+                  them and lists the failures in the receipt; T2 refuses \
+                  reuse without a passing T1 run, and with one reuses the \
+                  suite and leaves its cases out of the package run. Test \
+                  evidence on registry \
+                  fixtures; live replay, seed and coverage measurement and \
+                  the scheduler are not part of this check",
+        kind: Kind::TestGroup,
+        covers: &["P7", "P10"],
+        class: ClaimClass::Invariant,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "xtask",
+            filters: &[
+                "gate::tests::a_t0_receipt",
+                "gate::tests::t3_fails",
+                "gate::tests::t2_",
+            ],
+        },
+        min_cases: 5,
+    },
+    CheckDef {
         id: "DOCTOR-CLI",
         summary: "keyval doctor, run as the real binary on real data directories, \
                   reaches startup recovery's verdict on every recovery golden (clean, \

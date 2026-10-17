@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://keyval.invalid/schemas/dev/receipt.v5.schema.json",
-  "title": "keyval.dev.receipt/v5",
-  "description": "A gate receipt (xtask/src/gate.rs `Receipt`): exactly what ran, on exactly which tree. Written to artifacts/receipts/gate-<run>.json and embedded in the keyval.dev.gate/v4 report. v2 added tools.cargo_target_dir and tools.ast_grep; v3 added build_inputs.raft_vendor_sha256 (W02.1); v4 added planned and demotions, and set became bootstrap or registry (W05.4). v5 names the field of each approved demotion: status, min_cases or tier (br-forward-only-min-cases-tier-xo5i).",
+  "$id": "https://keyval.invalid/schemas/dev/receipt.v6.schema.json",
+  "title": "keyval.dev.receipt/v6",
+  "description": "A gate receipt (xtask/src/gate.rs `Receipt`): exactly what ran, on exactly which tree. Written to artifacts/receipts/gate-<run>.json and embedded in the keyval.dev.gate/v6 report. v2 added tools.cargo_target_dir and tools.ast_grep; v3 added build_inputs.raft_vendor_sha256 (W02.1); v4 added planned and demotions, and set became bootstrap or registry (W05.4). v5 names the field of each approved demotion: status, min_cases or tier (br-forward-only-min-cases-tier-xo5i). v6 adds tier_plan: what the tier selected, reused, measured and required, and the protected-artifact hashes around the run (W46.1).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -24,7 +24,8 @@
     "steps",
     "planned",
     "demotions",
-    "step_log"
+    "step_log",
+    "tier_plan"
   ],
   "if": {
     "required": [
@@ -53,7 +54,7 @@
   },
   "properties": {
     "schema": {
-      "const": "keyval.dev.receipt/v5"
+      "const": "keyval.dev.receipt/v6"
     },
     "kind": {
       "const": "gate"
@@ -276,7 +277,7 @@
       }
     },
     "planned": {
-      "description": "The tier's planned registry rows: reported with the work item whose accept list names them, never run and never failed (§10.10).",
+      "description": "The tier's planned registry rows: reported with the work item whose accept list names them, never run and never failed (\u00a710.10).",
       "type": "array",
       "items": {
         "type": "object",
@@ -384,6 +385,279 @@
         },
         "dropped": {
           "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "tier_plan": {
+      "description": "What the tier selected, reused, measured and required (PLAN.md 10.10, 10.11; xtask/src/tier_run.rs TierReport). A null measurement is unmeasured: T1 and T2 report it, T3 fails on it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "registry_tiers",
+        "selection",
+        "tested_whole_workspace",
+        "replay_pairs_required",
+        "seed_target",
+        "seed_minimum",
+        "reused",
+        "reuse_refused",
+        "measured",
+        "failures",
+        "overrun",
+        "protected"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "T0",
+            "T1",
+            "T2",
+            "T3"
+          ]
+        },
+        "registry_tiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "T0",
+              "T1",
+              "T2",
+              "T3"
+            ]
+          }
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "crates",
+            "whole_workspace",
+            "reason"
+          ],
+          "properties": {
+            "crates": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "whole_workspace": {
+              "type": "boolean"
+            },
+            "reason": {
+              "enum": [
+                "tier_selects_whole_workspace",
+                "no_changed_paths",
+                "shared_path_changed",
+                "changed_members",
+                "nothing_built"
+              ]
+            }
+          }
+        },
+        "tested_whole_workspace": {
+          "type": "boolean"
+        },
+        "replay_pairs_required": {
+          "$ref": "#/$defs/count"
+        },
+        "seed_target": {
+          "$ref": "#/$defs/count"
+        },
+        "seed_minimum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reused": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "check",
+              "suite",
+              "run_id",
+              "tree_id"
+            ],
+            "properties": {
+              "check": {
+                "type": "string",
+                "minLength": 1
+              },
+              "suite": {
+                "enum": [
+                  "conformance",
+                  "real_file_probes",
+                  "bug_variants"
+                ]
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tree_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "reuse_refused": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measured": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "planned_in_contents",
+            "replay_pairs",
+            "fresh_seeds",
+            "zero_coverage_cells",
+            "checker_violations",
+            "incomplete_runs"
+          ],
+          "properties": {
+            "planned_in_contents": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "replay_pairs": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/count"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fresh_seeds": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/count"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "zero_coverage_cells": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "checker_violations": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/count"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "incomplete_runs": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/count"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "overrun": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "consecutive",
+                "run_ids"
+              ],
+              "properties": {
+                "consecutive": {
+                  "$ref": "#/$defs/count"
+                },
+                "run_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protected": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "unchanged"
+          ],
+          "properties": {
+            "before": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "after": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "unchanged": {
+              "type": "boolean"
+            }
+          }
         }
       }
     }

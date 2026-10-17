@@ -53,13 +53,15 @@ use crate::registry;
 use crate::registry_gate;
 use crate::staging::{self, Allowance, Demotion, PackageRun, Planned, Staging};
 use crate::steplog::{self, StepLog};
+use crate::tier_plan::{self, Facts, TierPlan};
+use crate::tier_run::{self, Measured, Prepared, Protected, TierReport};
 use crate::workgraph;
 
 /// Schema identifier of the `--json` report.
-pub const SCHEMA: &str = "keyval.dev.gate/v5";
+pub const SCHEMA: &str = "keyval.dev.gate/v6";
 
 /// Schema identifier of a receipt file.
-pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v5";
+pub const RECEIPT_SCHEMA: &str = "keyval.dev.receipt/v6";
 
 /// T0 time budget: target and alert threshold (§10.10). A run is never cut off.
 const TARGET: Duration = Duration::from_mins(2);
@@ -121,6 +123,12 @@ pub enum Step {
     /// then the workspace's doctests: the one test run every cargo-test check is judged
     /// from.
     PackageTests,
+    /// The tier's pass criteria (§10.11): exact replay-pair counts, the T3 seed floor and
+    /// coverage cells, no planned check in T3, and valid T2 reuse. T1 and above.
+    Criteria,
+    /// The protected files (policy, plan, contract, registry, corpus) hash the same after
+    /// the run as before. T1 and above.
+    Protected,
     /// A registered check. A static one runs in-process; a cargo-test one is judged from
     /// [`Step::PackageTests`].
     Check {
@@ -154,6 +162,8 @@ impl Step {
             Self::Ubs => "ubs",
             Self::Staging => "staging",
             Self::ForwardOnly => "forward-only",
+            Self::Criteria => "pass-criteria",
+            Self::Protected => "protected-artifacts",
             Self::Check { id, .. } => id,
         }
     }
@@ -319,8 +329,8 @@ pub struct Budget {
     pub over_alert: bool,
 }
 
-/// A gate receipt (`keyval.dev.receipt/v5`): exactly what ran, on exactly which tree. v5
-/// names the field of each approved demotion (xo5i).
+/// A gate receipt (`keyval.dev.receipt/v6`): exactly what ran, on exactly which tree. v5
+/// names the field of each approved demotion (xo5i); v6 adds `tier_plan` (W46.1).
 ///
 /// v2 adds `tools.cargo_target_dir` (br-gate-shared-target-dir-dtqu) and
 /// `tools.ast_grep` (br-gate-ubs-partial-scan-o59g); v4 adds `planned` and `demotions`,
@@ -366,6 +376,8 @@ pub struct Receipt {
     pub demotions: Vec<Demotion>,
     /// The step-record log (W01.6 standard).
     pub step_log: StepLogSummary,
+    /// What the tier selected, reused, measured and required (W46.1).
+    pub tier_plan: TierReport,
 }
 
 /// Where the step records went, and how many the bound dropped (CD-9).
@@ -379,7 +391,7 @@ pub struct StepLogSummary {
     pub dropped: usize,
 }
 
-/// The `./dev gate` report (`keyval.dev.gate/v5`, which embeds a v5 receipt).
+/// The `./dev gate` report (`keyval.dev.gate/v6`, which embeds a v6 receipt).
 #[derive(Debug, Serialize)]
 pub struct GateReport {
     /// Schema identifier.
@@ -511,7 +523,24 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Runs `steps` on the context's tree, writes the receipt and returns the report.
 pub fn run(ctx: &Context<'_>, tier: GateTier, steps: &[Step]) -> Result<GateReport, String> {
-    run_with(ctx, tier, steps, "bootstrap", None, CATALOGUE)
+    let prepared = prepare(ctx, tier_plan::plan(tier), &[], None);
+    run_with(ctx, tier, steps, "bootstrap", None, CATALOGUE, prepared)
+}
+
+/// `./dev gate <tier>` on the tree in `ctx.root`: T0 as [`run_fast`]; T1–T3 take the
+/// registry set only, with the rows of every tier up to their own (§10.10). The caller has
+/// already materialised the tier's own tree and git-isolated the process (W46.1).
+pub fn run_tier(ctx: &Context<'_>, tier: GateTier) -> Result<GateReport, String> {
+    if tier == GateTier::Fast {
+        return run_fast(ctx);
+    }
+    run_registry_tier(
+        ctx,
+        tier_plan::plan(tier),
+        CATALOGUE,
+        &[Step::Fmt, Step::Clippy],
+        &[Step::Ubs],
+    )
 }
 
 /// `./dev gate fast`: the registry set once the tree or its parent commit has
@@ -549,6 +578,25 @@ pub fn run_registry(
     before: &[Step],
     after: &[Step],
 ) -> Result<GateReport, String> {
+    run_registry_tier(
+        ctx,
+        tier_plan::plan(GateTier::Fast),
+        catalogue,
+        before,
+        after,
+    )
+}
+
+/// [`run_registry`] for any tier: the rows of every `checks.toml` tier up to `plan`'s own
+/// run; a tier that reuses T1 suites takes their checks from the latest T1 receipt instead;
+/// T1 and above end with the pass criteria and the protected-artifact check.
+pub fn run_registry_tier(
+    ctx: &Context<'_>,
+    plan: TierPlan,
+    catalogue: &'static [CheckDef],
+    before: &[Step],
+    after: &[Step],
+) -> Result<GateReport, String> {
     let present = ctx.root.join(registry_gate::CHECKS).is_file();
     let missing = || {
         format!(
@@ -569,25 +617,72 @@ pub fn run_registry(
         let items = read(ctx.root, registry::WORKGRAPH)
             .and_then(|text| workgraph::parse(&text))
             .unwrap_or_default();
-        staging::stage(&checks, &items, "T0", catalogue)
+        staging::stage_tiers(&checks, &items, plan.registry_tiers, catalogue)
     });
+    let ids: Vec<String> = staging
+        .as_ref()
+        .map(|staged| staged.run.iter().map(|s| s.def.id.to_owned()).collect())
+        .unwrap_or_default();
+    let prepared = prepare(ctx, plan, &ids, Some(&ctx.artifacts.join("receipts")));
     let mut steps = before.to_vec();
     steps.extend([Step::Staging, Step::ForwardOnly, Step::PackageTests]);
     if let Ok(staged) = &staging {
-        steps.extend(staged.run.iter().map(|s| Step::Check {
-            id: s.def.id,
-            min_cases: s.min_cases,
-        }));
+        steps.extend(
+            staged
+                .run
+                .iter()
+                .filter(|s| prepared.split.run.iter().any(|id| id == s.def.id))
+                .map(|s| Step::Check {
+                    id: s.def.id,
+                    min_cases: s.min_cases,
+                }),
+        );
     }
     steps.extend_from_slice(after);
+    if plan.tier != GateTier::Fast {
+        steps.extend([Step::Criteria, Step::Protected]);
+    }
     run_with(
         ctx,
-        GateTier::Fast,
+        plan.tier,
         &steps,
         "registry",
         Some(&staging),
         catalogue,
+        prepared,
     )
+}
+
+/// Decides, before any step runs, what `plan` selects, runs and reuses. `receipts` is where
+/// T1 evidence is read from; `None` skips reuse (bootstrap runs).
+fn prepare(ctx: &Context<'_>, plan: TierPlan, ids: &[String], receipts: Option<&Path>) -> Prepared {
+    // Selection is reported, not applied, so a workspace that cannot be read must not stop
+    // the run before it writes a receipt: report the whole workspace.
+    let whole = || tier_plan::Selected {
+        crates: Vec::new(),
+        whole_workspace: true,
+        reason: tier_plan::Reason::NoChangedPaths,
+    };
+    let selection = receipts
+        .and_then(|_| metadata::load(ctx.root).ok())
+        .map_or_else(whole, |metadata| {
+            let members = tier_plan::members(&metadata, ctx.root);
+            tier_plan::select(&plan, &members, &ctx.tree.changed)
+        });
+    let split = tier_plan::reuse_split(&plan, ids);
+    let evidence = match receipts {
+        Some(dir) if !split.reused.is_empty() => {
+            let runs = tier_run::t1_evidence(dir);
+            tier_plan::reusable_evidence(&runs, &split.reused).map(|found| Some(found.clone()))
+        }
+        Some(_) | None => Ok(None),
+    };
+    Prepared {
+        plan,
+        selection,
+        split,
+        evidence,
+    }
 }
 
 fn read(root: &Path, name: &str) -> Result<String, String> {
@@ -606,6 +701,14 @@ struct State<'a> {
     runs: Vec<PackageRun>,
     /// Demotions the forward-only step approved.
     approved: Vec<Demotion>,
+    /// What the tier plan decided before the steps ran.
+    prepared: Prepared,
+    /// Protected-file hashes taken before the first step.
+    protected_before: BTreeMap<String, String>,
+    /// Protected-file hashes taken after the last step.
+    protected_after: BTreeMap<String, String>,
+    /// The pass criteria the run broke.
+    criteria_failures: Vec<String>,
 }
 
 fn run_with(
@@ -615,6 +718,7 @@ fn run_with(
     set: &'static str,
     staging: Option<&Result<Staging, String>>,
     catalogue: &'static [CheckDef],
+    prepared: Prepared,
 ) -> Result<GateReport, String> {
     let started = Instant::now();
     let started_at = Utc::now();
@@ -638,29 +742,28 @@ fn run_with(
         staging,
         runs: Vec::new(),
         approved: Vec::new(),
+        prepared,
+        protected_before: tier_run::protected_hashes(ctx.root),
+        protected_after: BTreeMap::new(),
+        criteria_failures: Vec::new(),
     };
-    // Step records (W01.6 standard) go to stderr as progress and to steps.jsonl next to
-    // the step logs. A gate runs every step, so one run reports every failure.
-    let mut steplog = StepLog::new(
-        &format!("gate {}", tier_name(tier)),
-        Some(&log_dir.join("steps.jsonl")),
-        ctx.progress,
-    )
-    .map_err(|err| format!("cannot create the step log in {}: {err}", log_dir.display()))?;
-    let results: Vec<StepResult> = steps
-        .iter()
-        .map(|&step| {
-            let result = run_step(ctx, step, &log_dir, &mut state);
-            log_step(&mut steplog, step, &result);
-            result
-        })
-        .collect();
+    let (results, step_log) = run_steps(ctx, tier, steps, &log_dir, &mut state)?;
     let result = if !results.is_empty() && results.iter().all(|r| r.status == Verdict::Passed) {
         Verdict::Passed
     } else {
         Verdict::Failed
     };
     let elapsed = started.elapsed();
+    if state.protected_after.is_empty() {
+        state.protected_after = tier_run::protected_hashes(ctx.root);
+    }
+    let finished_at = Utc::now().rfc3339();
+    let tier_plan_report = tier_report(
+        &state,
+        staging,
+        &receipts,
+        (&run_id, &finished_at, elapsed > ALERT),
+    );
     let receipt = Receipt {
         schema: RECEIPT_SCHEMA,
         kind: "gate",
@@ -682,7 +785,7 @@ fn run_with(
             ast_grep: state.scanner.ast_grep,
         },
         started_at: started_at.rfc3339(),
-        finished_at: Utc::now().rfc3339(),
+        finished_at,
         duration_ms: millis(elapsed),
         budget: Budget {
             target_ms: millis(TARGET),
@@ -695,11 +798,8 @@ fn run_with(
             Some(Err(_)) | None => Vec::new(),
         },
         demotions: state.approved,
-        step_log: StepLogSummary {
-            path: steplog.path().map(|p| p.display().to_string()),
-            records: steplog.written(),
-            dropped: steplog.dropped(),
-        },
+        step_log,
+        tier_plan: tier_plan_report,
     };
     let receipt_path = receipts.join(format!("gate-{run_id}.json"));
     let json = serde_json::to_string_pretty(&receipt)
@@ -714,12 +814,149 @@ fn run_with(
     })
 }
 
-fn log_step(steplog: &mut StepLog, step: Step, result: &StepResult) {
+/// Runs `steps` in order. Step records (W01.6 standard) go to stderr as progress and to
+/// `steps.jsonl` next to the step logs. A gate runs every step, so one run reports every
+/// failure.
+fn run_steps(
+    ctx: &Context<'_>,
+    tier: GateTier,
+    steps: &[Step],
+    log_dir: &Path,
+    state: &mut State<'_>,
+) -> Result<(Vec<StepResult>, StepLogSummary), String> {
+    let mut steplog = StepLog::new(
+        &format!("gate {}", tier_name(tier)),
+        Some(&log_dir.join("steps.jsonl")),
+        ctx.progress,
+    )
+    .map_err(|err| format!("cannot create the step log in {}: {err}", log_dir.display()))?;
+    let results: Vec<StepResult> = steps
+        .iter()
+        .map(|&step| {
+            let result = run_step(ctx, step, log_dir, state);
+            log_step(&mut steplog, step, &result, tier);
+            result
+        })
+        .collect();
+    let summary = StepLogSummary {
+        path: steplog.path().map(|p| p.display().to_string()),
+        records: steplog.written(),
+        dropped: steplog.dropped(),
+    };
+    Ok((results, summary))
+}
+
+/// The receipt's `tier_plan` section. `last` is the finishing run's ID, finish time and
+/// whether it was over the alert threshold, which joins the T0 history for the overrun rule.
+fn tier_report(
+    state: &State<'_>,
+    staging: Option<&Result<Staging, String>>,
+    receipts: &Path,
+    last: (&str, &str, bool),
+) -> TierReport {
+    let (run_id, finished_at, over_alert) = last;
+    let prepared = &state.prepared;
+    let overrun = (prepared.plan.tier == GateTier::Fast)
+        .then(|| {
+            let mut history = tier_run::t0_history(receipts);
+            history.push(tier_plan::T0Timing {
+                run_id: run_id.to_owned(),
+                finished_at: finished_at.to_owned(),
+                over_alert,
+            });
+            tier_plan::sustained_overrun(&history)
+        })
+        .flatten();
+    TierReport {
+        name: prepared.plan.name,
+        registry_tiers: prepared.plan.registry_tiers.to_vec(),
+        reused: prepared.reused(),
+        reuse_refused: prepared.evidence.as_ref().err().cloned(),
+        selection: prepared.selection.clone(),
+        tested_whole_workspace: true,
+        replay_pairs_required: prepared.plan.replay_pairs,
+        seed_target: prepared.plan.seed_target,
+        seed_minimum: prepared.plan.seed_minimum,
+        measured: measured(staging),
+        failures: state.criteria_failures.clone(),
+        overrun,
+        protected: Protected {
+            unchanged: state.protected_before == state.protected_after,
+            before: state.protected_before.clone(),
+            after: state.protected_after.clone(),
+        },
+    }
+}
+
+/// The facts a run measured. The simulation campaign, the replay pairs and the coverage
+/// matrix are not yet part of any gate tier, so they stay unmeasured (`null`); T3 fails on
+/// that (§10.11), and T1/T2 report it.
+fn measured(staging: Option<&Result<Staging, String>>) -> Measured {
+    Measured {
+        planned_in_contents: match staging {
+            Some(Ok(staged)) => staged.planned.iter().map(|p| p.id.clone()).collect(),
+            Some(Err(_)) | None => Vec::new(),
+        },
+        ..Measured::default()
+    }
+}
+
+fn criteria_step(state: &mut State<'_>, result: &mut StepResult) -> StepOutcome {
+    result.unit = "criterion(s)";
+    let planned = match state.staging {
+        Some(Ok(staged)) => staged.planned.iter().map(|p| p.id.clone()).collect(),
+        Some(Err(_)) | None => Vec::new(),
+    };
+    let facts = Facts {
+        planned_in_contents: planned,
+        ..Facts::default()
+    };
+    let mut failures = tier_plan::judge(&state.prepared.plan, &facts);
+    if let Err(why) = &state.prepared.evidence {
+        failures.push(format!("T1 evidence cannot be reused: {why}"));
+    }
+    result.cases = 4;
+    state.criteria_failures.clone_from(&failures);
+    if failures.is_empty() {
+        Ok(format!("{} pass criteria hold\n", state.prepared.plan.name))
+    } else {
+        Err(violations_failure(
+            &format!("{} pass criteria broken (§10.11):", failures.len()),
+            &failures,
+        ))
+    }
+}
+
+fn protected_step(
+    ctx: &Context<'_>,
+    state: &mut State<'_>,
+    result: &mut StepResult,
+) -> StepOutcome {
+    result.unit = "protected path(s)";
+    state.protected_after = tier_run::protected_hashes(ctx.root);
+    result.cases = u64::try_from(state.protected_before.len()).unwrap_or(u64::MAX);
+    let changed = tier_run::changed_hashes(&state.protected_before, &state.protected_after);
+    if changed.is_empty() {
+        Ok(format!("{} protected path(s) unchanged\n", result.cases))
+    } else {
+        Err(violations_failure(
+            &format!(
+                "{} protected path(s) changed during the run (P9, P11):",
+                changed.len()
+            ),
+            &changed,
+        ))
+    }
+}
+
+fn log_step(steplog: &mut StepLog, step: Step, result: &StepResult, result_tier: GateTier) {
     let expected = format!("passes, examining at least one {}", result.unit);
     let rerun = match step {
         Step::Static(check) => format!("./dev check {}", check.id()),
         Step::Check { id, .. } => format!("./dev check {id}"),
-        Step::Staging | Step::ForwardOnly => "./dev gate fast".to_owned(),
+        Step::Staging | Step::ForwardOnly | Step::Criteria | Step::Protected => {
+            format!("./dev gate {}", tier_name(result_tier))
+        }
         Step::Fmt | Step::Clippy | Step::Tests | Step::PackageTests | Step::Ubs => {
             result.command.clone().unwrap_or_default()
         }
@@ -785,6 +1022,8 @@ fn run_step(ctx: &Context<'_>, step: Step, log_dir: &Path, state: &mut State<'_>
         Step::Staging => staging_step(state, &mut result),
         Step::ForwardOnly => forward_step(ctx, state, &mut result),
         Step::PackageTests => package_tests_step(ctx, state, &mut result),
+        Step::Criteria => criteria_step(state, &mut result),
+        Step::Protected => protected_step(ctx, state, &mut result),
         Step::Check { id, min_cases } => check_step(ctx, state, id, min_cases, &mut result),
     };
     let (verdict, log_text) = match outcome {
@@ -1011,6 +1250,65 @@ fn forward_step(ctx: &Context<'_>, state: &mut State<'_>, result: &mut StepResul
     }
 }
 
+/// The `cargo test` runs of a package-tests step: one per member, with the cases of reused
+/// suites left out (§10.11), then the doctests.
+fn package_runs(
+    members: &[String],
+    prepared: &Prepared,
+    catalogue: &[CheckDef],
+) -> Vec<(Option<String>, Vec<String>)> {
+    // T2 takes the conformance, probe and variant suites from the latest T1 evidence, so
+    // its package runs leave their cases out (§10.11); a reused check with no filter owns
+    // its whole package.
+    let reused_selectors: Vec<(&str, &[&str])> = if prepared.evidence.is_ok() {
+        prepared
+            .split
+            .reused
+            .iter()
+            .filter_map(|(id, _)| catalogue.iter().find(|def| def.id == id.as_str()))
+            .filter_map(|def| match def.selector {
+                Selector::CargoTest { package, filters } => Some((package, filters)),
+                Selector::Static(_) => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut runs: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    for name in members {
+        let skipped: Vec<&[&str]> = reused_selectors
+            .iter()
+            .filter(|(package, _)| *package == name.as_str())
+            .map(|&(_, filters)| filters)
+            .collect();
+        if skipped.iter().any(|filters| filters.is_empty()) {
+            continue;
+        }
+        let mut args: Vec<String> = [
+            "test",
+            "--locked",
+            "-p",
+            name,
+            "--all-targets",
+            "--no-fail-fast",
+        ]
+        .iter()
+        .map(|&a| a.to_owned())
+        .collect();
+        let skips: Vec<&str> = skipped.iter().flat_map(|f| f.iter().copied()).collect();
+        if !skips.is_empty() {
+            args.push("--".to_owned());
+            for filter in skips {
+                args.extend(["--skip".to_owned(), filter.to_owned()]);
+            }
+        }
+        runs.push((Some(name.clone()), args));
+    }
+    let doc = ["test", "--locked", "--workspace", "--doc"];
+    runs.push((None, doc.iter().map(|&a| a.to_owned()).collect()));
+    runs
+}
+
 fn package_tests_step(
     ctx: &Context<'_>,
     state: &mut State<'_>,
@@ -1019,25 +1317,7 @@ fn package_tests_step(
     result.unit = "test(s)";
     let metadata = metadata::load(ctx.root).map_err(|why| StepFailure::new(why.clone(), why))?;
     let members: Vec<String> = metadata.members().iter().map(|p| p.name.clone()).collect();
-    let mut runs: Vec<(Option<String>, Vec<String>)> = members
-        .iter()
-        .map(|name| {
-            let args = [
-                "test",
-                "--locked",
-                "-p",
-                name,
-                "--all-targets",
-                "--no-fail-fast",
-            ];
-            (
-                Some(name.clone()),
-                args.iter().map(|&a| a.to_owned()).collect(),
-            )
-        })
-        .collect();
-    let doc = ["test", "--locked", "--workspace", "--doc"];
-    runs.push((None, doc.iter().map(|&a| a.to_owned()).collect()));
+    let runs = package_runs(&members, &state.prepared, state.catalogue);
     let (mut log, mut commands, mut problems) = (String::new(), Vec::new(), Vec::new());
     let mut passed: u64 = 0;
     for (package, args) in runs {
@@ -1645,7 +1925,7 @@ pub fn build_id(tree_id: &str, inputs: &BuildInputs) -> String {
 
 /// The hash of each protected policy file, and of the regression corpus directory
 /// (`sim/corpus`, PLAN.md §10.9, P9) under that name.
-fn policy_hashes(root: &Path) -> BTreeMap<&'static str, String> {
+pub fn policy_hashes(root: &Path) -> BTreeMap<&'static str, String> {
     let mut hashes: BTreeMap<&'static str, String> = POLICY_FILES
         .iter()
         .map(|&file| {
@@ -1663,7 +1943,7 @@ fn policy_hashes(root: &Path) -> BTreeMap<&'static str, String> {
     hashes
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .fold(String::with_capacity(64), |mut hex, byte| {
@@ -2337,6 +2617,173 @@ pub mod tests {
             allow_demotions: allow.iter().map(|&a| a.to_owned()).collect(),
         };
         run_registry(&ctx, REGISTRY_CATALOGUE, &[], &[]).unwrap()
+    }
+
+    /// [`registry_run`] for any tier.
+    fn registry_tier_run(root: &Path, parent: Parent, tier: GateTier) -> GateReport {
+        let ctx = Context {
+            root,
+            tree: resolve_tree_with(
+                root,
+                Some(TREE),
+                vec!["src/lib.rs".to_owned()],
+                &no_repository,
+            )
+            .unwrap(),
+            artifacts: scratch_dir("gate-registry-tier-artifacts"),
+            cargo: nested_cargo("keyval-gate"),
+            tool_path: None,
+            progress: false,
+            parent,
+            allow_demotions: Vec::new(),
+        };
+        run_registry_tier(&ctx, tier_plan::plan(tier), REGISTRY_CATALOGUE, &[], &[]).unwrap()
+    }
+
+    // check: TIER-GATE
+    #[test]
+    fn a_t0_receipt_records_its_tier_plan_and_the_protected_hashes_without_new_steps() {
+        let checks = registry_checks(&[("R-STATIC", "implemented", 1)]);
+        let root = registry_fixture("tier-t0", &checks);
+        let report = registry_tier_run(&root, Parent::Checks(checks), GateTier::Fast);
+        assert!(report.ok, "observed={report:#?}");
+        let ids: Vec<&str> = report.receipt.steps.iter().map(|s| s.id).collect();
+        assert_eq!(
+            ids,
+            ["staging", "forward-only", "tests", "R-STATIC"],
+            "rule: T0 keeps its steps; only T1 and above add the criteria and protected steps"
+        );
+        let plan = &report.receipt.tier_plan;
+        assert_eq!((plan.name, plan.replay_pairs_required), ("T0", 2));
+        assert!(plan.protected.unchanged, "observed={plan:#?}");
+        assert!(plan.protected.before.contains_key("PLAN.md"));
+    }
+
+    #[test]
+    fn t3_fails_on_unmeasured_facts_and_t1_reports_them_without_failing() {
+        let checks = registry_checks(&[("R-STATIC", "implemented", 1)]);
+        let root = registry_fixture("tier-t1-t3", &checks);
+        let t1 = registry_tier_run(&root, Parent::Checks(checks.clone()), GateTier::Integration);
+        assert!(t1.ok, "rule: T1 reports unmeasured facts; observed={t1:#?}");
+        assert_eq!(
+            step(&t1, "protected-artifacts").status,
+            Verdict::Passed,
+            "observed={t1:#?}"
+        );
+        assert_eq!(t1.receipt.tier_plan.name, "T1");
+        let t3 = registry_tier_run(&root, Parent::Checks(checks), GateTier::Release);
+        assert!(
+            !t3.ok,
+            "rule: T3 fails on unmeasured facts; observed={t3:#?}"
+        );
+        let criteria = step(&t3, "pass-criteria");
+        assert_eq!(criteria.status, Verdict::Failed, "observed={t3:#?}");
+        assert!(
+            !t3.receipt.tier_plan.failures.is_empty(),
+            "rule: the failures are listed in the receipt; observed={t3:#?}"
+        );
+    }
+
+    /// [`REGISTRY_CATALOGUE`]'s static check plus a conformance check that selects one of the
+    /// `gate-ok` cases.
+    const REUSE_CATALOGUE: &[CheckDef] = &[
+        REGISTRY_CATALOGUE[0],
+        CheckDef {
+            id: "CONF-X",
+            summary: "a conformance group",
+            kind: Kind::TestGroup,
+            covers: &["P5"],
+            class: ClaimClass::Invariant,
+            tier: Tier::T0,
+            selector: Selector::CargoTest {
+                package: "gate-ok",
+                filters: &["adds_one_to_zero"],
+            },
+            min_cases: 1,
+        },
+    ];
+
+    /// A T2 run on a fixture whose receipts directory holds `t1` as `gate-integration-t1.json`.
+    fn reuse_run(name: &str, t1: Option<&str>) -> GateReport {
+        let checks =
+            registry_checks(&[("R-STATIC", "implemented", 1), ("CONF-X", "implemented", 1)]);
+        let root = registry_fixture(name, &checks);
+        let artifacts = scratch_dir(&format!("gate-reuse-{name}-artifacts"));
+        if let Some(receipt) = t1 {
+            fs::create_dir_all(artifacts.join("receipts")).unwrap();
+            fs::write(artifacts.join("receipts/gate-integration-t1.json"), receipt).unwrap();
+        }
+        let ctx = Context {
+            root: &root,
+            tree: resolve_tree_with(
+                &root,
+                Some(TREE),
+                vec!["src/lib.rs".to_owned()],
+                &no_repository,
+            )
+            .unwrap(),
+            artifacts,
+            cargo: nested_cargo("keyval-gate"),
+            tool_path: None,
+            progress: false,
+            parent: Parent::Checks(checks),
+            allow_demotions: Vec::new(),
+        };
+        let plan = tier_plan::plan(GateTier::Campaign);
+        run_registry_tier(&ctx, plan, REUSE_CATALOGUE, &[], &[]).unwrap()
+    }
+
+    fn t1_receipt(result: &str, conf_status: &str) -> String {
+        format!(
+            r#"{{"kind":"gate","tier":"integration","run_id":"integration-1","finished_at":"2026-10-17T01:00:00Z","result":"{result}","tree":{{"id":"{TREE}"}},"steps":[{{"id":"CONF-X","status":"{conf_status}"}}]}}"#
+        )
+    }
+
+    #[test]
+    fn t2_without_t1_evidence_refuses_reuse_and_fails() {
+        let report = reuse_run("none", None);
+        let plan = &report.receipt.tier_plan;
+        assert!(
+            !report.ok,
+            "rule: no T1 evidence, no T2 pass; observed={report:#?}"
+        );
+        assert!(plan.reuse_refused.is_some(), "observed={plan:#?}");
+        assert_eq!(step(&report, "pass-criteria").status, Verdict::Failed);
+        assert!(plan.reused.is_empty(), "observed={plan:#?}");
+    }
+
+    #[test]
+    fn t2_with_a_failed_t1_run_refuses_reuse() {
+        let report = reuse_run("failed", Some(&t1_receipt("failed", "passed")));
+        assert!(!report.ok, "observed={report:#?}");
+        assert!(report.receipt.tier_plan.reuse_refused.is_some());
+        assert!(report.receipt.tier_plan.reused.is_empty());
+    }
+
+    #[test]
+    fn t2_with_a_passing_t1_run_reuses_the_suite_and_does_not_run_its_cases() {
+        let report = reuse_run("reuse", Some(&t1_receipt("passed", "passed")));
+        assert!(report.ok, "observed={report:#?}");
+        let plan = &report.receipt.tier_plan;
+        assert_eq!(
+            plan.reused
+                .iter()
+                .map(|r| (r.check.as_str(), r.run_id.as_str()))
+                .collect::<Vec<_>>(),
+            [("CONF-X", "integration-1")],
+            "observed={plan:#?}"
+        );
+        let ids: Vec<&str> = report.receipt.steps.iter().map(|s| s.id).collect();
+        assert!(
+            !ids.contains(&"CONF-X"),
+            "rule: a reused check is not run; steps={ids:?}"
+        );
+        let commands = step(&report, "tests").command.clone().unwrap_or_default();
+        assert!(
+            commands.contains("--skip adds_one_to_zero"),
+            "rule: the package run leaves the reused suite's cases out (§10.11); \
+             command={commands:?}"
+        );
     }
 
     #[test]

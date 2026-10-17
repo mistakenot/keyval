@@ -2,11 +2,11 @@
   "rule": "a gate report is ok exactly when its receipt passed",
   "error_at": "/receipt/result",
   "instance": {
-    "schema": "keyval.dev.gate/v5",
+    "schema": "keyval.dev.gate/v6",
     "ok": true,
     "receipt_path": "artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282.json",
     "receipt": {
-      "schema": "keyval.dev.receipt/v5",
+      "schema": "keyval.dev.receipt/v6",
       "kind": "gate",
       "tier": "fast",
       "set": "bootstrap",
@@ -155,6 +155,44 @@
         "path": "/data/projects/keyval/artifacts/receipts/gate-fast-20261003T203236Z-e5da6ed9eb93-508282/steps.jsonl",
         "records": 8,
         "dropped": 0
+      },
+      "tier_plan": {
+        "name": "T0",
+        "registry_tiers": [
+          "T0"
+        ],
+        "selection": {
+          "crates": [
+            "types"
+          ],
+          "whole_workspace": false,
+          "reason": "changed_members"
+        },
+        "tested_whole_workspace": true,
+        "replay_pairs_required": 2,
+        "seed_target": 50,
+        "seed_minimum": null,
+        "reused": [],
+        "reuse_refused": null,
+        "measured": {
+          "planned_in_contents": [],
+          "replay_pairs": null,
+          "fresh_seeds": null,
+          "zero_coverage_cells": null,
+          "checker_violations": null,
+          "incomplete_runs": null
+        },
+        "failures": [],
+        "overrun": null,
+        "protected": {
+          "before": {
+            "PLAN.md": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "after": {
+            "PLAN.md": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "unchanged": true
+        }
       }
     }
   }

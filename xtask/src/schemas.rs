@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::test_support::{manifest_dir, workspace_root};
+use crate::tier_plan::{Reason as SelectionReason, Suite};
 
 /// Where the schemas live, relative to the workspace root.
 const DIR: &str = "schemas/dev";
@@ -496,6 +497,23 @@ mod tests {
             &inputs,
             false,
         );
+    }
+
+    #[test]
+    fn tier_plan_enums_match_their_schema() {
+        let receipt = gate::RECEIPT_SCHEMA;
+        let reasons = variants!(
+            SelectionReason: TierSelectsWholeWorkspace,
+            NoChangedPaths,
+            SharedPathChanged,
+            ChangedMembers,
+            NothingBuilt
+        );
+        let pointer = "/properties/tier_plan/properties/selection/properties/reason/enum";
+        assert_enum(receipt, pointer, &reasons, false);
+        let suites = variants!(Suite: Conformance, RealFileProbes, BugVariants);
+        let pointer = "/properties/tier_plan/properties/reused/items/properties/suite/enum";
+        assert_enum(receipt, pointer, &suites, false);
     }
 
     // --- Real outputs, produced by each command's own code. ---

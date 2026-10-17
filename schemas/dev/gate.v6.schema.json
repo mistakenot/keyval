@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://keyval.invalid/schemas/dev/gate.v5.schema.json",
-  "title": "keyval.dev.gate/v5",
-  "description": "The `./dev gate <tier> --json` report (xtask/src/gate.rs `GateReport`): where the receipt went, and the keyval.dev.receipt/v4 receipt itself. `ok` is true exactly when the receipt's result is `passed`.",
+  "$id": "https://keyval.invalid/schemas/dev/gate.v6.schema.json",
+  "title": "keyval.dev.gate/v6",
+  "description": "The `./dev gate <tier> --json` report (xtask/src/gate.rs `GateReport`): where the receipt went, and the keyval.dev.receipt/v6 receipt itself. `ok` is true exactly when the receipt's result is `passed`.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "keyval.dev.gate/v5"
+      "const": "keyval.dev.gate/v6"
     },
     "ok": {
       "type": "boolean"
@@ -23,7 +23,7 @@
       "minLength": 1
     },
     "receipt": {
-      "$ref": "receipt.v5.schema.json"
+      "$ref": "receipt.v6.schema.json"
     }
   },
   "if": {

@@ -448,7 +448,7 @@ output only together with its schema, and bump the version when the change break
   clippy, LINT-ALLOWS, LINT-TIERS, DEP-RULE, DEP-LEDGER, the workspace tests, UBS). The
   switch is one-way: a commit that deletes `checks.toml` is still judged by the registry
   set, and fails (0z0a). Either way it writes a
-  `keyval.dev.receipt/v5` receipt to `artifacts/receipts/` with the tree ID, build ID,
+  `keyval.dev.receipt/v6` receipt to `artifacts/receipts/` with the tree ID, build ID,
   policy hashes, per-step case counts, the planned rows and any approved demotions.
   **It judges exact trees only (P11):** in a checkout it refuses unless the working tree
   is clean, judges `HEAD^{tree}`, and compares statuses with `HEAD^`. A commit wrapper
@@ -457,7 +457,9 @@ output only together with its schema, and bump the version when the change break
   repository from the candidate. Run it with
   `GIT_DIR=/nonexistent/keyval-candidate-git` and
   `GIT_CEILING_DIRECTORIES=<candidate>:<candidate's parent>`, which is what
-  `candidate::git_isolation` sets. Other tiers report "not implemented" (W46).
+  `candidate::git_isolation` sets. T1 to T3 (W46.1) each
+  materialise their own `.local/gates/<run-id>/tree` from the committed tree, verify it,
+  and run its own `./dev` there under the same isolation.
 
 Receipts, not your say-so, are the evidence (rule 16): gate receipts for commits, and
 accept receipts for closing beads.

@@ -80,14 +80,29 @@ pub struct Staging {
 
 /// The rows of `tier` in `checks`, resolved against `catalogue`. `items` (the work graph)
 /// names the work item of each `planned` row.
+#[cfg(test)]
 pub fn stage(
     checks: &str,
     items: &[WorkItem],
     tier: &str,
     catalogue: &'static [CheckDef],
 ) -> Result<Staging, String> {
+    stage_tiers(checks, items, &[tier], catalogue)
+}
+
+/// The rows of every tier in `tiers`, in file order: a higher gate tier runs the rows of
+/// the tiers below it too (§10.10).
+pub fn stage_tiers(
+    checks: &str,
+    items: &[WorkItem],
+    tiers: &[&str],
+    catalogue: &'static [CheckDef],
+) -> Result<Staging, String> {
     let mut staging = Staging::default();
-    for row in rows(checks)?.into_iter().filter(|row| row.tier == tier) {
+    for row in rows(checks)?
+        .into_iter()
+        .filter(|row| tiers.contains(&row.tier.as_str()))
+    {
         staging.rows += 1;
         match row.status.as_str() {
             "implemented" => match catalogue.iter().find(|def| def.id == row.id) {
