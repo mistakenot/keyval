@@ -74,6 +74,9 @@ mod observe_tests;
 pub mod phases;
 #[cfg(test)]
 mod phases_tests;
+pub mod recorder;
+#[cfg(test)]
+mod recorder_tests;
 pub mod replay;
 pub mod scenario;
 pub mod scenario_run;

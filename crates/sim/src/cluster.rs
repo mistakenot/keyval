@@ -68,9 +68,9 @@ use node::{Boot, Controller, RequestLifecycle, StartError};
 use statemachine::{Command, codec};
 use types::{
     AttemptId, BoundedMap, BoundedQueue, ByteCount, ByteStorage, ClientOp, Config, DataDir, Effect,
-    Entry, EntryPayload, Executed, HardState, Inbound, Incarnation, Input, InstanceId, ItemCount,
-    JournalRead, KeyValueLimits, Lifecycle, LogIndex, NodeId, Observation, ReadLen, RequestId,
-    Response, Role, StorageError, SyncSeq, Term, execute,
+    Entry, EntryIndex, EntryPayload, Executed, HardState, Inbound, Incarnation, Input, InstanceId,
+    ItemCount, JournalRead, KeyValueLimits, Lifecycle, LogIndex, NodeId, Observation, ReadLen,
+    RequestId, Response, Role, StorageError, SyncSeq, Term, execute,
 };
 
 use crate::disk::{Crash, DiskHandle, SimDisk, Survival};
@@ -78,6 +78,7 @@ use crate::entropy::{MasterSeed, SplitMix64, Subsystem};
 use crate::god_view::{Changes, GodView, JournalView, NodeView};
 use crate::nemesis::{CrashPoint, Fault, MAX_LOST, NemesisError, Partition};
 use crate::net::{Arrival, NetConfig, NetError, Network, PacketId};
+use crate::recorder::{Ledger, NodeSnapshot, Process, Reported, diff};
 use crate::scheduler::{
     Event, EventBudget, NodeIncarnation, ScheduleError, Scheduler, Shortfall, Step, VirtualTime,
 };
@@ -101,6 +102,10 @@ const FIRST_TICK_US: u64 = 1;
 /// most one attempt, and generates or delivers the responses it carries, so a run's
 /// observation log stays within a few entries per event, and a fuller one fails the run.
 const OBSERVED_PER_EVENT: usize = 4;
+
+/// Node-side observations kept per scheduled or dispatched event (CD-9): a step records one
+/// state change per node and the entries it appended or recovered.
+const RECORDED_PER_EVENT: usize = 8;
 
 /// What happens at a scheduler event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,6 +400,63 @@ pub enum Observed {
     },
 }
 
+/// What the cluster saw of a node's log and state (W36.3), derived from its own mirrors of
+/// the nodes, never from a node's claim (T-12).
+///
+/// Invariants: `seq` and `at` never decrease along [`Cluster::recorded`]; an incarnation's
+/// first entry is its `Recovered`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Recorded {
+    /// The incarnation started, from what its disk held (§7.7).
+    Recovered {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The incarnation.
+        node: NodeIncarnation,
+        /// Its recovered term.
+        term: Term,
+        /// Its recovered vote.
+        vote: Option<NodeId>,
+        /// Its recovered log, every entry.
+        log: Vec<Entry>,
+    },
+    /// The incarnation appended `entry` to its log (volatile until a sync covers it).
+    Appended {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The incarnation.
+        node: NodeIncarnation,
+        /// The entry.
+        entry: Entry,
+    },
+    /// The incarnation removed its log from `from` on.
+    Truncated {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The incarnation.
+        node: NodeIncarnation,
+        /// The first index removed.
+        from: EntryIndex,
+    },
+    /// The node's god-view state changed.
+    NodeState {
+        /// The dispatched-event count.
+        seq: u64,
+        /// The virtual time.
+        at: VirtualTime,
+        /// The incarnation.
+        node: NodeIncarnation,
+        /// The state it has now.
+        state: NodeSnapshot,
+    },
+}
+
 /// A client attempt the cluster knows of: who made it, the request ID if it is an attempt
 /// of a write, and whether a response to it has reached the client.
 #[derive(Clone, Copy, Debug)]
@@ -622,6 +684,15 @@ pub struct Cluster {
     replies: BoundedMap<PacketId, Reply>,
     answers: BoundedQueue<Answer>,
     observed: BoundedQueue<Observed>,
+    /// The node-side observations (W36.3), in order, kept apart so that a long log cannot
+    /// crowd out the client side.
+    recorded: BoundedQueue<Recorded>,
+    /// The bound `recorded` was made with.
+    recorded_bound: usize,
+    /// The event count at which `recorded` first filled: nothing after it was kept.
+    recorded_overflow: Option<u64>,
+    /// What was last reported of each node.
+    ledger: Ledger,
     executed: BoundedMap<RequestId, LogIndex>,
     crashes: BoundedQueue<(NodeId, Incarnation, Crash)>,
     /// The faults that have happened, in order, with when.
@@ -680,6 +751,10 @@ impl Cluster {
             replies: BoundedMap::new(bound),
             answers: BoundedQueue::with_items(bound),
             observed: BoundedQueue::with_items(bound.saturating_mul(OBSERVED_PER_EVENT)),
+            recorded: BoundedQueue::with_items(bound.saturating_mul(RECORDED_PER_EVENT)),
+            recorded_bound: bound.saturating_mul(RECORDED_PER_EVENT),
+            recorded_overflow: None,
+            ledger: Ledger::new(),
             executed: BoundedMap::new(bound),
             crashes: BoundedQueue::with_items(bound),
             injected: BoundedQueue::with_items(bound),
@@ -760,6 +835,20 @@ impl Cluster {
             requests: RequestLifecycle::new(&self.config, node),
         })
         .map_err(|error| ClusterError::Start { node, error })?;
+        let reported = Reported {
+            incarnation,
+            terms: mirror.log.iter().map(|entry| entry.term).collect(),
+            state: self.ledger.get(&node).and_then(|reported| reported.state),
+        };
+        let recovery = Recorded::Recovered {
+            seq: self.scheduler.dispatched().get(),
+            at: self.horizon.max(self.scheduler.now()),
+            node: NodeIncarnation { node, incarnation },
+            term: mirror.hard.term,
+            vote: mirror.hard.vote,
+            log: mirror.log.clone(),
+        };
+        self.ledger.insert(node, reported);
         slot.running = Some(Running {
             ctl,
             storage,
@@ -768,6 +857,7 @@ impl Cluster {
             seen: BoundedMap::new(bound),
             responses: 0,
         });
+        self.log_recorded(recovery);
         self.execute(node, effects)?;
         let at = self.after(FIRST_TICK_US);
         self.schedule(at, Some(node), Happening::Tick { node })?;
@@ -827,6 +917,28 @@ impl Cluster {
     /// What the cluster saw of every client attempt so far, in order (W36.2).
     pub fn observed(&self) -> impl Iterator<Item = &Observed> {
         self.observed.iter()
+    }
+
+    /// What the cluster saw of every node's log and state so far, in order (W36.3).
+    pub fn recorded(&self) -> impl Iterator<Item = &Recorded> {
+        self.recorded.iter()
+    }
+
+    /// Cuts the node-side queue to `bound` entries, to test its overflow (CD-9).
+    #[cfg(test)]
+    pub(crate) fn limit_recorded(&mut self, bound: usize) {
+        self.recorded = BoundedQueue::with_items(bound);
+        self.recorded_bound = bound;
+    }
+
+    /// The bound of [`Self::recorded`] and the event count at which it filled, if it did:
+    /// everything after that point went unrecorded (P10).
+    #[must_use]
+    pub const fn recorded_overflow(&self) -> Option<(u64, usize)> {
+        match self.recorded_overflow {
+            Some(seq) => Some((seq, self.recorded_bound)),
+            None => None,
+        }
     }
 
     /// `node`'s current incarnation.
@@ -1927,6 +2039,7 @@ impl Cluster {
     /// Records what the god view saw change in this step.
     fn observe(&mut self) -> Result<(), ClusterError> {
         self.check_mirrors()?;
+        self.record_nodes();
         let views: Vec<NodeView<'_>> = self
             .nodes
             .iter()
@@ -2026,6 +2139,100 @@ impl Cluster {
         self.observed
             .push(entry, 0)
             .map_err(|_| self.full("observations"))
+    }
+
+    /// Appends a node-side observation. A full queue keeps what it has and drops the rest,
+    /// noting where, so that the run is reported incomplete (P10).
+    fn log_recorded(&mut self, entry: Recorded) {
+        if self.recorded_overflow.is_some() {
+            return;
+        }
+        if self.recorded.push(entry, 0).is_err() {
+            self.recorded_overflow = Some(self.scheduler.dispatched().get());
+        }
+    }
+
+    /// Records what changed in each node's state and log since the last report: its state,
+    /// then the log suffix it dropped and the entries it appended (W36.3).
+    fn record_nodes(&mut self) {
+        let seq = self.scheduler.dispatched().get();
+        let at = self.now();
+        let mut found = Vec::new();
+        for (id, slot) in &self.nodes {
+            let node = NodeIncarnation {
+                node: *id,
+                incarnation: slot.incarnation,
+            };
+            let reported = self.ledger.entry(*id).or_insert_with(|| Reported {
+                incarnation: slot.incarnation,
+                terms: Vec::new(),
+                state: None,
+            });
+            let process = if slot.lost {
+                Process::Lost
+            } else if slot.running.is_none() {
+                Process::Crashed
+            } else if slot.paused {
+                Process::Paused
+            } else {
+                Process::Running
+            };
+            let snapshot = match slot.running.as_ref() {
+                Some(running) => {
+                    let status = running.ctl.status();
+                    Some(NodeSnapshot {
+                        process,
+                        lifecycle: running.ctl.lifecycle(),
+                        role: status.role,
+                        term: running.mirror.hard.term,
+                        vote: running.mirror.hard.vote,
+                        leader: status.leader,
+                        commit: status.commit,
+                        applied: running.ctl.state().applied_index(),
+                        digest: running.ctl.state().digest(),
+                    })
+                }
+                None => reported
+                    .state
+                    .map(|state| NodeSnapshot { process, ..state }),
+            };
+            if let Some(state) = snapshot
+                && reported.state != Some(state)
+            {
+                reported.state = Some(state);
+                found.push(Recorded::NodeState {
+                    seq,
+                    at,
+                    node,
+                    state,
+                });
+            }
+            let Some(running) = slot.running.as_ref() else {
+                continue;
+            };
+            let (truncate, common) = diff(&reported.terms, &running.mirror.log);
+            if let Some(from) = truncate {
+                found.push(Recorded::Truncated {
+                    seq,
+                    at,
+                    node,
+                    from,
+                });
+            }
+            reported.terms.truncate(common);
+            for entry in running.mirror.log.iter().skip(common) {
+                reported.terms.push(entry.term);
+                found.push(Recorded::Appended {
+                    seq,
+                    at,
+                    node,
+                    entry: entry.clone(),
+                });
+            }
+        }
+        for entry in found {
+            self.log_recorded(entry);
+        }
     }
 
     const fn full(&self, what: &'static str) -> ClusterError {

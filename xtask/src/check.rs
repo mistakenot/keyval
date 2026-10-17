@@ -2351,6 +2351,19 @@ pub const CATALOGUE: &[CheckDef] = &[
         min_cases: 7,
     },
     CheckDef {
+        id: "SIM-RECORDER",
+        summary: "The node-side recorder (§10.2, T-5, T-13, W36.3 br-pxof): a run's document carries recovered, append, truncate and node_state records taken from the cluster's own mirrors of its nodes (never a node's claim), starts every node incarnation with a recovered record, rebuilds each node's final log and state, is a valid keyval.observation/v1, is the same for the same seed, and is marked incomplete (not wrong) when the bounded node-side queue overflows. Simulation evidence, not proof",
+        kind: Kind::TestGroup,
+        covers: &["T-5", "T-13", "P4", "P10"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "sim",
+            filters: &["recorder_tests::"],
+        },
+        min_cases: 6,
+    },
+    CheckDef {
         id: "PEER-TRANSPORT",
         summary: "The HTTP peer transport (§8.2, §7.11, W21.1): every node serves POST /raft on its peer address, taking only well-formed posts that name a sender (400 without, 404 and 405 for other paths and methods, 413 past the envelope limit) and handing the body to the core, whose W13 codec alone judges the envelope; each peer has one bounded send queue (64 messages, 8 MiB) that drops and counts what does not fit; three real processes elect a leader and replicate a write through it. Real processes on loopback: test evidence, not proof",
         kind: Kind::TestGroup,

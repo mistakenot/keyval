@@ -13,10 +13,18 @@
 //!   index, refused, or unresolved, with the attempts whose answers decide it. Misuse
 //!   attempts are never logical writes and have no resolution.
 //!
-//! `phase` records come from the marks the caller supplies. Node-side god-view records
-//! (`append`, `sync`, `committed`, `node_state` and the rest) belong to the producers of the
-//! chaos profiles (W40, W43); a PUT/GET slice records none, injects no fault, and so
-//! `faults` is empty.
+//! The node side comes from [`Cluster::recorded`] (W36.3), the cluster's own mirrors of its
+//! nodes:
+//! - `recovered`: an incarnation's recovered durable state and whole log;
+//! - `append` and `truncate`: how a running node's log changed, step by step;
+//! - `node_state`: a node's process, lifecycle, role, term, vote, leader, commit, applied
+//!   index and state digest whenever one changed. On a step's tie of `seq`, node-side
+//!   records come first, since a change is recorded at the point it happened.
+//!
+//! `phase` records come from the marks the caller supplies. The rest of the node side
+//! (`sync`, `accept`, `committed`, `release`, `attempt`, `fault` and the others) belongs to
+//! later recorders (W36.4, W36.5, W40, W43), so until then the judge reports the run
+//! incomplete (P10). A node-side queue that overflowed is listed in `overflowed`.
 //!
 //! Recording draws no randomness and changes nothing: the same run gives a byte-identical
 //! document (P4). A shape the schema cannot express, or a stream that is out of order, is an
@@ -30,10 +38,13 @@ use types::{
     AttemptId, ClientOp, Config, Decision, ExpectedVersion, MAX_SAFE_INTEGER, Mutation, RequestId,
     RequestState, Response, ServedBy, TerminalResult,
 };
+use types::{Entry, EntryPayload, Lifecycle, NodeId, Role};
+
 use types::{Refusal, ScanItem};
 
 use crate::clients::{Clients, End, HealMode, Outcome, SentAttempt};
-use crate::cluster::{Cluster, Observed};
+use crate::cluster::{Cluster, Observed, Recorded};
+use crate::recorder::{NodeSnapshot, Process};
 use crate::scheduler::{NodeIncarnation, VirtualTime};
 
 /// The identifier of the document's schema.
@@ -691,6 +702,134 @@ fn record(
     }
 }
 
+/// `bytes` as lowercase hex.
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .flat_map(|byte| [byte >> 4, byte & 0x0f])
+        .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
+        .collect()
+}
+
+/// A log entry as the document carries it.
+fn entry_json(entry: &Entry) -> Value {
+    let payload = match &entry.payload {
+        EntryPayload::Empty => String::new(),
+        EntryPayload::Command(bytes) => hex(bytes),
+    };
+    json!({ "index": entry.index.get(), "term": entry.term.get(), "payload": payload })
+}
+
+/// A node ID or `null`.
+fn node_or_null(node: Option<NodeId>) -> Value {
+    node.map_or(Value::Null, |node| json!(node.get()))
+}
+
+/// The body of a `node_state` record.
+fn node_state_json(state: &NodeSnapshot) -> Result<Value, ObserveError> {
+    Ok(json!({
+        "kind": "node_state",
+        "process": match state.process {
+            Process::Running => "running",
+            Process::Paused => "paused",
+            Process::Crashed => "crashed",
+            Process::Lost => "lost",
+        },
+        "lifecycle": match state.lifecycle {
+            Lifecycle::Starting => "starting",
+            Lifecycle::Recovering => "recovering",
+            Lifecycle::Ready => "ready",
+            Lifecycle::Failed => "failed",
+        },
+        "role": match state.role {
+            Role::Leader => "leader",
+            Role::Candidate => "candidate",
+            Role::PreCandidate => "pre_candidate",
+            Role::Follower => "follower",
+        },
+        "term": safe("term", state.term.get())?,
+        "vote": node_or_null(state.vote),
+        "leader": node_or_null(state.leader),
+        "commit": safe("commit", state.commit.get())?,
+        "applied": safe("applied", state.applied.get())?,
+        "state_digest": state.digest.to_string(),
+    }))
+}
+
+/// The record for one node-side observation.
+fn recorded_record(entry: &Recorded) -> Result<(u64, u64, Value), ObserveError> {
+    let (seq, at, node, body) = match entry {
+        Recorded::Recovered {
+            seq,
+            at,
+            node,
+            term,
+            vote,
+            log,
+        } => {
+            let last = log.last();
+            (
+                seq,
+                at,
+                node,
+                json!({
+                    "kind": "recovered",
+                    "durable": {
+                        "term": safe("term", term.get())?,
+                        "vote": node_or_null(*vote),
+                        "last_index": last.map_or(0, |entry| entry.index.get()),
+                        "last_term": last.map_or(0, |entry| entry.term.get()),
+                    },
+                    "log": log.iter().map(entry_json).collect::<Vec<_>>(),
+                }),
+            )
+        }
+        Recorded::Appended {
+            seq,
+            at,
+            node,
+            entry,
+        } => {
+            let Value::Object(mut fields) = entry_json(entry) else {
+                return Err(ObserveError::Unrepresentable {
+                    attempt: 0,
+                    what: "a log entry",
+                });
+            };
+            fields.insert("kind".into(), json!("append"));
+            (seq, at, node, Value::Object(fields))
+        }
+        Recorded::Truncated {
+            seq,
+            at,
+            node,
+            from,
+        } => (
+            seq,
+            at,
+            node,
+            json!({ "kind": "truncate", "from_index": from.get() }),
+        ),
+        Recorded::NodeState {
+            seq,
+            at,
+            node,
+            state,
+        } => (seq, at, node, node_state_json(state)?),
+    };
+    let time = safe("time", at.as_micros())?;
+    let Value::Object(mut fields) = body else {
+        return Err(ObserveError::Unrepresentable {
+            attempt: 0,
+            what: "a node-side record",
+        });
+    };
+    fields.insert("seq".into(), json!(safe("seq", *seq)?));
+    fields.insert("time".into(), json!(time));
+    fields.insert("at".into(), on(*node));
+    Ok((*seq, time, Value::Object(fields)))
+}
+
 /// The resolution records: one per logical write, in the order its first attempt was sent,
 /// each at `end`. Misuse attempts are not logical writes.
 fn resolutions(clients: &Clients, end: Mark) -> Result<Vec<Value>, ObserveError> {
@@ -723,6 +862,19 @@ fn resolutions(clients: &Clients, end: Mark) -> Result<Vec<Value>, ObserveError>
     Ok(records)
 }
 
+/// Appends `record`, first the phases that began before it.
+fn push_with_phases(
+    ordered: &mut Vec<(u64, u64, Value)>,
+    phases: &mut core::iter::Peekable<std::vec::IntoIter<(u64, Value)>>,
+    record: (u64, u64, Value),
+) {
+    while let Some((mark, phase)) = phases.next_if(|(mark, _)| *mark < record.0) {
+        let at = phase["time"].as_u64().unwrap_or(0);
+        ordered.push((mark, at, phase));
+    }
+    ordered.push(record);
+}
+
 /// The run's `keyval.observation/v1` document, from what `cluster` and `clients` saw.
 ///
 /// It is complete exactly when the event budget was not exhausted and every client finished
@@ -753,13 +905,21 @@ pub fn document(
         .collect();
     let mut phases = phase_records(&meta.phases)?.into_iter().peekable();
     let mut ordered: Vec<(u64, u64, Value)> = Vec::new();
+    let mut nodes = cluster
+        .recorded()
+        .map(recorded_record)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .peekable();
     for entry in cluster.observed() {
         let (seq, time, value) = record(entry, &invoked, &sent)?;
-        while let Some((mark, phase)) = phases.next_if(|(mark, _)| *mark < seq) {
-            let at = phase["time"].as_u64().unwrap_or(0);
-            ordered.push((mark, at, phase));
+        while let Some(node_side) = nodes.next_if(|node_side| node_side.0 <= seq) {
+            push_with_phases(&mut ordered, &mut phases, node_side);
         }
-        ordered.push((seq, time, value));
+        push_with_phases(&mut ordered, &mut phases, (seq, time, value));
+    }
+    for node_side in nodes {
+        push_with_phases(&mut ordered, &mut phases, node_side);
     }
     for (mark, phase) in phases {
         let at = phase["time"].as_u64().unwrap_or(0);
@@ -778,12 +938,17 @@ pub fn document(
     }
     let used = safe("event count", end.seq)?;
     let exhausted = used >= meta.max_events;
+    let overflowed: Vec<Value> = cluster
+        .recorded_overflow()
+        .map(|(seq, bound)| json!({ "seq": seq, "what": "node-side observations", "bound": bound }))
+        .into_iter()
+        .collect();
     Ok(json!({
         "schema": SCHEMA_ID,
         "manifest": manifest(config, meta)?,
         "voters": config.voters().map(types::NodeId::get).collect::<Vec<_>>(),
-        "complete": !exhausted && clients.finished(),
-        "overflowed": [],
+        "complete": !exhausted && clients.finished() && overflowed.is_empty(),
+        "overflowed": overflowed,
         "event_budget": { "used": used, "exhausted": exhausted },
         "scenario": { "status": "valid", "violated": null },
         "records": ordered.into_iter().map(|(_, _, value)| value).collect::<Vec<_>>(),

@@ -44,7 +44,29 @@ fn run_config() -> Config {
 
 /// One run of the PUT/GET clients for `seed`, with `misuse` ppm of misuse, over client paths
 /// that lose 5% and duplicate 2% of messages; and its document.
-fn run(seed: u64, misuse: u32) -> (Clients, Cluster, Config, Meta) {
+pub fn run(seed: u64, misuse: u32) -> (Clients, Cluster, Config, Meta) {
+    run_limited(seed, misuse, None)
+}
+
+/// [`run`] with the cluster's node-side queue cut to `recorded` entries, if given.
+pub fn run_limited(
+    seed: u64,
+    misuse: u32,
+    recorded: Option<usize>,
+) -> (Clients, Cluster, Config, Meta) {
+    run_with(seed, misuse, |cluster| {
+        if let Some(bound) = recorded {
+            cluster.limit_recorded(bound);
+        }
+    })
+}
+
+/// [`run`] after `setup` has prepared the cluster (faults to inject, queues to cut).
+pub fn run_with(
+    seed: u64,
+    misuse: u32,
+    setup: impl FnOnce(&mut Cluster),
+) -> (Clients, Cluster, Config, Meta) {
     let config = run_config();
     let master = MasterSeed::new(seed);
     let client = LinkProfile::new(
@@ -61,6 +83,7 @@ fn run(seed: u64, misuse: u32) -> (Clients, Cluster, Config, Meta) {
         max_in_flight: EventBudget::DEFAULT,
     };
     let mut cluster = Cluster::new(config.clone(), master, net, EventBudget::DEFAULT).unwrap();
+    setup(&mut cluster);
     let start = Mark::of(&cluster);
     let mut stream = master.stream(Subsystem::Clients);
     let plan = Plan::generate(&mut stream, config.key_value_limits(), Profile::PutGet);
@@ -93,7 +116,7 @@ fn run(seed: u64, misuse: u32) -> (Clients, Cluster, Config, Meta) {
     (clients, cluster, config, meta)
 }
 
-fn document(seed: u64, misuse: u32) -> Value {
+pub fn document(seed: u64, misuse: u32) -> Value {
     let (clients, cluster, config, meta) = run(seed, misuse);
     observe::document(&cluster, &clients, &config, &meta).unwrap()
 }
