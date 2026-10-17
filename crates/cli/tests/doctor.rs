@@ -914,7 +914,7 @@ mod doctor_cli {
             .collect();
         assert_eq!(
             listed,
-            every!(ErrorKind: Usage, Config),
+            every!(ErrorKind: Usage, Config, Pending, Client),
             "rule: the error schema's kinds are exactly what the CLI serialises (O-6)"
         );
     }

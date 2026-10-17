@@ -100,8 +100,23 @@ struct Wire {
     body: String,
 }
 
+/// Checks that `target` is a request target the client can send byte for byte: an absolute
+/// path of visible ASCII. A control character, a space or a non-ASCII byte in it would
+/// break the request line, or smuggle a header, when `resume` replays it.
+fn check_target(name: &str, target: &str) -> Result<(), PendingError> {
+    if target.starts_with('/') && target.bytes().all(|byte| (0x21..=0x7E).contains(&byte)) {
+        Ok(())
+    } else {
+        Err(PendingError::BadRecord {
+            name: name.to_owned(),
+            why: format!("the target {target:?} is not an absolute path of visible ASCII"),
+        })
+    }
+}
+
 impl Record {
     fn encode(&self) -> Result<Vec<u8>, PendingError> {
+        check_target(&self.request_id.to_string(), &self.target)?;
         serde_json::to_vec(&Wire {
             schema: RECORD_SCHEMA.to_owned(),
             request_id: self.request_id.to_string(),
@@ -130,6 +145,7 @@ impl Record {
         let request_id = RequestId::parse(&wire.request_id).map_err(|err| bad(err.to_string()))?;
         let method = Method::parse(&wire.method)
             .ok_or_else(|| bad(format!("unknown method {:?}", wire.method)))?;
+        check_target(name, &wire.target)?;
         Ok(Self {
             request_id,
             method,

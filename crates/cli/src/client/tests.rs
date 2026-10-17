@@ -1,8 +1,13 @@
-//! The client operations against a scripted network, a virtual clock and a scripted source
-//! of randomness (W33.2): the real client, retry policy and pending store, with only the
-//! network, time and entropy faked.
+//! The client operations over fakes (W33.2).
+//!
+//! The real client, retry policy and pending store run against a scripted network, a virtual
+//! clock and a scripted source of randomness.
 
 #![cfg(test)]
+// These fakes are shared with `command::tests`, so they are `pub` inside a test-only module:
+// `must_use_candidate` and `missing_panics_doc` ask for API hygiene a fake does not need
+// (br-w33-3-pending-resume-json-l2q).
+#![allow(clippy::must_use_candidate, clippy::missing_panics_doc)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -21,19 +26,19 @@ use super::*;
 
 /// A draw that makes the policy resend a write rather than ask the status lookup, and
 /// retry the node it last used.
-const RESEND: u64 = 1 << 24;
+pub const RESEND: u64 = 1 << 24;
 /// A draw that makes the policy ask the status lookup after an ambiguous outcome.
-const ASK: u64 = 0;
+pub const ASK: u64 = 0;
 
-fn addr(node: u64) -> SocketAddr {
+pub fn addr(node: u64) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], u16::try_from(7000 + node).unwrap()))
 }
 
-fn node(id: u64) -> NodeId {
+pub fn node(id: u64) -> NodeId {
     NodeId::new(id).unwrap()
 }
 
-fn settings(attempts: u64, nodes: u64, deadline_ms: u64) -> Settings {
+pub fn settings(attempts: u64, nodes: u64, deadline_ms: u64) -> Settings {
     Settings {
         nodes: (1..=5).map(|id| (node(id), addr(id))).collect(),
         bounds: RetryBounds::new(attempts, nodes, deadline_ms),
@@ -42,16 +47,16 @@ fn settings(attempts: u64, nodes: u64, deadline_ms: u64) -> Settings {
     }
 }
 
-fn key(text: &str) -> Key {
+pub fn key(text: &str) -> Key {
     Key::parse(text.to_owned(), KeyValueLimits::MAXIMA).unwrap()
 }
 
-fn value(text: &str) -> Value {
+pub fn value(text: &str) -> Value {
     Value::parse(text.to_owned(), KeyValueLimits::MAXIMA).unwrap()
 }
 
 /// The scripted network: answers in order, and logs every send.
-struct Net {
+pub struct Net {
     script: RefCell<VecDeque<Result<HttpResponse, TransportError>>>,
     log: RefCell<Vec<(SocketAddr, HttpRequest)>>,
     /// The pending store, checked at every write send: the record must already be durable.
@@ -59,7 +64,7 @@ struct Net {
 }
 
 impl Net {
-    fn new(store: Option<PendingStore>) -> Rc<Self> {
+    pub fn new(store: Option<PendingStore>) -> Rc<Self> {
         Rc::new(Self {
             script: RefCell::new(VecDeque::new()),
             log: RefCell::new(Vec::new()),
@@ -67,12 +72,12 @@ impl Net {
         })
     }
 
-    fn then(&self, answer: Result<HttpResponse, TransportError>) -> &Self {
+    pub fn then(&self, answer: Result<HttpResponse, TransportError>) -> &Self {
         self.script.borrow_mut().push_back(answer);
         self
     }
 
-    fn reply(&self, status: u16, body: &Json) -> &Self {
+    pub fn reply(&self, status: u16, body: &Json) -> &Self {
         self.then(Ok(HttpResponse {
             status,
             location: None,
@@ -80,7 +85,7 @@ impl Net {
         }))
     }
 
-    fn sends(&self) -> Vec<(SocketAddr, HttpRequest)> {
+    pub fn sends(&self) -> Vec<(SocketAddr, HttpRequest)> {
         self.log.borrow().clone()
     }
 }
@@ -126,9 +131,9 @@ impl Transport for Rc<Net> {
 
 /// A virtual clock; sleeping advances it, and every sleep is logged.
 #[derive(Default)]
-struct Virtual {
-    now: Cell<u64>,
-    sleeps: RefCell<Vec<u64>>,
+pub struct Virtual {
+    pub now: Cell<u64>,
+    pub sleeps: RefCell<Vec<u64>>,
 }
 
 impl Clock for Rc<Virtual> {
@@ -145,7 +150,7 @@ impl Clock for Rc<Virtual> {
 }
 
 /// Request IDs counting up from 1; draws taken from a queue, then `fallback`.
-struct Scripted {
+pub struct Scripted {
     next_id: u128,
     draws: VecDeque<u64>,
     fallback: u64,
@@ -183,17 +188,17 @@ impl RandomSource for Scripted {
     }
 }
 
-type TestClient = Client<Rc<Net>, Rc<Virtual>, Scripted>;
+pub type TestClient = Client<Rc<Net>, Rc<Virtual>, Scripted>;
 
-struct Rig {
-    net: Rc<Net>,
-    clock: Rc<Virtual>,
-    store: PendingStore,
-    client: TestClient,
+pub struct Rig {
+    pub net: Rc<Net>,
+    pub clock: Rc<Virtual>,
+    pub store: PendingStore,
+    pub client: TestClient,
 }
 
 /// A client over five nodes. The first draw picks the first node: node 1.
-fn rig(name: &str, settings: Settings, later_draws: &[u64], fallback: u64) -> Rig {
+pub fn rig(name: &str, settings: Settings, later_draws: &[u64], fallback: u64) -> Rig {
     let exe = std::env::current_exe().unwrap();
     let dir = exe
         .parent()
@@ -223,16 +228,16 @@ fn rig(name: &str, settings: Settings, later_draws: &[u64], fallback: u64) -> Ri
     }
 }
 
-fn served(node: u64, applied: u64) -> Json {
+pub fn served(node: u64, applied: u64) -> Json {
     json!({"node_id": node, "applied_index": applied})
 }
 
-fn put_ok(id: &str, index: u64, replayed: bool) -> Json {
+pub fn put_ok(id: &str, index: u64, replayed: bool) -> Json {
     json!({"request_id": id, "index": index, "version": index, "replayed": replayed,
         "served_by": served(1, index)})
 }
 
-fn error(code: &str, message: &str, details: &Json) -> Json {
+pub fn error(code: &str, message: &str, details: &Json) -> Json {
     json!({"error": {"code": code, "message": message, "details": details}})
 }
 
@@ -1050,8 +1055,8 @@ fn cluster_reads_from_the_first_node_that_answers() {
         .then(Err(TransportError::NotSent("refused".to_owned())));
     r.net.reply(200, &json!({"node_id": 2, "role": "follower"}));
     let report = r.client.cluster().unwrap();
-    assert_eq!(report.node, node(2));
-    assert_eq!(report.body["role"], "follower");
+    assert_eq!(report.node, Some(node(2)));
+    assert_eq!(report.body.unwrap()["role"], "follower");
     assert_eq!(r.net.sends()[0].1.target, "/v1/cluster");
     assert_eq!(
         report.notes.len(),

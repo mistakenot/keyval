@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/pending-list.v1.schema.json",
+  "title": "keyval.cli.pending-list/v1",
+  "description": "The report of keyval pending: every write with no terminal result yet, in request ID order (O-4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "store",
+    "count",
+    "requests"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.cli.pending-list/v1"
+    },
+    "store": {
+      "type": "string"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "method",
+          "target",
+          "body_bytes",
+          "resume"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "method": {
+            "enum": [
+              "PUT",
+              "DELETE",
+              "POST"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "body_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resume": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

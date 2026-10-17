@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/write.v1.schema.json",
+  "title": "keyval.cli.write/v1",
+  "description": "The report of keyval put, delete, cas and resume (PLAN.md \u00a78.7, O-4, O-6). Exit 0: result applied. Exit 1: a terminal result that is not a success (version_mismatch, capacity_exceeded, request_id_conflict, rejected, refused). Exit 3: unresolved, whose outcome is UNKNOWN, never failed; the pending record is kept and `resume` names the command that sends it again with the same ID and bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "command",
+    "request_id",
+    "result",
+    "http_status",
+    "node",
+    "via_status_lookup",
+    "server",
+    "rejection",
+    "unresolved",
+    "resume",
+    "pending_record_left",
+    "notes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.cli.write/v1"
+    },
+    "command": {
+      "enum": [
+        "put",
+        "delete",
+        "cas",
+        "resume"
+      ]
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "result": {
+      "description": "applied: executed (a success). version_mismatch, capacity_exceeded, request_id_conflict: terminal results that changed nothing. rejected: refused as a bad request. refused: history_full with nothing submitted; it did not execute. unresolved: the bounds ran out; it may or may not have executed.",
+      "enum": [
+        "applied",
+        "version_mismatch",
+        "capacity_exceeded",
+        "request_id_conflict",
+        "rejected",
+        "refused",
+        "unresolved",
+        "unexpected"
+      ]
+    },
+    "http_status": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "node": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "via_status_lookup": {
+      "description": "Whether a status lookup, not a resend, resolved the write.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "server": {
+      "description": "The server's answer body, verbatim (api/openapi.yaml).",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "rejection": {
+      "description": "The server refused the request itself; nothing executed and the same bytes would be refused again.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "http_status",
+            "code",
+            "message"
+          ],
+          "properties": {
+            "http_status": {
+              "type": "integer"
+            },
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "unresolved": {
+      "description": "Set only when a retry bound ran out without a terminal answer. For a write this is NOT a failure: it may have executed.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bound",
+            "sends",
+            "nodes_tried"
+          ],
+          "properties": {
+            "bound": {
+              "enum": [
+                "attempts",
+                "nodes",
+                "deadline"
+              ]
+            },
+            "sends": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nodes_tried": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "resume": {
+      "description": "The exact command that resumes the request, when there is something to resume.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pending_record_left": {
+      "description": "Set if the write is done but its pending record could not be deleted; resuming it replays it harmlessly (C-6).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Things worth telling the person: unreachable nodes, unreadable answers. Bounded.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/scan.v1.schema.json",
+  "title": "keyval.cli.scan/v1",
+  "description": "The report of keyval scan: one page. Exit 0: a page. Exit 1: rejected, or unexpected (an answer that is not a scan page). Exit 3: unresolved.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "result",
+    "count",
+    "has_more",
+    "next_after",
+    "node",
+    "server",
+    "rejection",
+    "unresolved",
+    "notes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.cli.scan/v1"
+    },
+    "result": {
+      "enum": [
+        "page",
+        "rejected",
+        "unresolved",
+        "unexpected"
+      ]
+    },
+    "count": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "has_more": {
+      "description": "Another page follows (page results only).",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "next_after": {
+      "description": "Pass as --after to read the next page; null when there is none.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "node": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "server": {
+      "description": "The server's answer body, verbatim (api/openapi.yaml).",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "rejection": {
+      "description": "The server refused the request itself; nothing executed and the same bytes would be refused again.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "http_status",
+            "code",
+            "message"
+          ],
+          "properties": {
+            "http_status": {
+              "type": "integer"
+            },
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "unresolved": {
+      "description": "Set only when a retry bound ran out without a terminal answer. For a write this is NOT a failure: it may have executed.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bound",
+            "sends",
+            "nodes_tried"
+          ],
+          "properties": {
+            "bound": {
+              "enum": [
+                "attempts",
+                "nodes",
+                "deadline"
+              ]
+            },
+            "sends": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nodes_tried": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "notes": {
+      "description": "Things worth telling the person: unreachable nodes, unreadable answers. Bounded.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

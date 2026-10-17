@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/status.v1.schema.json",
+  "title": "keyval.cli.status/v1",
+  "description": "The report of keyval status <request-id>. Exit 0: known on some node. Exit 3: unknown on every node asked, which is not failure and not proof the request never happened (F-9, P8).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "state",
+    "result",
+    "node",
+    "server",
+    "unknown_on",
+    "resume",
+    "notes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.cli.status/v1"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "state": {
+      "enum": [
+        "known",
+        "unknown"
+      ]
+    },
+    "result": {
+      "description": "The original terminal result when known.",
+      "enum": [
+        "applied",
+        "version_mismatch",
+        "capacity_exceeded",
+        "request_id_conflict",
+        "unexpected",
+        null
+      ]
+    },
+    "node": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "server": {
+      "description": "The server's answer body, verbatim (api/openapi.yaml).",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "unknown_on": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "resume": {
+      "description": "The exact command that resumes the request, when there is something to resume.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Things worth telling the person: unreachable nodes, unreadable answers. Bounded.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

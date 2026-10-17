@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://keyval.invalid/schemas/cli/error.v1.schema.json",
   "title": "keyval.cli.error/v1",
-  "description": "The envelope a keyval command prints on stdout in --json mode when it cannot produce its normal report: invalid arguments, or a configuration it cannot read (crates/cli/src/output.rs; O-6, §8.7). --json is detected before the arguments are parsed, so even a usage error comes in the format the caller asked for. Exit status 2.",
+  "description": "The envelope a keyval command prints on stdout in --json mode when it cannot produce its normal report: invalid arguments, or a configuration it cannot read (crates/cli/src/output.rs; O-6, §8.7). --json is detected before the arguments are parsed, so even a usage error comes in the format the caller asked for. Exit status 2. The kind enum is open to additions: a reader must treat an unknown kind as an error of unspecified cause (pending and client were added by W33.3; adding a value is not a breaking change).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "ok", "error"],
@@ -15,8 +15,8 @@
       "required": ["kind", "message"],
       "properties": {
         "kind": {
-          "description": "usage: invalid arguments, nothing ran; config: the --config file cannot be read or parsed.",
-          "enum": ["usage", "config"]
+          "description": "usage: invalid arguments, nothing ran; config: the --config file cannot be read or parsed; pending: the pending store cannot be used or holds no such request; client: the client could not start (no node, no entropy).",
+          "enum": ["usage", "config", "pending", "client"]
         },
         "message": { "type": "string", "minLength": 1 }
       }

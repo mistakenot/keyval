@@ -36,6 +36,10 @@ pub enum ErrorKind {
     Usage,
     /// The `--config` file cannot be read or parsed.
     Config,
+    /// The pending store cannot be used, or holds no record of the request asked for.
+    Pending,
+    /// The client could not start: no node to send to, or no entropy for a request ID.
+    Client,
 }
 
 /// The error itself.

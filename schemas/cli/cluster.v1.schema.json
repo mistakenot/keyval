@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keyval.invalid/schemas/cli/cluster.v1.schema.json",
+  "title": "keyval.cli.cluster/v1",
+  "description": "The report of keyval cluster: one node's GET /v1/cluster body (exit 0), or unresolved when no node answered with an object (exit 3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "result",
+    "node",
+    "server",
+    "notes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "keyval.cli.cluster/v1"
+    },
+    "result": {
+      "enum": [
+        "answered",
+        "unresolved"
+      ]
+    },
+    "node": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "server": {
+      "description": "The node's answer body, verbatim; null when unresolved.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Things worth telling the person: unreachable nodes, unreadable answers. Bounded.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

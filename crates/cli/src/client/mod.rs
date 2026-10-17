@@ -119,6 +119,14 @@ pub enum ClientError {
     Pending(PendingError),
     /// No entropy for a request ID.
     Entropy(String),
+    /// A persisted write ended in an error before any answer. The record is kept: it names
+    /// the ID to resume, and the cause may be that nothing was sent at all.
+    Write {
+        /// The pending write's ID.
+        request_id: RequestId,
+        /// Why the write could not be driven to a result.
+        cause: Box<Self>,
+    },
     /// The client has no node to send to.
     NoNodes,
     /// A defect in the client itself.
@@ -131,6 +139,10 @@ impl fmt::Display for ClientError {
             Self::Pending(err) => write!(f, "{err}; nothing was sent"),
             Self::Entropy(why) => write!(f, "cannot generate a request ID: {why}"),
             Self::NoNodes => write!(f, "no node to send to"),
+            Self::Write { request_id, cause } => write!(
+                f,
+                "{cause}; request {request_id} is still pending: keyval resume {request_id}"
+            ),
             Self::Internal(what) => write!(f, "internal error in the client: {what}"),
         }
     }
@@ -267,10 +279,10 @@ pub struct StatusReport {
 /// One node's cluster status.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClusterReport {
-    /// The node that answered.
-    pub node: NodeId,
-    /// Its `GET /v1/cluster` body.
-    pub body: Json,
+    /// The node that answered, or `None` if none did.
+    pub node: Option<NodeId>,
+    /// Its `GET /v1/cluster` body (a JSON object), or `None` if no node answered.
+    pub body: Option<Json>,
     /// Notes about nodes tried first.
     pub notes: Vec<String>,
 }
@@ -375,7 +387,12 @@ impl<T: Transport, C: Clock, R: RandomSource> Client<T, C, R> {
         if let Some(store) = &self.store {
             store.persist(&record)?;
         }
-        let report = self.send_write(&record)?;
+        let report = self
+            .send_write(&record)
+            .map_err(|cause| ClientError::Write {
+                request_id,
+                cause: Box::new(cause),
+            })?;
         Ok((report, request_id))
     }
 
@@ -535,11 +552,11 @@ impl<T: Transport, C: Clock, R: RandomSource> Client<T, C, R> {
     /// # Errors
     ///
     /// [`ClientError::NoNodes`] if the client has no node to send to. When no node
-    /// answers, the report's body is `null` and its notes say why.
+    /// answers, the report has no node or body and its notes say why.
     pub fn cluster(&mut self) -> Result<ClusterReport, ClientError> {
-        let Some(&(first, _)) = self.settings.nodes.first() else {
+        if self.settings.nodes.is_empty() {
             return Err(ClientError::NoNodes);
-        };
+        }
         let started = self.clock.now_ms();
         let request = HttpRequest {
             method: "GET",
@@ -560,8 +577,18 @@ impl<T: Transport, C: Clock, R: RandomSource> Client<T, C, R> {
             match self.exchange(address, &request, remaining) {
                 Err(err) => note(&mut notes, format!("node {node}: {err}")),
                 Ok(response) if response.status == 200 => {
-                    match serde_json::from_slice(&response.body) {
-                        Ok(body) => return Ok(ClusterReport { node, body, notes }),
+                    match serde_json::from_slice::<Json>(&response.body) {
+                        Ok(body) if body.is_object() => {
+                            return Ok(ClusterReport {
+                                node: Some(node),
+                                body: Some(body),
+                                notes,
+                            });
+                        }
+                        Ok(_) => note(
+                            &mut notes,
+                            format!("node {node}: body is not a JSON object"),
+                        ),
                         Err(err) => {
                             note(&mut notes, format!("node {node}: body is not JSON: {err}"));
                         }
@@ -574,8 +601,8 @@ impl<T: Transport, C: Clock, R: RandomSource> Client<T, C, R> {
             }
         }
         Ok(ClusterReport {
-            node: first,
-            body: Json::Null,
+            node: None,
+            body: None,
             notes,
         })
     }
@@ -840,4 +867,4 @@ fn note(notes: &mut Vec<String>, text: String) {
 }
 
 #[cfg(test)]
-mod tests;
+pub mod tests;

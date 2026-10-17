@@ -2815,6 +2815,32 @@ pub const CATALOGUE: &[CheckDef] = &[
         },
         min_cases: 36,
     },
+    CheckDef {
+        id: "CLI-COMMANDS",
+        summary: "the CLI command output (§8.7, O-4, O-6, C-6): every command's --json document validates against its versioned schema in schemas/cli (write, get, scan, status, cluster, pending-list), and its text says the same; the exit status is 0 for a terminal success, 1 for a terminal non-success (version_mismatch, capacity_exceeded, request_id_conflict, a rejection, a history_full refusal) and 3 for unresolved, never failed; an exhausted attempt, deadline or node bound names the request ID and the keyval resume command and keeps the record; resume replays the persisted record with the same ID and exact bytes after an unknown status, a redirect or a disconnect, refuses an ID that is not pending, and never allocates a replacement ID when the bounds run out again; a stored target with a control character, space or non-ASCII byte is refused. Test evidence over a scripted network, virtual clock and seeded entropy, not proof",
+        kind: Kind::TestGroup,
+        covers: &["O-4", "O-6", "C-6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "cli",
+            filters: &["command::tests::"],
+        },
+        min_cases: 24,
+    },
+    CheckDef {
+        id: "CLI-CLIENT",
+        summary: "the keyval binary's client commands (§8.7, O-4, O-6, C-6): the real binary against five fake nodes on loopback sockets; put, cas, get, scan, status, cluster, pending and resume print one JSON document per command that validates against its versioned schema; a 307 keeps the ID and bytes; a terminal version_mismatch exits 1; silence ends unresolved with exit 3, keeps the record, and resume finishes it with the same ID and exact command and then deletes it; resume that runs out again allocates no replacement ID; a resume of an unknown ID and a usage error print the error envelope. Test evidence over fake nodes, not proof",
+        kind: Kind::TestGroup,
+        covers: &["O-4", "O-6", "C-6"],
+        class: ClaimClass::SimulationEvidenced,
+        tier: Tier::T0,
+        selector: Selector::CargoTest {
+            package: "cli",
+            filters: &["client_cli::"],
+        },
+        min_cases: 8,
+    },
 ];
 
 /// Outcome of one requested check.
